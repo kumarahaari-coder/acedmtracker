@@ -307,7 +307,7 @@ export default function ContentItemWorkspacePage() {
       const user = state.users.find((u) => u.id === m.userId);
       return {
         userId: m.userId,
-        role: m.role,
+        role: m.membershipRole || user?.role || "designer",
         name: user?.name || m.userId,
         email: user?.email || "",
         avatar: user?.avatar || "U",

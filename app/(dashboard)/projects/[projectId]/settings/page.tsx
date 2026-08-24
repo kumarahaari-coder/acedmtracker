@@ -14,213 +14,467 @@ import {
   Shield,
   Mail,
   UserCheck,
+  Briefcase,
+  Clock,
+  Calendar,
+  AlertCircle,
+  Power,
+  Edit3,
 } from "lucide-react";
-import { UserRole } from "@/lib/types";
+import { UserRole, User } from "@/lib/types";
+import { formatDate } from "@/lib/formatters";
 
 export default function ProjectSettingsPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "proj_acme";
-  const { state, archiveProject, addProjectMember, removeProjectMember } = useAppState();
-  const { canAdmin, activeRole } = useRole();
+  const {
+    state,
+    archiveProject,
+    createTeamMember,
+    updateTeamMember,
+    updateTeamMemberStatus,
+    addProjectMember,
+    removeProjectMember,
+  } = useAppState();
+  const { canAdmin, activeRole, activeUserId, canManageTeamMembers, canInactivateMembers } = useRole();
+  const actorUserId = activeUserId;
 
   const project = state.projects.find((p) => p.id === projectId);
-  const memberships = state.projectMemberships.filter((m) => m.projectId === projectId);
+  const activeMemberships = state.projectMemberships.filter(
+    (m) => m.projectId === projectId && m.status === "active"
+  );
+  const inactiveMemberships = state.projectMemberships.filter(
+    (m) => m.projectId === projectId && m.status === "inactive"
+  );
 
-  // Add Member Modal State
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedExistingUserId, setSelectedExistingUserId] = useState<string>("");
-  const [newMemberName, setNewMemberName] = useState("");
-  const [newMemberEmail, setNewMemberEmail] = useState("");
-  const [newMemberRole, setNewMemberRole] = useState<UserRole>("designer");
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  // Add Member to Project Modal
+  const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<UserRole>("designer");
+
+  // Create New User Modal
+  const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState(false);
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("designer");
+  const [newUserJobTitle, setNewUserJobTitle] = useState("");
+  const [newUserHours, setNewUserHours] = useState(8);
+
+  // Inactivation Modal
+  const [inactivatingUser, setInactivatingUser] = useState<User | null>(null);
+  const [inactivationReason, setInactivationReason] = useState("");
+
+  // Toast
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"project_team" | "org_directory">("project_team");
 
   if (!project) return null;
 
-  const canManageMembers = activeRole === "admin" || activeRole === "founder" || canAdmin;
-
-  // Find organization users who are not yet members of this project
-  const nonMemberUsers = state.users.filter(
-    (u) => !memberships.some((m) => m.userId === u.id)
-  );
-
-  const handleSelectExistingUser = (userId: string) => {
-    setSelectedExistingUserId(userId);
-    if (userId) {
-      const u = state.users.find((user) => user.id === userId);
-      if (u) {
-        setNewMemberName(u.name);
-        setNewMemberEmail(u.email);
-      }
-    } else {
-      setNewMemberName("");
-      setNewMemberEmail("");
-    }
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
-  const handleAddMemberSubmit = (e: React.FormEvent) => {
+  // Active users in organization who are not yet in this project
+  const eligibleNonMembers = state.users.filter(
+    (u) => u.status === "active" && !activeMemberships.some((m) => m.userId === u.id)
+  );
+
+  const handleAddProjectMemberSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberName.trim() || !newMemberEmail.trim()) {
-      alert("Please provide both name and email address.");
+    if (!selectedUserId) {
+      alert("Please select a user to add to the project.");
       return;
     }
 
-    addProjectMember({
+    const res = addProjectMember({
       projectId,
-      name: newMemberName.trim(),
-      email: newMemberEmail.trim(),
-      role: newMemberRole,
+      userId: selectedUserId,
+      membershipRole: selectedRole,
+      actorUserId,
     });
 
-    setIsAddModalOpen(false);
-    setSelectedExistingUserId("");
-    setNewMemberName("");
-    setNewMemberEmail("");
-    setNewMemberRole("designer");
-
-    setSuccessMessage(`Added ${newMemberName.trim()} to project team.`);
-    setTimeout(() => setSuccessMessage(null), 3500);
+    if (res.success) {
+      setIsAddMemberModalOpen(false);
+      setSelectedUserId("");
+      const addedUser = state.users.find((u) => u.id === selectedUserId);
+      showToast(`Added ${addedUser?.name || "member"} to project.`);
+    } else {
+      alert(res.error || "Failed to add member.");
+    }
   };
 
-  const handleRemoveMember = (userId: string, userName: string) => {
+  const handleCreateUserSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUserName.trim() || !newUserEmail.trim()) {
+      alert("Please provide both name and email.");
+      return;
+    }
+
+    const res = createTeamMember({
+      name: newUserName.trim(),
+      email: newUserEmail.trim(),
+      role: newUserRole,
+      jobTitle: newUserJobTitle.trim() || undefined,
+      workingHoursPerDay: Number(newUserHours) || 8,
+      actorUserId,
+    });
+
+    if (res.success && res.user) {
+      // Also add them to the current project
+      addProjectMember({
+        projectId,
+        userId: res.user.id,
+        membershipRole: newUserRole,
+        actorUserId,
+      });
+
+      setIsCreateUserModalOpen(false);
+      setNewUserName("");
+      setNewUserEmail("");
+      setNewUserJobTitle("");
+      setNewUserHours(8);
+      showToast(`Created team member '${res.user.name}' and added to project.`);
+    } else {
+      alert(res.error || "Failed to create user.");
+    }
+  };
+
+  const handleToggleUserStatus = (user: User) => {
+    if (user.status === "active") {
+      setInactivatingUser(user);
+      setInactivationReason("");
+    } else {
+      // Reactivate
+      const res = updateTeamMemberStatus(user.id, "active", actorUserId);
+      if (res.success) {
+        showToast(`Reactivated '${user.name}'. Account is now active.`);
+      } else {
+        alert(res.error || "Failed to reactivate.");
+      }
+    }
+  };
+
+  const handleConfirmInactivation = () => {
+    if (!inactivatingUser) return;
+    const res = updateTeamMemberStatus(
+      inactivatingUser.id,
+      "inactive",
+      actorUserId,
+      inactivationReason.trim() || "Administrative status update"
+    );
+    if (res.success) {
+      showToast(`Inactivated '${inactivatingUser.name}'. Historical records preserved.`);
+      setInactivatingUser(null);
+    } else {
+      alert(res.error || "Failed to inactivate.");
+    }
+  };
+
+  const handleRemoveMembership = (membershipId: string, userName: string) => {
     if (confirm(`Remove ${userName} from project "${project.name}"?`)) {
-      removeProjectMember(projectId, userId);
-      setSuccessMessage(`Removed ${userName} from project.`);
-      setTimeout(() => setSuccessMessage(null), 3500);
+      const res = removeProjectMember(membershipId, actorUserId, "Removed by manager");
+      if (res.success) {
+        showToast(`Removed ${userName} from project access.`);
+      } else {
+        alert(res.error || "Failed to remove member.");
+      }
     }
   };
 
   return (
     <div className="p-8 sm:p-10 max-w-5xl mx-auto space-y-6">
       {/* Toast Notification */}
-      {successMessage && (
+      {toastMessage && (
         <div className="fixed top-20 right-8 z-50 flex items-center gap-2 rounded-2xl bg-[#1d1d1f] text-white px-4 py-2.5 text-[13px] shadow-xl animate-in fade-in slide-in-from-top-2">
           <Check className="h-4 w-4 text-[#34c759]" />
-          <span>{successMessage}</span>
+          <span>{toastMessage}</span>
         </div>
       )}
 
       {/* Header */}
-      <div className="pb-2 border-b border-black/[0.06]">
-        <h1 className="text-[28px] sm:text-[36px] font-bold text-[#1d1d1f] tracking-tight">
-          Project Settings & Access
-        </h1>
-        <p className="text-[14px] text-[#6e6e73]">
-          Project profile, target configurations, team member access, and retention policies.
-        </p>
-      </div>
+      <div className="pb-2 border-b border-black/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-[28px] sm:text-[36px] font-bold text-[#1d1d1f] tracking-tight">
+            Team & Project Settings
+          </h1>
+          <p className="text-[14px] text-[#6e6e73]">
+            Normalized team member records, soft-inactivation, and project access permissions.
+          </p>
+        </div>
 
-      {/* General Settings */}
-      <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
-        <h2 className="text-[17px] font-semibold text-[#1d1d1f]">General Details</h2>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[14px]">
-          <div>
-            <label className="block text-[#86868b] text-[12px] mb-1">Project Name</label>
-            <input
-              type="text"
-              readOnly
-              value={project.name}
-              className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[#86868b] text-[12px] mb-1">Client / Brand</label>
-            <input
-              type="text"
-              readOnly
-              value={project.clientBrand}
-              className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-[#86868b] text-[12px] mb-1">Scope & Objectives</label>
-            <textarea
-              rows={2}
-              readOnly
-              value={project.scope}
-              className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
-            />
-          </div>
+        {/* View Switcher Tabs */}
+        <div className="flex items-center bg-[#ffffff] border border-black/[0.08] rounded-full p-1 shadow-sm text-[13px]">
+          <button
+            onClick={() => setActiveTab("project_team")}
+            className={`px-3.5 py-1 rounded-full font-medium transition ${
+              activeTab === "project_team" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            Project Members ({activeMemberships.length})
+          </button>
+          <button
+            onClick={() => setActiveTab("org_directory")}
+            className={`px-3.5 py-1 rounded-full font-medium transition ${
+              activeTab === "org_directory" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            Organization Directory ({state.users.length})
+          </button>
         </div>
       </div>
 
-      {/* Team Membership with Add Member Feature */}
-      <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-[17px] font-semibold text-[#1d1d1f] flex items-center gap-2">
-              <Users className="h-4 w-4 text-[#0071e3]" /> Project Members ({memberships.length})
-            </h2>
-            <p className="text-[12px] text-[#6e6e73]">
-              Active collaborators with assigned roles on this marketing deliverable.
-            </p>
+      {/* TAB 1: Project Team Memberships */}
+      {activeTab === "project_team" && (
+        <div className="space-y-6">
+          {/* General Project Details Card */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+            <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Project Overview</h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[14px]">
+              <div>
+                <label className="block text-[#86868b] text-[12px] mb-1">Project Name</label>
+                <input
+                  type="text"
+                  readOnly
+                  value={project.name}
+                  className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[#86868b] text-[12px] mb-1">Client / Brand</label>
+                <input
+                  type="text"
+                  readOnly
+                  value={project.clientBrand}
+                  className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-[#86868b] text-[12px] mb-1">Scope & Objectives</label>
+                <textarea
+                  rows={2}
+                  readOnly
+                  value={project.scope}
+                  className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] p-2.5 text-[#1d1d1f]"
+                />
+              </div>
+            </div>
           </div>
 
-          {canManageMembers && (
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-1.5 text-[13px] font-medium text-white shadow-sm transition active:scale-[0.98]"
-            >
-              <UserPlus className="h-4 w-4" /> Add Member
-            </button>
-          )}
-        </div>
+          {/* Project Memberships Card */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] flex items-center gap-2">
+                  <Users className="h-4 w-4 text-[#0071e3]" /> Assigned Project Team
+                </h2>
+                <p className="text-[12px] text-[#6e6e73]">
+                  Authorized members with active access to this specific project deliverable.
+                </p>
+              </div>
 
-        <div className="space-y-2">
-          {memberships.map((membership) => {
-            const user = state.users.find((u) => u.id === membership.userId);
-            const userName = user?.name || "Unknown Member";
-            const isSelf = user?.id === "u_admin" || user?.id === "u_founder";
-
-            return (
-              <div
-                key={membership.userId}
-                className="flex items-center justify-between p-3.5 rounded-xl bg-[#fbfbfd] border border-black/[0.06] text-[13px] hover:bg-[#f5f5f7]/60 transition"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[12px] border border-black/[0.06]">
-                    {user?.avatar || userName.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="font-semibold text-[#1d1d1f]">{userName}</div>
-                    <div className="text-[11px] text-[#86868b]">{user?.email || "No email on record"}</div>
-                  </div>
+              {canManageTeamMembers && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsAddMemberModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-3.5 py-1.5 text-[13px] font-medium text-white shadow-sm transition"
+                  >
+                    <UserPlus className="h-4 w-4" /> Add Existing Member
+                  </button>
+                  <button
+                    onClick={() => setIsCreateUserModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[13px] font-medium text-[#1d1d1f] border border-black/[0.06] transition"
+                  >
+                    <UserCheck className="h-4 w-4 text-[#0071e3]" /> Create New Person
+                  </button>
                 </div>
+              )}
+            </div>
 
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`rounded-full px-3 py-1 text-[11px] font-medium capitalize border ${
-                      membership.role === "founder"
-                        ? "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]"
-                        : membership.role === "consultant"
-                        ? "bg-[#eaf4ff] text-[#0066cc] border-[#b8daff]"
-                        : membership.role === "admin"
-                        ? "bg-[#f3e8ff] text-[#6b21a8] border-[#e9d5ff]"
-                        : "bg-[#f2f2f7] text-[#1d1d1f] border-black/[0.06]"
+            <div className="space-y-2">
+              {activeMemberships.map((membership) => {
+                const user = state.users.find((u) => u.id === membership.userId);
+                const userName = user?.name || "Unknown Member";
+                const isSelf = user?.id === activeUserId;
+
+                return (
+                  <div
+                    key={membership.id}
+                    className="flex items-center justify-between p-3.5 rounded-xl bg-[#fbfbfd] border border-black/[0.06] text-[13px] hover:bg-[#f5f5f7]/60 transition"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[12px] border border-black/[0.06]">
+                        {user?.avatar || userName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-[#1d1d1f] flex items-center gap-2">
+                          <span>{userName}</span>
+                          {user?.jobTitle && (
+                            <span className="text-[11px] font-normal text-[#6e6e73]">
+                              • {user.jobTitle}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[#86868b]">{user?.email}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`rounded-full px-3 py-1 text-[11px] font-medium capitalize border ${
+                          membership.membershipRole === "founder"
+                            ? "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]"
+                            : membership.membershipRole === "consultant"
+                            ? "bg-[#eaf4ff] text-[#0066cc] border-[#b8daff]"
+                            : membership.membershipRole === "admin"
+                            ? "bg-[#f3e8ff] text-[#6b21a8] border-[#e9d5ff]"
+                            : membership.membershipRole === "client"
+                            ? "bg-[#e6f4ea] text-[#137333] border-[#ceead6]"
+                            : "bg-[#f2f2f7] text-[#1d1d1f] border-black/[0.06]"
+                        }`}
+                      >
+                        {membership.membershipRole?.replace(/_/g, " ") || user?.role}
+                      </span>
+
+                      {canManageTeamMembers && !isSelf && (
+                        <button
+                          onClick={() => handleRemoveMembership(membership.id, userName)}
+                          className="p-1 rounded-lg text-[#86868b] hover:text-[#ff3b30] hover:bg-[#ffe5e5] transition"
+                          title="Remove from project"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: Organization Team Directory & Soft-Inactivation */}
+      {activeTab === "org_directory" && (
+        <div className="space-y-6">
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] flex items-center gap-2">
+                  <Briefcase className="h-4 w-4 text-[#0071e3]" /> Organization Team Directory
+                </h2>
+                <p className="text-[12px] text-[#6e6e73]">
+                  All physical users across the agency. Inactivating a member preserves all historical assignments, time sessions, and audit entries.
+                </p>
+              </div>
+
+              {canManageTeamMembers && (
+                <button
+                  onClick={() => setIsCreateUserModalOpen(true)}
+                  className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-3.5 py-1.5 text-[13px] font-medium text-white shadow-sm transition"
+                >
+                  <UserPlus className="h-4 w-4" /> Create New Member
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-3 pt-2">
+              {state.users.map((user) => {
+                const isSelf = user.id === activeUserId;
+                const memberProjectsCount = state.projectMemberships.filter(
+                  (m) => m.userId === user.id && m.status === "active"
+                ).length;
+
+                return (
+                  <div
+                    key={user.id}
+                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition gap-3 text-[13px] ${
+                      user.status === "active"
+                        ? "bg-[#ffffff] border-black/[0.08] shadow-sm"
+                        : "bg-[#f5f5f7] border-black/[0.06] opacity-75"
                     }`}
                   >
-                    {membership.role.replace(/_/g, " ")}
-                  </span>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`h-10 w-10 rounded-full font-semibold flex items-center justify-center text-[13px] border ${
+                          user.status === "active"
+                            ? "bg-[#1d1d1f] text-white border-transparent"
+                            : "bg-[#86868b] text-white border-transparent"
+                        }`}
+                      >
+                        {user.avatar || user.name.charAt(0).toUpperCase()}
+                      </div>
 
-                  {canManageMembers && !isSelf && (
-                    <button
-                      onClick={() => handleRemoveMember(membership.userId, userName)}
-                      className="p-1 rounded-lg text-[#86868b] hover:text-[#ff3b30] hover:bg-[#ffe5e5] transition"
-                      title="Remove member"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#1d1d1f] text-[14px]">{user.name}</span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              user.status === "active"
+                                ? "bg-[#eaf6ed] text-[#1f6f32]"
+                                : "bg-[#f2f2f7] text-[#86868b]"
+                            }`}
+                          >
+                            {user.status}
+                          </span>
+                        </div>
+                        <div className="text-[12px] text-[#6e6e73] flex items-center gap-2">
+                          <span>{user.email}</span>
+                          {user.jobTitle && <span>• {user.jobTitle}</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 text-[12px] text-[#6e6e73]">
+                      <div>
+                        <span className="font-semibold text-[#1d1d1f]">{memberProjectsCount}</span> project(s)
+                      </div>
+                      <div>
+                        Joined: <span className="font-medium text-[#1d1d1f]">{formatDate(user.dateJoined)}</span>
+                      </div>
+
+                      <span
+                        className={`rounded-full px-3 py-1 text-[11px] font-medium capitalize border ${
+                          user.role === "founder"
+                            ? "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]"
+                            : user.role === "consultant"
+                            ? "bg-[#eaf4ff] text-[#0066cc] border-[#b8daff]"
+                            : user.role === "admin"
+                            ? "bg-[#f3e8ff] text-[#6b21a8] border-[#e9d5ff]"
+                            : user.role === "client"
+                            ? "bg-[#e6f4ea] text-[#137333] border-[#ceead6]"
+                            : "bg-[#f2f2f7] text-[#1d1d1f] border-black/[0.06]"
+                        }`}
+                      >
+                        {user.role}
+                      </span>
+
+                      {canInactivateMembers && !isSelf && (
+                        <button
+                          onClick={() => handleToggleUserStatus(user)}
+                          className={`flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-medium transition ${
+                            user.status === "active"
+                              ? "bg-[#fff0ee] hover:bg-[#ffe0dc] text-[#b42318]"
+                              : "bg-[#eaf6ed] hover:bg-[#d5eed9] text-[#1f6f32]"
+                          }`}
+                        >
+                          <Power className="h-3 w-3" />
+                          {user.status === "active" ? "Inactivate" : "Reactivate"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Retention */}
+      {/* Retention Section (Admins Only) */}
       {canAdmin && (
         <div className="bg-[#ffffff] border border-[#ffd5d0] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
           <h3 className="font-semibold text-[#b42318] text-[16px]">Project Retention & Archive</h3>
@@ -240,54 +494,112 @@ export default function ProjectSettingsPage() {
         </div>
       )}
 
-      {/* ADD MEMBER MODAL */}
-      {isAddModalOpen && (
+      {/* MODAL 1: Add Existing Member to Project */}
+      {isAddMemberModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
               <div>
-                <h3 className="text-[17px] font-bold text-[#1d1d1f]">Add Team Member</h3>
+                <h3 className="text-[17px] font-bold text-[#1d1d1f]">Add Member to Project</h3>
                 <p className="text-[12px] text-[#6e6e73]">
-                  Grant access and assign a role for this project.
+                  Select an active organization colleague and set their project membership role.
                 </p>
               </div>
               <button
-                onClick={() => setIsAddModalOpen(false)}
+                onClick={() => setIsAddMemberModalOpen(false)}
                 className="text-[#86868b] hover:text-[#1d1d1f] p-1 rounded-full hover:bg-[#f5f5f7]"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAddMemberSubmit} className="space-y-3.5 text-[13px]">
-              {/* Optional: Pick from existing users */}
-              {nonMemberUsers.length > 0 && (
-                <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1">
-                    Quick Select Existing Colleague
-                  </label>
+            <form onSubmit={handleAddProjectMemberSubmit} className="space-y-3.5 text-[13px]">
+              <div>
+                <label className="block text-[#1d1d1f] font-medium mb-1">Select Colleague *</label>
+                {eligibleNonMembers.length === 0 ? (
+                  <div className="p-3 bg-[#f5f5f7] rounded-xl text-[12px] text-[#86868b]">
+                    All active organization members already have project access.
+                  </div>
+                ) : (
                   <select
-                    value={selectedExistingUserId}
-                    onChange={(e) => handleSelectExistingUser(e.target.value)}
+                    value={selectedUserId}
+                    onChange={(e) => setSelectedUserId(e.target.value)}
+                    required
                     className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
                   >
-                    <option value="">-- Or enter new person details below --</option>
-                    {nonMemberUsers.map((u) => (
+                    <option value="">-- Choose Colleague --</option>
+                    {eligibleNonMembers.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.name} ({u.email})
+                        {u.name} ({u.jobTitle || u.role}) — {u.email}
                       </option>
                     ))}
                   </select>
-                </div>
-              )}
+                )}
+              </div>
 
+              <div>
+                <label className="block text-[#1d1d1f] font-medium mb-1">Project Role *</label>
+                <select
+                  value={selectedRole}
+                  onChange={(e) => setSelectedRole(e.target.value as UserRole)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                >
+                  <option value="designer">Designer / Video Editor (Creative production)</option>
+                  <option value="consultant">Consultant (Strategic briefs & reviews)</option>
+                  <option value="founder">Founder (Full signoff authority)</option>
+                  <option value="client">Client (Restricted client portal view)</option>
+                  <option value="admin">System Admin</option>
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsAddMemberModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!selectedUserId}
+                  className="rounded-full bg-[#0071e3] disabled:opacity-50 hover:bg-[#0077ed] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Add to Project
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: Create New Team Member in Organization */}
+      {isCreateUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <div>
+                <h3 className="text-[17px] font-bold text-[#1d1d1f]">Create Team Member</h3>
+                <p className="text-[12px] text-[#6e6e73]">
+                  Register a new person into the agency directory.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsCreateUserModalOpen(false)}
+                className="text-[#86868b] hover:text-[#1d1d1f] p-1 rounded-full hover:bg-[#f5f5f7]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateUserSubmit} className="space-y-3 text-[13px]">
               <div>
                 <label className="block text-[#1d1d1f] font-medium mb-1">Full Name *</label>
                 <input
                   type="text"
-                  placeholder="e.g. Maya Chen"
-                  value={newMemberName}
-                  onChange={(e) => setNewMemberName(e.target.value)}
+                  placeholder="e.g. Liam Vance"
+                  value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
                   required
                   className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
                 />
@@ -297,44 +609,123 @@ export default function ProjectSettingsPage() {
                 <label className="block text-[#1d1d1f] font-medium mb-1">Email Address *</label>
                 <input
                   type="email"
-                  placeholder="e.g. maya@aceassured.com"
-                  value={newMemberEmail}
-                  onChange={(e) => setNewMemberEmail(e.target.value)}
+                  placeholder="e.g. liam@aceassured.com"
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
                   required
                   className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1">Job Title / Designation</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 3D Animator"
+                    value={newUserJobTitle}
+                    onChange={(e) => setNewUserJobTitle(e.target.value)}
+                    className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1">Working Hours/Day</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={newUserHours}
+                    onChange={(e) => setNewUserHours(Number(e.target.value) || 8)}
+                    className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                  />
+                </div>
+              </div>
+
               <div>
-                <label className="block text-[#1d1d1f] font-medium mb-1">Project Role *</label>
+                <label className="block text-[#1d1d1f] font-medium mb-1">Organization Role *</label>
                 <select
-                  value={newMemberRole}
-                  onChange={(e) => setNewMemberRole(e.target.value as UserRole)}
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value as UserRole)}
                   className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
                 >
-                  <option value="designer">Designer (Uploads creative & responds to changes)</option>
-                  <option value="consultant">Consultant (Creates briefs, reviews, manages analytics)</option>
-                  <option value="founder">Founder (Full approval authority & overrides)</option>
-                  <option value="admin">System Admin (Settings & project lifecycle)</option>
+                  <option value="designer">Designer / Video Editor</option>
+                  <option value="consultant">Consultant</option>
+                  <option value="founder">Founder</option>
+                  <option value="client">Client</option>
+                  <option value="admin">System Admin</option>
                 </select>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f] hover:bg-[#e8e8ed] transition"
+                  onClick={() => setIsCreateUserModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm transition active:scale-[0.98]"
+                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
                 >
-                  Add Member
+                  Create & Add to Project
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: Inactivation Confirmation with Mandatory Reason */}
+      {inactivatingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-[#fff0ee] text-[#b42318] flex items-center justify-center shrink-0">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-[17px] font-bold text-[#1d1d1f]">
+                  Inactivate {inactivatingUser.name}?
+                </h3>
+                <p className="text-[12px] text-[#6e6e73]">
+                  All historical work sessions, assignments, submissions, and audit entries will be permanently preserved.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-[13px]">
+              <div>
+                <label className="block text-[#1d1d1f] font-medium mb-1">
+                  Reason for Inactivation (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Contract completed, transition to freelance partner..."
+                  value={inactivationReason}
+                  onChange={(e) => setInactivationReason(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-black/[0.06]">
+              <button
+                type="button"
+                onClick={() => setInactivatingUser(null)}
+                className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmInactivation}
+                className="rounded-full bg-[#b42318] hover:bg-[#991b1b] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+              >
+                Confirm Inactivation
+              </button>
+            </div>
           </div>
         </div>
       )}

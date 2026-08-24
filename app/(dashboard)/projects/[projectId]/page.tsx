@@ -347,7 +347,9 @@ export default function ProjectOverviewPage() {
                       </div>
                       <div>
                         <div className="font-medium text-[13px] text-[#1d1d1f]">{user?.name}</div>
-                        <div className="text-[11px] text-[#86868b] capitalize">{m.role.replace("_", " ")}</div>
+                        <div className="text-[11px] text-[#86868b] capitalize">
+                          {(m.membershipRole || user?.role || "designer").replace("_", " ")}
+                        </div>
                       </div>
                     </div>
                   </div>

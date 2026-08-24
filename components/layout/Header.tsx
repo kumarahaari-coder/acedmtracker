@@ -62,7 +62,7 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
     { role: "consultant", label: "Consultant (Priyah Sharma)", desc: "Creates briefs, reviews, manages analytics" },
     { role: "designer", label: "Designer (Rohan Verma)", desc: "Uploads creative, responds to change requests" },
     { role: "admin", label: "System Admin (Alex Mercer)", desc: "Org admin, project retention, system recovery" },
-    { role: "external_reviewer", label: "External Reviewer (Guest)", desc: "Simulated isolated client review" },
+    { role: "client", label: "Client (Dr. Ramesh Mehta)", desc: "Isolated client portal view" },
   ];
 
   return (

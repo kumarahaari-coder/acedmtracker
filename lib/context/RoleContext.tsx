@@ -14,6 +14,11 @@ export interface RoleCapabilities {
   canManageAnalytics: boolean;
   canViewCommercialMetrics: boolean;
   canManageRetention: boolean;
+  canManageTeamMembers: boolean;
+  canInactivateMembers: boolean;
+  canViewAuditHistory: boolean;
+  canViewDesignerPerformance: boolean;
+  isClientRole: boolean;
 }
 
 interface RoleContextType extends RoleCapabilities {
@@ -44,6 +49,11 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
         canManageAnalytics: true,
         canViewCommercialMetrics: true,
         canManageRetention: true,
+        canManageTeamMembers: true,
+        canInactivateMembers: true,
+        canViewAuditHistory: true,
+        canViewDesignerPerformance: true,
+        isClientRole: false,
       };
     case "founder":
       return {
@@ -57,6 +67,11 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
         canManageAnalytics: true,
         canViewCommercialMetrics: true,
         canManageRetention: false,
+        canManageTeamMembers: true,
+        canInactivateMembers: true,
+        canViewAuditHistory: true,
+        canViewDesignerPerformance: true,
+        isClientRole: false,
       };
     case "consultant":
       return {
@@ -70,6 +85,11 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
         canManageAnalytics: true,
         canViewCommercialMetrics: true,
         canManageRetention: false,
+        canManageTeamMembers: false, // Read-only team viewer
+        canInactivateMembers: false,
+        canViewAuditHistory: true,
+        canViewDesignerPerformance: true,
+        isClientRole: false,
       };
     case "designer":
       return {
@@ -83,8 +103,13 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
         canManageAnalytics: false, // Strictly excluded
         canViewCommercialMetrics: false, // Strictly masked
         canManageRetention: false,
+        canManageTeamMembers: false,
+        canInactivateMembers: false,
+        canViewAuditHistory: false, // 403 Forbidden
+        canViewDesignerPerformance: false, // 403 Forbidden
+        isClientRole: false,
       };
-    case "external_reviewer":
+    case "client":
       return {
         canCreateProjects: false,
         canManageWorkflow: false,
@@ -93,9 +118,14 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
         canApprove: false,
         canOverride: false,
         canManagePublication: false,
-        canManageAnalytics: false,
+        canManageAnalytics: true, // Scoped whitelisted metrics only
         canViewCommercialMetrics: false,
         canManageRetention: false,
+        canManageTeamMembers: false,
+        canInactivateMembers: false,
+        canViewAuditHistory: false,
+        canViewDesignerPerformance: false,
+        isClientRole: true,
       };
   }
 }
@@ -111,7 +141,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     else if (role === "founder") setActiveUserId("u_founder");
     else if (role === "consultant") setActiveUserId("u_consultant");
     else if (role === "designer") setActiveUserId("u_designer1");
-    else if (role === "external_reviewer") setActiveUserId("u_guest");
+    else if (role === "client") setActiveUserId("u_client_acme");
   };
 
   const capabilities = getRoleCapabilities(activeRole);
@@ -126,7 +156,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
         setActiveUserId,
         setActiveProjectId,
         ...capabilities,
-        canEdit: activeRole !== "external_reviewer",
+        canEdit: activeRole !== "client",
         canAdmin: activeRole === "admin" || activeRole === "founder",
       }}
     >

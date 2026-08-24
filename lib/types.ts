@@ -1,17 +1,29 @@
-export type UserRole = 'admin' | 'founder' | 'consultant' | 'designer' | 'external_reviewer';
+export type UserRole = 'admin' | 'founder' | 'consultant' | 'designer' | 'client';
 
 export interface User {
   id: string;
   name: string;
   email: string;
   avatar: string;
+  role: UserRole;
+  jobTitle?: string;
+  status: 'active' | 'inactive';
+  workingHoursPerDay?: number;
+  dateJoined: string;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectMembership {
+  id: string;
   projectId: string;
   userId: string;
-  role: UserRole;
   status: 'active' | 'inactive';
+  membershipRole?: UserRole;
+  addedByUserId: string;
+  addedAt: string;
+  removedAt?: string;
 }
 
 export interface TargetRequirements {

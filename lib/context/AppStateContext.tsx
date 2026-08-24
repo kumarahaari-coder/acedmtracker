@@ -118,9 +118,37 @@ interface AppStateContextType {
     changedByUserId: string;
     reason: string;
   }) => void;
-  // Team Memberships
-  addProjectMember: (params: { projectId: string; name: string; email: string; role: UserRole }) => { user: User; membership: ProjectMembership };
-  removeProjectMember: (projectId: string, userId: string) => void;
+  // Team Management & Memberships (Phase 1)
+  createTeamMember: (data: {
+    name: string;
+    email: string;
+    role: UserRole;
+    jobTitle?: string;
+    workingHoursPerDay?: number;
+    actorUserId: string;
+  }) => { success: boolean; user?: User; error?: string };
+  updateTeamMember: (
+    userId: string,
+    updates: Partial<Pick<User, "name" | "email" | "role" | "jobTitle" | "workingHoursPerDay">>,
+    actorUserId: string
+  ) => { success: boolean; error?: string };
+  updateTeamMemberStatus: (
+    userId: string,
+    newStatus: "active" | "inactive",
+    actorUserId: string,
+    reason?: string
+  ) => { success: boolean; error?: string };
+  addProjectMember: (params: {
+    projectId: string;
+    userId: string;
+    membershipRole?: UserRole;
+    actorUserId: string;
+  }) => { success: boolean; membership?: ProjectMembership; error?: string };
+  removeProjectMember: (
+    membershipId: string,
+    actorUserId: string,
+    reason?: string
+  ) => { success: boolean; error?: string };
   // External Guest Links
   generateExternalReviewLink: (params: {
     projectId: string;
@@ -1232,76 +1260,222 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  // --- TEAM MEMBERSHIPS ---
-  const addProjectMember = (params: {
-    projectId: string;
+  // --- TEAM MANAGEMENT & MEMBERSHIPS (Phase 1) ---
+  const createTeamMember = (data: {
     name: string;
     email: string;
     role: UserRole;
-  }): { user: User; membership: ProjectMembership } => {
-    let user = state.users.find((u) => u.email.toLowerCase() === params.email.toLowerCase());
-    let newUsers = [...state.users];
-
-    if (!user) {
-      user = {
-        id: "u_" + Math.random().toString(36).substr(2, 9),
-        name: params.name.trim(),
-        email: params.email.trim().toLowerCase(),
-        avatar: params.name.trim().charAt(0).toUpperCase() || "U",
-      };
-      newUsers.push(user);
+    jobTitle?: string;
+    workingHoursPerDay?: number;
+    actorUserId: string;
+  }): { success: boolean; user?: User; error?: string } => {
+    const existing = state.users.find(
+      (u) => u.email.toLowerCase() === data.email.trim().toLowerCase()
+    );
+    if (existing) {
+      return { success: false, error: `A team member with email '${data.email}' already exists.` };
     }
 
-    const membership: ProjectMembership = {
-      projectId: params.projectId,
-      userId: user.id,
-      role: params.role,
+    const newUser: User = {
+      id: "u_" + Math.random().toString(36).substr(2, 9),
+      name: data.name.trim(),
+      email: data.email.trim().toLowerCase(),
+      avatar: data.name.trim().split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "U",
+      role: data.role,
+      jobTitle: data.jobTitle?.trim() || undefined,
       status: "active",
+      workingHoursPerDay: data.workingHoursPerDay || 8,
+      dateJoined: new Date().toISOString(),
+      createdByUserId: data.actorUserId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     const audit = createAuditEntry(
-      params.projectId,
-      "u_admin",
-      "add_project_member",
-      "project_membership",
-      `${params.projectId}_${user.id}`,
-      `Added member '${user.name}' (${user.email}) with role '${params.role}'`
+      "proj_internal",
+      data.actorUserId,
+      "create_user",
+      "user",
+      newUser.id,
+      `Created team member '${newUser.name}' (${newUser.email}) with role '${newUser.role}'`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      users: [...prev.users, newUser],
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, user: newUser };
+  };
+
+  const updateTeamMember = (
+    userId: string,
+    updates: Partial<Pick<User, "name" | "email" | "role" | "jobTitle" | "workingHoursPerDay">>,
+    actorUserId: string
+  ): { success: boolean; error?: string } => {
+    const user = state.users.find((u) => u.id === userId);
+    if (!user) return { success: false, error: "Team member not found." };
+
+    const audit = createAuditEntry(
+      "proj_internal",
+      actorUserId,
+      "update_user",
+      "user",
+      userId,
+      `Updated profile for team member '${user.name}'`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      users: prev.users.map((u) =>
+        u.id === userId
+          ? {
+              ...u,
+              ...updates,
+              avatar: updates.name
+                ? updates.name.trim().split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
+                : u.avatar,
+              updatedAt: new Date().toISOString(),
+            }
+          : u
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const updateTeamMemberStatus = (
+    userId: string,
+    newStatus: "active" | "inactive",
+    actorUserId: string,
+    reason?: string
+  ): { success: boolean; error?: string } => {
+    const user = state.users.find((u) => u.id === userId);
+    if (!user) return { success: false, error: "Team member not found." };
+
+    const audit = createAuditEntry(
+      "proj_internal",
+      actorUserId,
+      newStatus === "inactive" ? "inactivate_user" : "reactivate_user",
+      "user",
+      userId,
+      `${newStatus === "inactive" ? "Inactivated" : "Reactivated"} team member '${user.name}' (${user.email}). All historical records preserved.`,
+      reason
     );
 
     setState((prev) => {
-      const filtered = prev.projectMemberships.filter(
-        (m) => !(m.projectId === params.projectId && m.userId === user!.id)
-      );
+      const now = new Date().toISOString();
       return {
         ...prev,
-        users: newUsers,
-        projectMemberships: [...filtered, membership],
-        auditRecords: [audit, ...prev.auditRecords],
-      };
-    });
-
-    return { user, membership };
-  };
-
-  const removeProjectMember = (projectId: string, userId: string) => {
-    setState((prev) => {
-      const user = prev.users.find((u) => u.id === userId);
-      const audit = createAuditEntry(
-        projectId,
-        "u_admin",
-        "remove_project_member",
-        "project_membership",
-        `${projectId}_${userId}`,
-        `Removed member '${user?.name || userId}' from project`
-      );
-      return {
-        ...prev,
-        projectMemberships: prev.projectMemberships.filter(
-          (m) => !(m.projectId === projectId && m.userId === userId)
+        users: prev.users.map((u) =>
+          u.id === userId ? { ...u, status: newStatus, updatedAt: now } : u
+        ),
+        // If inactivating, also mark active project memberships as inactive
+        projectMemberships: prev.projectMemberships.map((m) =>
+          m.userId === userId && newStatus === "inactive"
+            ? { ...m, status: "inactive", removedAt: now }
+            : m
         ),
         auditRecords: [audit, ...prev.auditRecords],
       };
     });
+
+    return { success: true };
+  };
+
+  const addProjectMember = (params: {
+    projectId: string;
+    userId: string;
+    membershipRole?: UserRole;
+    actorUserId: string;
+  }): { success: boolean; membership?: ProjectMembership; error?: string } => {
+    const user = state.users.find((u) => u.id === params.userId);
+    if (!user) return { success: false, error: "User not found." };
+    if (user.status === "inactive") {
+      return { success: false, error: "Cannot assign inactive user to a project. Reactivate account first." };
+    }
+
+    const existingMembership = state.projectMemberships.find(
+      (m) => m.projectId === params.projectId && m.userId === params.userId
+    );
+
+    const now = new Date().toISOString();
+    let updatedMembership: ProjectMembership;
+
+    if (existingMembership) {
+      updatedMembership = {
+        ...existingMembership,
+        status: "active",
+        membershipRole: params.membershipRole || existingMembership.membershipRole || user.role,
+        removedAt: undefined,
+      };
+    } else {
+      updatedMembership = {
+        id: "mem_" + Math.random().toString(36).substr(2, 9),
+        projectId: params.projectId,
+        userId: params.userId,
+        status: "active",
+        membershipRole: params.membershipRole || user.role,
+        addedByUserId: params.actorUserId,
+        addedAt: now,
+      };
+    }
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "add_project_member",
+      "project_membership",
+      updatedMembership.id,
+      `Added/reactivated member '${user.name}' (${user.email}) in project '${params.projectId}'`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projectMemberships: [
+        ...prev.projectMemberships.filter(
+          (m) => !(m.projectId === params.projectId && m.userId === params.userId)
+        ),
+        updatedMembership,
+      ],
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, membership: updatedMembership };
+  };
+
+  const removeProjectMember = (
+    membershipId: string,
+    actorUserId: string,
+    reason?: string
+  ): { success: boolean; error?: string } => {
+    const membership = state.projectMemberships.find((m) => m.id === membershipId);
+    if (!membership) return { success: false, error: "Membership record not found." };
+
+    const user = state.users.find((u) => u.id === membership.userId);
+    const now = new Date().toISOString();
+
+    const audit = createAuditEntry(
+      membership.projectId,
+      actorUserId,
+      "remove_project_member",
+      "project_membership",
+      membershipId,
+      `Removed member '${user?.name || membership.userId}' from project membership`,
+      reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projectMemberships: prev.projectMemberships.map((m) =>
+        m.id === membershipId ? { ...m, status: "inactive", removedAt: now } : m
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
   };
 
   const markNotificationRead = (notifId: string) => {
@@ -1348,6 +1522,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         addComment,
         resolveComment,
         updateDeadline,
+        createTeamMember,
+        updateTeamMember,
+        updateTeamMemberStatus,
         addProjectMember,
         removeProjectMember,
         generateExternalReviewLink,
