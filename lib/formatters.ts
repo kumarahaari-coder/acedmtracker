@@ -59,3 +59,16 @@ export function formatDateTime(dateVal: string | number | Date | null | undefine
     return "Invalid Date";
   }
 }
+
+export function formatDurationHuman(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || isNaN(totalSeconds) || totalSeconds === 0) {
+    return "0m";
+  }
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return `${minutes}m`;
+}
+

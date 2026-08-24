@@ -13,6 +13,7 @@ import {
   Clock,
   Edit3,
   Layers,
+  LineChart,
   Mail,
   Plus,
   Shield,
@@ -204,6 +205,14 @@ export default function TeamMemberProfilePage() {
                 <UserCheck className="h-3.5 w-3.5" /> Reactivate Member
               </button>
             )}
+
+            {/* Performance Analytics Drilldown Link (Phase 6) */}
+            <Link
+              href={`/performance/${user.id}`}
+              className="flex items-center gap-1.5 rounded-full bg-[#f0f7ff] hover:bg-[#d0e5ff] px-4 py-1.5 text-[13px] font-semibold text-[#0071e3] border border-[#d0e5ff] transition"
+            >
+              <LineChart className="h-3.5 w-3.5" /> View Performance Analytics →
+            </Link>
           </div>
         )}
       </div>

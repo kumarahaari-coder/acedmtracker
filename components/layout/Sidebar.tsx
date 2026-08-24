@@ -11,6 +11,7 @@ import {
   FolderKanban,
   History,
   LayoutDashboard,
+  LineChart,
   Settings,
   Trello,
   Layers,
@@ -23,7 +24,8 @@ interface SidebarProps {
 
 export function Sidebar({ projectId }: SidebarProps) {
   const pathname = usePathname();
-  const { canViewAuditHistory } = useRole();
+  const { canViewAuditHistory, activeRole } = useRole();
+  const isManagement = activeRole === "founder" || activeRole === "admin" || activeRole === "consultant";
 
   const navItems = [
     { label: "Overview", href: `/projects/${projectId}`, icon: LayoutDashboard },
@@ -33,6 +35,9 @@ export function Sidebar({ projectId }: SidebarProps) {
     { label: "Script Library", href: `/projects/${projectId}/scripts`, icon: FileCode2 },
     { label: "Asset Vault", href: `/projects/${projectId}/assets`, icon: FolderKanban },
     { label: "Analytics Hub", href: `/projects/${projectId}/analytics`, icon: BarChart2 },
+    ...(isManagement
+      ? [{ label: "Performance", href: `/projects/${projectId}/performance`, icon: LineChart }]
+      : []),
     ...(canViewAuditHistory
       ? [{ label: "Audit Trail", href: `/projects/${projectId}/audit`, icon: History }]
       : []),
