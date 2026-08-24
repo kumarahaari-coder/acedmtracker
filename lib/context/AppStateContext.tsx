@@ -34,6 +34,8 @@ import {
   ContentGroup,
   ContentPlatform,
   ContentType,
+  AttendanceRecord,
+  AttendanceCorrection,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
 import { getInitialDeterministicState } from "../mockData";
@@ -247,6 +249,16 @@ interface AppStateContextType {
     expiresInDays?: number;
   }) => ExternalReviewLink;
   revokeExternalReviewLink: (linkId: string) => void;
+  // Attendance & Presence (Phase 2.1)
+  checkInAttendance: (userId: string) => { success: boolean; record?: AttendanceRecord; error?: string };
+  checkOutAttendance: (userId: string) => { success: boolean; record?: AttendanceRecord; error?: string };
+  adjustAttendance: (params: {
+    attendanceId: string;
+    checkedInAt?: string;
+    checkedOutAt?: string;
+    reason: string;
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
   // Notifications
   markNotificationRead: (notifId: string) => void;
 }
@@ -2432,6 +2444,165 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
+  // --- ATTENDANCE & DAILY PRESENCE (Phase 2.1) ---
+  const getKolkataDateString = (d: Date = new Date()): string => {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  };
+
+  const checkInAttendance = (userId: string): { success: boolean; record?: AttendanceRecord; error?: string } => {
+    const user = state.users.find((u) => u.id === userId);
+    if (!user || user.status === "inactive") {
+      return { success: false, error: "Inactive or nonexistent user cannot check in." };
+    }
+
+    const todayDate = getKolkataDateString();
+    const existing = state.attendanceRecords.find(
+      (r) => r.userId === userId && r.attendanceDate === todayDate
+    );
+
+    if (existing) {
+      if (existing.status === "checked_in") {
+        return { success: false, error: `Already checked in today at ${new Date(existing.checkedInAt).toLocaleTimeString()}` };
+      }
+      const now = new Date().toISOString();
+      const updated: AttendanceRecord = {
+        ...existing,
+        status: "checked_in",
+        checkedInAt: now,
+        checkedOutAt: undefined,
+        updatedAt: now,
+      };
+      setState((prev) => ({
+        ...prev,
+        attendanceRecords: prev.attendanceRecords.map((r) => (r.id === existing.id ? updated : r)),
+      }));
+      return { success: true, record: updated };
+    }
+
+    const now = new Date().toISOString();
+    const newRecord: AttendanceRecord = {
+      id: "att_" + Math.random().toString(36).substr(2, 9),
+      userId,
+      attendanceDate: todayDate,
+      checkedInAt: now,
+      status: "checked_in",
+      corrections: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      "org_ace_assured",
+      userId,
+      "check_in_attendance",
+      "attendance_record",
+      newRecord.id,
+      `User '${user.name}' checked in for daily attendance on ${todayDate}`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      attendanceRecords: [newRecord, ...prev.attendanceRecords],
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, record: newRecord };
+  };
+
+  const checkOutAttendance = (userId: string): { success: boolean; record?: AttendanceRecord; error?: string } => {
+    const todayDate = getKolkataDateString();
+    const record = state.attendanceRecords.find(
+      (r) => r.userId === userId && r.attendanceDate === todayDate && r.status === "checked_in"
+    );
+
+    if (!record) {
+      return { success: false, error: "No active check-in found for today." };
+    }
+
+    const now = new Date().toISOString();
+    const updatedRecord: AttendanceRecord = {
+      ...record,
+      status: "checked_out",
+      checkedOutAt: now,
+      updatedAt: now,
+    };
+
+    const user = state.users.find((u) => u.id === userId);
+    const audit = createAuditEntry(
+      "org_ace_assured",
+      userId,
+      "check_out_attendance",
+      "attendance_record",
+      record.id,
+      `User '${user?.name || userId}' checked out at ${new Date(now).toLocaleTimeString()}`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      attendanceRecords: prev.attendanceRecords.map((r) => (r.id === record.id ? updatedRecord : r)),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, record: updatedRecord };
+  };
+
+  const adjustAttendance = (params: {
+    attendanceId: string;
+    checkedInAt?: string;
+    checkedOutAt?: string;
+    reason: string;
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const record = state.attendanceRecords.find((r) => r.id === params.attendanceId);
+    if (!record) return { success: false, error: "Attendance record not found." };
+    if (!params.reason.trim()) {
+      return { success: false, error: "Mandatory reason required for attendance adjustment." };
+    }
+
+    const now = new Date().toISOString();
+    const correction: AttendanceCorrection = {
+      id: "att_corr_" + Math.random().toString(36).substr(2, 9),
+      previousCheckIn: record.checkedInAt,
+      newCheckIn: params.checkedInAt,
+      previousCheckOut: record.checkedOutAt,
+      newCheckOut: params.checkedOutAt,
+      changedByUserId: params.actorUserId,
+      reason: params.reason.trim(),
+      createdAt: now,
+    };
+
+    const updatedRecord: AttendanceRecord = {
+      ...record,
+      checkedInAt: params.checkedInAt || record.checkedInAt,
+      checkedOutAt: params.checkedOutAt !== undefined ? params.checkedOutAt : record.checkedOutAt,
+      corrections: [...(record.corrections || []), correction],
+      updatedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      "org_ace_assured",
+      params.actorUserId,
+      "adjust_attendance",
+      "attendance_record",
+      record.id,
+      `Adjusted attendance record for user ${record.userId} on ${record.attendanceDate}`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      attendanceRecords: prev.attendanceRecords.map((r) => (r.id === record.id ? updatedRecord : r)),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
   const markNotificationRead = (notifId: string) => {
     setState((prev) => ({
       ...prev,
@@ -2493,6 +2664,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         removeProjectMember,
         generateExternalReviewLink,
         revokeExternalReviewLink,
+        checkInAttendance,
+        checkOutAttendance,
+        adjustAttendance,
         markNotificationRead,
       }}
     >

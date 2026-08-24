@@ -22,8 +22,19 @@ import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate } from "@/lib/formatters";
 
 export default function MyWorkDashboardPage() {
-  const { state, pauseWorkSession } = useAppState();
+  const { state, pauseWorkSession, checkInAttendance, checkOutAttendance } = useAppState();
   const { activeRole, activeUserId, canApprove, setActiveProjectId } = useRole();
+
+  const todayDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  const todayAttendance = state.attendanceRecords.find(
+    (r) => r.userId === activeUserId && r.attendanceDate === todayDate
+  );
 
   // Active running timer for current user
   const activeWorkSession = state.workSessions.find(
@@ -32,6 +43,20 @@ export default function MyWorkDashboardPage() {
   const activeWorkItem = activeWorkSession
     ? state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)
     : null;
+
+  // Today's total tracked productive task seconds
+  const todayWorkSeconds = state.workSessions
+    .filter((ws) => ws.userId === activeUserId && ws.startedAt.startsWith(todayDate))
+    .reduce((acc, ws) => {
+      let s = ws.accumulatedSeconds;
+      if (ws.status === "active" && ws.activeSegmentStartedAt) {
+        s += Math.max(0, Math.floor((Date.now() - Date.parse(ws.activeSegmentStartedAt)) / 1000));
+      }
+      return acc + s;
+    }, 0);
+
+  const todayHours = Math.floor(todayWorkSeconds / 3600);
+  const todayMins = Math.floor((todayWorkSeconds % 3600) / 60);
 
   const [ticker, setTicker] = useState(0);
   useEffect(() => {
@@ -120,6 +145,144 @@ export default function MyWorkDashboardPage() {
           >
             <Layers className="h-4 w-4 text-[#0071e3]" /> View Project Portfolio
           </Link>
+        </div>
+      </div>
+
+      {/* TODAY'S ATTENDANCE & EFFORT OVERVIEW (Phase 2.1) */}
+      <div className="bg-[#ffffff] border border-black/[0.08] rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+        <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-[#0071e3]" />
+            <h2 className="text-[16px] font-bold text-[#1d1d1f]">Today&apos;s Status (Asia/Kolkata)</h2>
+          </div>
+          <span className="text-[12px] text-[#86868b] font-medium">Date: {todayDate}</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* Attendance Box */}
+          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
+            <div>
+              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
+                Daily Attendance
+              </span>
+              <div className="mt-1">
+                {todayAttendance?.status === "checked_in" ? (
+                  <div>
+                    <span className="text-[18px] font-bold text-[#1f6f32] flex items-center gap-1.5">
+                      <CheckCircle2 className="h-4 w-4" /> Checked In
+                    </span>
+                    <span className="text-[12px] text-[#6e6e73]">
+                      Arrived at {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                ) : todayAttendance?.status === "checked_out" ? (
+                  <div>
+                    <span className="text-[18px] font-bold text-[#9a6700]">
+                      Checked Out
+                    </span>
+                    <span className="text-[12px] text-[#6e6e73]">
+                      Ended at {new Date(todayAttendance.checkedOutAt || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                ) : (
+                  <div>
+                    <span className="text-[18px] font-bold text-[#86868b]">
+                      Not Checked In
+                    </span>
+                    <span className="text-[12px] text-[#6e6e73]">
+                      Record your daily shift arrival
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              {todayAttendance?.status === "checked_in" ? (
+                <button
+                  onClick={() => checkOutAttendance(activeUserId)}
+                  className="w-full rounded-xl bg-[#fff0ee] hover:bg-[#ffd5d0] text-[#b42318] py-2 text-[12px] font-semibold transition"
+                >
+                  Check Out for the Day
+                </button>
+              ) : (
+                <button
+                  onClick={() => checkInAttendance(activeUserId)}
+                  className="w-full rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2 text-[12px] font-semibold shadow-sm transition"
+                >
+                  Check In Now
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Tracked Work Today */}
+          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
+            <div>
+              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
+                Tracked Work Today
+              </span>
+              <div className="mt-1">
+                <span className="text-[26px] font-bold text-[#1d1d1f]">
+                  {todayHours}h {todayMins}m
+                </span>
+                <span className="text-[12px] text-[#6e6e73] block mt-0.5">
+                  Sum of verified task work sessions
+                </span>
+              </div>
+            </div>
+
+            <div className="text-[11px] text-[#86868b] bg-white p-2 rounded-xl border border-black/[0.04]">
+              Work sessions track task effort independently of attendance presence.
+            </div>
+          </div>
+
+          {/* Current Task Activity */}
+          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
+            <div>
+              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
+                Current Task
+              </span>
+              <div className="mt-1">
+                {activeWorkSession && activeWorkItem ? (
+                  <div>
+                    <span className="text-[14px] font-bold text-[#0066cc] truncate block">
+                      {activeWorkItem.title}
+                    </span>
+                    <span className="text-[12px] text-[#86868b] block">
+                      Platform: {activeWorkItem.platform}
+                    </span>
+                  </div>
+                ) : (
+                  <div>
+                    <span className="text-[14px] font-medium text-[#86868b] block">
+                      No active task timer.
+                    </span>
+                    <span className="text-[12px] text-[#6e6e73] block">
+                      Open an assigned deliverable to start work.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {activeWorkSession && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
+                  className="flex-1 rounded-xl bg-[#fff8e6] hover:bg-[#ffe082] text-[#9a6700] py-2 text-[12px] font-semibold transition"
+                >
+                  Pause Timer
+                </button>
+                <Link
+                  href={`/projects/${activeWorkSession.projectId}/content/${activeWorkSession.contentItemId}`}
+                  className="flex-1 text-center rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2 text-[12px] font-semibold transition shadow-sm"
+                >
+                  Workspace →
+                </Link>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

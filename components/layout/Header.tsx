@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Briefcase,
+  Users,
 } from "lucide-react";
 import { UserRole } from "@/lib/types";
 import { GlobalSearchModal } from "./GlobalSearchModal";
@@ -121,6 +122,21 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
               <Briefcase className="h-3.5 w-3.5" />
               <span>My Work</span>
             </Link>
+
+            {/* Global Team Link (Phase 2.1) */}
+            {activeRole !== "client" && (
+              <Link
+                href="/team"
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
+                  pathname.startsWith("/team")
+                    ? "bg-[#e8e8ed] text-[#1d1d1f]"
+                    : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                }`}
+              >
+                <Users className="h-3.5 w-3.5" />
+                <span>Team</span>
+              </Link>
+            )}
 
             {/* Simple Apple Project Switcher */}
             <div className="relative">

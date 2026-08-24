@@ -437,6 +437,48 @@ export function getInitialDeterministicState(): AppState {
         updatedAt: "2026-08-21T16:45:00.000Z",
       },
     ],
+    attendanceRecords: [
+      {
+        id: "att_mock_designer1",
+        userId: "u_designer1",
+        attendanceDate: "2026-08-24",
+        checkedInAt: "2026-08-24T04:08:00.000Z", // 9:38 AM IST
+        status: "checked_in",
+        corrections: [],
+        createdAt: "2026-08-24T04:08:00.000Z",
+        updatedAt: "2026-08-24T04:08:00.000Z",
+      },
+      {
+        id: "att_mock_designer2",
+        userId: "u_designer2",
+        attendanceDate: "2026-08-24",
+        checkedInAt: "2026-08-24T04:21:00.000Z", // 9:51 AM IST
+        status: "checked_in",
+        corrections: [],
+        createdAt: "2026-08-24T04:21:00.000Z",
+        updatedAt: "2026-08-24T04:21:00.000Z",
+      },
+      {
+        id: "att_mock_consultant",
+        userId: "u_consultant",
+        attendanceDate: "2026-08-24",
+        checkedInAt: "2026-08-24T03:45:00.000Z", // 9:15 AM IST
+        status: "checked_in",
+        corrections: [],
+        createdAt: "2026-08-24T03:45:00.000Z",
+        updatedAt: "2026-08-24T03:45:00.000Z",
+      },
+      {
+        id: "att_mock_founder",
+        userId: "u_founder",
+        attendanceDate: "2026-08-24",
+        checkedInAt: "2026-08-24T03:00:00.000Z", // 8:30 AM IST
+        status: "checked_in",
+        corrections: [],
+        createdAt: "2026-08-24T03:00:00.000Z",
+        updatedAt: "2026-08-24T03:00:00.000Z",
+      },
+    ],
     workSessions: [
       {
         id: "ws_acme_1",

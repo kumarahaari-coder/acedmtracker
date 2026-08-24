@@ -136,6 +136,10 @@ export function loadStoredState(): MigrationResult {
       state.contentAssignments = getInitialDeterministicState().contentAssignments;
       migrated = true;
     }
+    if (!Array.isArray(state.attendanceRecords)) {
+      state.attendanceRecords = getInitialDeterministicState().attendanceRecords || [];
+      migrated = true;
+    }
     if (!Array.isArray(state.workSessions)) {
       state.workSessions = getInitialDeterministicState().workSessions;
       migrated = true;

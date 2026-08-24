@@ -624,6 +624,26 @@ export default function ContentItemWorkspacePage() {
               </button>
             )}
 
+            {/* Start Work action for accepted assignee */}
+            {activeAssignment?.status === "accepted" && activeAssignment.assigneeUserId === activeUserId && !currentActiveSession && (
+              <button
+                onClick={() => {
+                  const res = startWorkSession({
+                    projectId,
+                    contentItemId: item.id,
+                    assignmentId: activeAssignment.id,
+                    userId: activeUserId,
+                  });
+                  if (!res.success && res.error) {
+                    setConcurrencyErrorMessage(res.error);
+                  }
+                }}
+                className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#1f6f32] hover:bg-[#195a28] py-2 text-[12px] font-medium text-white shadow-sm transition"
+              >
+                <Play className="h-3.5 w-3.5" /> Start Work (Start Timer)
+              </button>
+            )}
+
             {/* Management Actions: Reassign & Edit Deadline */}
             {(activeRole === "founder" || activeRole === "consultant" || activeRole === "admin" || canManageWorkflow) && (
               <div className="pt-2 border-t border-black/[0.06] flex items-center gap-2">
@@ -653,11 +673,11 @@ export default function ContentItemWorkspacePage() {
             )}
           </div>
 
-          {/* Time Tracking & Check-In Widget (Phase 2) */}
+          {/* Time Tracking & Work Session Widget (Phase 2) */}
           <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
-                <Timer className="h-3.5 w-3.5 text-[#0071e3]" /> Time Tracking
+                <Timer className="h-3.5 w-3.5 text-[#0071e3]" /> Work Timer (Task Effort)
               </h3>
               <span
                 className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
@@ -760,7 +780,7 @@ export default function ContentItemWorkspacePage() {
                       }}
                       className="flex items-center gap-1 rounded-lg bg-[#0071e3] hover:bg-[#0077ed] text-white px-3 py-1.5 text-[12px] font-medium transition shadow-sm"
                     >
-                      <Play className="h-3 w-3" /> Check-In & Start
+                      <Play className="h-3 w-3" /> Start Task Timer
                     </button>
                   )
                 )}

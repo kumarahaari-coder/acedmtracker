@@ -451,6 +451,29 @@ export interface WorkSession {
   updatedAt: string;
 }
 
+export interface AttendanceCorrection {
+  id: string;
+  previousCheckIn?: string;
+  newCheckIn?: string;
+  previousCheckOut?: string;
+  newCheckOut?: string;
+  changedByUserId: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface AttendanceRecord {
+  id: string;
+  userId: string;
+  attendanceDate: string; // 'YYYY-MM-DD' formatted in Asia/Kolkata timezone
+  checkedInAt: string;    // ISO timestamp
+  checkedOutAt?: string;   // ISO timestamp
+  status: 'checked_in' | 'checked_out';
+  corrections?: AttendanceCorrection[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StorageEnvelope<T> {
   schemaVersion: number;
   seededAt: string;
@@ -467,6 +490,7 @@ export interface AppState {
   contentGroups: ContentGroup[];
   contentItems: ContentItem[];
   contentAssignments: ContentAssignment[];
+  attendanceRecords: AttendanceRecord[];
   workSessions: WorkSession[];
   submissionVersions: SubmissionVersion[];
   approvalDecisions: ApprovalDecision[];
