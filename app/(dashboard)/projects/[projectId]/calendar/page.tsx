@@ -37,8 +37,19 @@ export default function CalendarPage() {
   const [quickPlatform, setQuickPlatform] = useState<ContentPlatform>("Instagram");
   const [quickType, setQuickType] = useState<ContentType>("carousel");
   const [quickDate, setQuickDate] = useState("2026-08-26");
+  const [quickAssigneeId, setQuickAssigneeId] = useState("u_designer1");
 
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
+  const projectMembers = state.projectMemberships
+    .filter((m) => m.projectId === projectId)
+    .map((m) => {
+      const user = state.users.find((u) => u.id === m.userId);
+      return {
+        userId: m.userId,
+        role: m.role,
+        name: user?.name || m.userId,
+      };
+    });
 
   const monthNames = [
     "January", "February", "March", "April", "May", "June",
@@ -122,7 +133,7 @@ export default function CalendarPage() {
       platform: quickPlatform,
       contentType: quickType,
       stage: "draft",
-      accountableOwnerId: "u_designer1",
+      accountableOwnerId: quickAssigneeId || "u_designer1",
       collaboratorIds: ["u_consultant"],
       deadlines: {
         submissionDeadline: new Date(quickDate + "T18:00:00Z").toISOString(),
@@ -475,14 +486,31 @@ export default function CalendarPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[#1d1d1f] font-medium mb-1">Scheduled Target Date</label>
-                <input
-                  type="date"
-                  value={quickDate}
-                  onChange={(e) => setQuickDate(e.target.value)}
-                  className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1">Assign to Designer</label>
+                  <select
+                    value={quickAssigneeId}
+                    onChange={(e) => setQuickAssigneeId(e.target.value)}
+                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
+                  >
+                    {projectMembers.map((m) => (
+                      <option key={m.userId} value={m.userId}>
+                        {m.name} ({m.role.replace(/_/g, " ")})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1">Scheduled Target Date</label>
+                  <input
+                    type="date"
+                    value={quickDate}
+                    onChange={(e) => setQuickDate(e.target.value)}
+                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
+                  />
+                </div>
               </div>
             </div>
 

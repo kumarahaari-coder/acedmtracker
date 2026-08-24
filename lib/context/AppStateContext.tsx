@@ -45,6 +45,7 @@ interface AppStateContextType {
   // Content Actions
   createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[]) => ContentItem;
   updateContentItem: (itemId: string, updates: Partial<ContentItem>, reason?: string) => void;
+  assignContentItem: (params: { contentItemId: string; assigneeUserId: string; actorUserId: string; reason?: string }) => void;
   createDraftVersion: (itemId: string, baseVersionId?: string) => SubmissionVersion;
   updateDraftVersion: (versionId: string, updates: Partial<SubmissionVersion>) => void;
   submitVersion: (versionId: string, actorUserId: string) => void;
@@ -337,6 +338,53 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return {
         ...prev,
         contentItems: prev.contentItems.map((i) => (i.id === itemId ? { ...i, ...updates } : i)),
+        auditRecords: [audit, ...prev.auditRecords],
+      };
+    });
+  };
+
+  const assignContentItem = (params: {
+    contentItemId: string;
+    assigneeUserId: string;
+    actorUserId: string;
+    reason?: string;
+  }) => {
+    setState((prev) => {
+      const item = prev.contentItems.find((i) => i.id === params.contentItemId);
+      if (!item) return prev;
+      const assignee = prev.users.find((u) => u.id === params.assigneeUserId);
+      const actor = prev.users.find((u) => u.id === params.actorUserId);
+
+      const audit = createAuditEntry(
+        item.projectId,
+        params.actorUserId,
+        "assign_content_item",
+        "content_item",
+        item.id,
+        `Assigned '${item.title}' to ${assignee?.name || params.assigneeUserId}`,
+        params.reason
+      );
+
+      const notif: Notification = {
+        id: "notif_" + Math.random().toString(36).substr(2, 9),
+        projectId: item.projectId,
+        recipientUserId: params.assigneeUserId,
+        eventType: "assignment",
+        entityType: "content_item",
+        entityId: item.id,
+        title: "New Creative Assigned",
+        message: `${actor?.name || "Team Lead"} assigned you to '${item.title}' (${item.platform})`,
+        createdAt: new Date().toISOString(),
+      };
+
+      return {
+        ...prev,
+        contentItems: prev.contentItems.map((i) =>
+          i.id === params.contentItemId
+            ? { ...i, accountableOwnerId: params.assigneeUserId }
+            : i
+        ),
+        notifications: [notif, ...prev.notifications],
         auditRecords: [audit, ...prev.auditRecords],
       };
     });
@@ -1278,6 +1326,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         createCampaign,
         createContentItem,
         updateContentItem,
+        assignContentItem,
         createDraftVersion,
         updateDraftVersion,
         submitVersion,

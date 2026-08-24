@@ -66,6 +66,7 @@ export default function ContentItemWorkspacePage() {
     updateDraftVersion,
     resubmitItemVersion,
     addComment,
+    assignContentItem,
     generateExternalReviewLink,
   } = useAppState();
 
@@ -76,6 +77,7 @@ export default function ContentItemWorkspacePage() {
     canOverride,
     canRespondToChanges,
     canUploadCreative,
+    canManageWorkflow,
   } = useRole();
 
   const project = state.projects.find((p) => p.id === projectId);
@@ -299,6 +301,21 @@ export default function ContentItemWorkspacePage() {
 
   const linkedScript = state.scripts.find((s) => s.projectId === projectId);
 
+  const projectMembers = state.projectMemberships
+    .filter((m) => m.projectId === projectId)
+    .map((m) => {
+      const user = state.users.find((u) => u.id === m.userId);
+      return {
+        userId: m.userId,
+        role: m.role,
+        name: user?.name || m.userId,
+        email: user?.email || "",
+        avatar: user?.avatar || "U",
+      };
+    });
+
+  const assignedMember = projectMembers.find((m) => m.userId === item.accountableOwnerId);
+
   return (
     <div className="flex-1 flex flex-col bg-[#ffffff] min-h-[calc(100vh-3.5rem)]">
       {/* Apple-style Top Workspace Header */}
@@ -413,6 +430,57 @@ export default function ContentItemWorkspacePage() {
                         Version {v.versionNumber}
                       </option>
                     ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Assigned Designer / Accountable Owner */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
+                <User className="h-3.5 w-3.5 text-[#0071e3]" /> Assigned Designer
+              </h3>
+              <span className="text-[11px] font-medium text-[#0071e3] capitalize bg-[#f0f7ff] px-2 py-0.5 rounded-full border border-[#d0e5ff]">
+                {assignedMember?.role || "Designer"}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[#fbfbfd] border border-black/[0.04]">
+              <div className="h-8 w-8 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[12px] border border-black/[0.06] shrink-0">
+                {assignedMember?.avatar || "U"}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-[#1d1d1f] text-[13px] truncate">
+                  {assignedMember?.name || "Unassigned"}
+                </div>
+                <div className="text-[11px] text-[#86868b] truncate">
+                  {assignedMember?.email || "No email on record"}
+                </div>
+              </div>
+            </div>
+
+            {(canManageWorkflow || activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
+              <div className="pt-2 border-t border-black/[0.06] space-y-1">
+                <label className="block text-[11px] font-medium text-[#86868b]">Reassign To:</label>
+                <select
+                  value={item.accountableOwnerId || ""}
+                  onChange={(e) => {
+                    if (e.target.value && e.target.value !== item.accountableOwnerId) {
+                      assignContentItem({
+                        contentItemId: item.id,
+                        assigneeUserId: e.target.value,
+                        actorUserId: activeUserId,
+                      });
+                    }
+                  }}
+                  className="w-full bg-[#f5f5f7] border border-black/[0.08] rounded-xl p-2 text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                >
+                  {projectMembers.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name} ({m.role.replace(/_/g, " ")})
+                    </option>
+                  ))}
                 </select>
               </div>
             )}
