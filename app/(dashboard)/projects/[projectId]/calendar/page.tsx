@@ -19,7 +19,7 @@ import { formatDate } from "@/lib/formatters";
 export default function CalendarPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "proj_acme";
-  const { state, updateDeadline, createContentItem } = useAppState();
+  const { state, updateDeadline, createContentItem, updatePublicationDetails } = useAppState();
   const { activeRole } = useRole();
 
   const [viewMode, setViewMode] = useState<"month" | "week">("month");
@@ -63,7 +63,14 @@ export default function CalendarPage() {
     if (dateLayer === "submission") return item.deadlines.submissionDeadline;
     if (dateLayer === "resubmission") return item.deadlines.resubmissionDeadline;
     if (dateLayer === "approval_target") return item.deadlines.approvalTarget;
-    if (dateLayer === "scheduled_publication") return item.deadlines.scheduledPublicationDate;
+    if (dateLayer === "actual_publication") return item.publishedAt;
+    if (dateLayer === "scheduled_publication") {
+      // Historical Resolution Rule: Published items display historically at publishedAt; unpublished items at scheduledPublicationDate
+      if (item.stage === "published" && item.publishedAt) {
+        return item.publishedAt;
+      }
+      return item.deadlines.scheduledPublicationDate;
+    }
     return item.deadlines.scheduledPublicationDate;
   };
 
@@ -113,13 +120,22 @@ export default function CalendarPage() {
 
   const handleSaveReschedule = () => {
     if (!selectedItemForReschedule || !newDateVal) return;
-    updateDeadline({
-      contentItemId: selectedItemForReschedule.id,
-      kind: dateLayer,
-      newDueAt: new Date(newDateVal).toISOString(),
-      changedByUserId: "u_consultant",
-      reason: rescheduleReason || "Operational calendar adjustment",
-    });
+    if (dateLayer === "actual_publication") {
+      updatePublicationDetails({
+        contentItemId: selectedItemForReschedule.id,
+        publishedAt: new Date(newDateVal).toISOString(),
+        reason: rescheduleReason || "Operational calendar adjustment",
+        actorUserId: "u_consultant",
+      });
+    } else {
+      updateDeadline({
+        contentItemId: selectedItemForReschedule.id,
+        kind: dateLayer as "submission" | "resubmission" | "approval_target" | "scheduled_publication",
+        newDueAt: new Date(newDateVal).toISOString(),
+        changedByUserId: "u_consultant",
+        reason: rescheduleReason || "Operational calendar adjustment",
+      });
+    }
     setSelectedItemForReschedule(null);
     setNewDateVal("");
     setRescheduleReason("");
@@ -186,7 +202,8 @@ export default function CalendarPage() {
               onChange={(e) => setDateLayer(e.target.value as DeadlineKind)}
               className="bg-transparent text-[#1d1d1f] font-medium focus:outline-none text-[13px]"
             >
-              <option value="scheduled_publication">Scheduled Publishing</option>
+              <option value="scheduled_publication">Publication Timeline (Live / Scheduled)</option>
+              <option value="actual_publication">Actual Published Live Date Only</option>
               <option value="submission">Submission Deadlines</option>
               <option value="resubmission">Resubmission Deadlines</option>
               <option value="approval_target">Approval Targets</option>

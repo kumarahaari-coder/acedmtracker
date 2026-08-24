@@ -128,6 +128,10 @@ export function loadStoredState(): MigrationResult {
       }
     }
 
+    if (!Array.isArray(state.contentGroups)) {
+      state.contentGroups = [];
+      migrated = true;
+    }
     if (!Array.isArray(state.contentAssignments)) {
       state.contentAssignments = getInitialDeterministicState().contentAssignments;
       migrated = true;

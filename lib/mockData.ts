@@ -235,12 +235,26 @@ export function getInitialDeterministicState(): AppState {
         concept: "Cross-platform adaptation of the 5-pillar patient trust framework."
       }
     ],
+    contentGroups: [
+      {
+        id: "grp_patient_guide",
+        projectId: "proj_acme",
+        title: "Omnichannel Patient Retention Guide 2026",
+        description: "Multi-platform brand awareness push across Instagram and LinkedIn carousel/posts.",
+        conceptNotes: "High contrast typography highlighting 5 patient touchpoints.",
+        contentItemIds: ["item_acme_1", "item_acme_2"],
+        createdByUserId: "u_consultant",
+        createdAt: "2026-08-14T10:00:00.000Z",
+        updatedAt: "2026-08-18T18:00:00.000Z",
+      },
+    ],
     contentItems: [
       {
         id: "item_acme_1",
         projectId: "proj_acme",
         campaignId: "camp_acme_q3",
         contentFamilyId: "fam_patient_guide",
+        contentGroupId: "grp_patient_guide",
         title: "5 Pillars of Patient Retention in Modern Clinics",
         platform: "Instagram",
         contentType: "carousel",
@@ -262,6 +276,7 @@ export function getInitialDeterministicState(): AppState {
         projectId: "proj_acme",
         campaignId: "camp_acme_q3",
         contentFamilyId: "fam_patient_guide",
+        contentGroupId: "grp_patient_guide",
         title: "B2B Medical Director Teardown: Telehealth ROI",
         platform: "LinkedIn",
         contentType: "post",
@@ -291,9 +306,11 @@ export function getInitialDeterministicState(): AppState {
           scheduledPublicationDate: "2026-08-14T11:00:00.000Z",
           actualPublicationTime: "2026-08-14T11:05:00.000Z"
         },
+        publishedAt: "2026-08-14T11:05:00.000Z",
+        liveUrl: "https://instagram.com/p/C9x81aBqMock",
+        publishedByUserId: "u_founder",
         currentVersionNumber: 1,
         latestSubmittedVersionId: "ver_acme_3_v1",
-        liveUrl: "https://instagram.com/p/C9x81aBqMock"
       },
       {
         id: "item_acme_4",

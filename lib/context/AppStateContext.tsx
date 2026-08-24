@@ -31,6 +31,9 @@ import {
   ContentAssignment,
   WorkSession,
   WorkSessionAdjustment,
+  ContentGroup,
+  ContentPlatform,
+  ContentType,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
 import { getInitialDeterministicState } from "../mockData";
@@ -46,6 +49,47 @@ interface AppStateContextType {
   archiveProject: (projectId: string, reason?: string) => void;
   restoreProject: (projectId: string) => void;
   createCampaign: (campaign: Omit<Campaign, "id">) => Campaign;
+  // Content Groups & Multi-Platform (Phase 3)
+  createContentGroupWithItems: (params: {
+    projectId: string;
+    title: string;
+    description?: string;
+    conceptNotes?: string;
+    actorUserId: string;
+    platforms: Array<{
+      platform: ContentPlatform;
+      contentType: ContentType;
+      accountableOwnerId: string;
+      submissionDeadline: string;
+      scheduledPublicationDate: string;
+      collaboratorIds?: string[];
+    }>;
+    sharedInitialCopy?: {
+      caption: string;
+      hashtags: string[];
+      cta: string;
+      destinationUrl?: string;
+    };
+    sharedAssets?: SubmissionAsset[];
+  }) => { success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string };
+  syncContentGroupFields: (params: {
+    contentGroupId: string;
+    sourceItemId?: string;
+    targetItemIds?: string[];
+    syncCopy?: boolean;
+    syncCreative?: boolean;
+    syncScheduledDate?: boolean;
+    customCopy?: {
+      caption?: string;
+      hashtags?: string[];
+      cta?: string;
+      destinationUrl?: string;
+    };
+    customAssets?: SubmissionAsset[];
+    customScheduledDate?: string;
+    actorUserId: string;
+    reason?: string;
+  }) => { success: boolean; error?: string; affectedItemCount?: number };
   // Content Actions & Assignments (Phase 2)
   createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[]) => ContentItem;
   updateContentItem: (itemId: string, updates: Partial<ContentItem>, reason?: string) => void;
@@ -115,12 +159,20 @@ interface AppStateContextType {
   // Publication & Analytics
   markPublished: (params: {
     contentItemId: string;
-    submissionVersionId: string;
+    submissionVersionId?: string;
     liveUrl: string;
+    publishedAt?: string;
     actorUserId: string;
     externalEditOccurred?: boolean;
     externalEditNote?: string;
   }) => void;
+  updatePublicationDetails: (params: {
+    contentItemId: string;
+    publishedAt?: string;
+    liveUrl?: string;
+    reason: string;
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
   importAnalyticsBatch: (params: {
     projectId: string;
     filename: string;
@@ -382,6 +434,315 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }));
 
     return newItem;
+  };
+
+  // --- MULTI-PLATFORM CONTENT GROUPS (Phase 3) ---
+  const createContentGroupWithItems = (params: {
+    projectId: string;
+    title: string;
+    description?: string;
+    conceptNotes?: string;
+    actorUserId: string;
+    platforms: Array<{
+      platform: ContentPlatform;
+      contentType: ContentType;
+      accountableOwnerId: string;
+      submissionDeadline: string;
+      scheduledPublicationDate: string;
+      collaboratorIds?: string[];
+    }>;
+    sharedInitialCopy?: {
+      caption: string;
+      hashtags: string[];
+      cta: string;
+      destinationUrl?: string;
+    };
+    sharedAssets?: SubmissionAsset[]; // Shared file references (no duplicate asset records/files)
+  }): { success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string } => {
+    // 1. Validation: Project must exist
+    const project = state.projects.find((p) => p.id === params.projectId);
+    if (!project) return { success: false, error: "Project not found" };
+    if (!params.platforms || params.platforms.length === 0) {
+      return { success: false, error: "At least one platform item must be specified." };
+    }
+
+    // 2. Validate all platform owners are active project members
+    for (const p of params.platforms) {
+      const isMember = state.projectMemberships.some(
+        (m) => m.projectId === params.projectId && m.userId === p.accountableOwnerId && m.status === "active"
+      );
+      if (!isMember) {
+        const user = state.users.find((u) => u.id === p.accountableOwnerId);
+        return { success: false, error: `Assignee '${user?.name || p.accountableOwnerId}' is not an active member of this project.` };
+      }
+    }
+
+    const now = new Date().toISOString();
+    const groupId = "grp_" + Math.random().toString(36).substr(2, 9);
+    const newItems: ContentItem[] = [];
+    const newAssignments: ContentAssignment[] = [];
+    const newVersions: SubmissionVersion[] = [];
+    const itemIds: string[] = [];
+
+    // 3. Atomically build items
+    for (const p of params.platforms) {
+      const itemId = `item_${params.projectId}_${p.platform.toLowerCase()}_${Math.random().toString(36).substr(2, 6)}`;
+      itemIds.push(itemId);
+
+      const verId = `ver_${itemId}_v1`;
+      const copy = params.sharedInitialCopy
+        ? { ...params.sharedInitialCopy, hashtags: [...params.sharedInitialCopy.hashtags] }
+        : { caption: "", hashtags: [], cta: "" };
+      const assets = params.sharedAssets ? [...params.sharedAssets] : [];
+
+      const version: SubmissionVersion = {
+        id: verId,
+        contentItemId: itemId,
+        versionNumber: 1,
+        isDraft: true,
+        createdAt: now,
+        copy,
+        creativeAssets: assets,
+        scheduledDate: p.scheduledPublicationDate,
+        componentFingerprints: computeVersionFingerprints({
+          copy,
+          creativeAssets: assets,
+          scheduledDate: p.scheduledPublicationDate,
+        }),
+      };
+      newVersions.push(version);
+
+      const item: ContentItem = {
+        id: itemId,
+        projectId: params.projectId,
+        contentGroupId: groupId,
+        title: `${params.title} (${p.platform})`,
+        platform: p.platform,
+        contentType: p.contentType,
+        stage: "draft",
+        accountableOwnerId: p.accountableOwnerId,
+        collaboratorIds: p.collaboratorIds || [],
+        deadlines: {
+          submissionDeadline: p.submissionDeadline,
+          scheduledPublicationDate: p.scheduledPublicationDate,
+        },
+        currentVersionNumber: 1,
+        activeDraftVersionId: verId,
+      };
+      newItems.push(item);
+
+      const assignment: ContentAssignment = {
+        id: "asgn_" + Math.random().toString(36).substr(2, 9),
+        projectId: params.projectId,
+        contentItemId: itemId,
+        assigneeUserId: p.accountableOwnerId,
+        assignmentRole: "designer",
+        status: "assigned",
+        assignedByUserId: params.actorUserId,
+        assignedAt: now,
+        initialDueAt: p.submissionDeadline,
+        currentDueAt: p.submissionDeadline,
+        createdAt: now,
+        updatedAt: now,
+      };
+      newAssignments.push(assignment);
+    }
+
+    const group: ContentGroup = {
+      id: groupId,
+      projectId: params.projectId,
+      title: params.title,
+      description: params.description,
+      conceptNotes: params.conceptNotes,
+      contentItemIds: itemIds,
+      createdByUserId: params.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "create_content_group",
+      "content_group",
+      groupId,
+      `Created multi-platform content group '${params.title}' across ${params.platforms.map((p) => p.platform).join(", ")}`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      contentGroups: [...prev.contentGroups, group],
+      contentItems: [...prev.contentItems, ...newItems],
+      contentAssignments: [...prev.contentAssignments, ...newAssignments],
+      submissionVersions: [...prev.submissionVersions, ...newVersions],
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, group, contentItems: newItems };
+  };
+
+  const syncContentGroupFields = (params: {
+    contentGroupId: string;
+    sourceItemId?: string;
+    targetItemIds?: string[];
+    syncCopy?: boolean;
+    syncCreative?: boolean;
+    syncScheduledDate?: boolean;
+    customCopy?: {
+      caption?: string;
+      hashtags?: string[];
+      cta?: string;
+      destinationUrl?: string;
+    };
+    customAssets?: SubmissionAsset[];
+    customScheduledDate?: string;
+    actorUserId: string;
+    reason?: string;
+  }): { success: boolean; error?: string; affectedItemCount?: number } => {
+    const group = state.contentGroups.find((g) => g.id === params.contentGroupId);
+    if (!group) return { success: false, error: "Content group not found" };
+
+    const siblingItems = state.contentItems.filter((i) =>
+      params.targetItemIds ? params.targetItemIds.includes(i.id) : i.contentGroupId === group.id
+    );
+
+    if (siblingItems.length === 0) return { success: false, error: "No target sibling items found in group" };
+
+    let sourceVersion: SubmissionVersion | undefined;
+    if (params.sourceItemId) {
+      const srcItem = state.contentItems.find((i) => i.id === params.sourceItemId);
+      if (srcItem) {
+        sourceVersion = state.submissionVersions.find(
+          (v) => v.id === srcItem.latestSubmittedVersionId || v.id === srcItem.activeDraftVersionId
+        );
+      }
+    }
+
+    const now = new Date().toISOString();
+    const updatedVersions: SubmissionVersion[] = [];
+    const updatedItems: ContentItem[] = [];
+    const resetDecisions: ApprovalDecision[] = [];
+
+    for (const item of siblingItems) {
+      // Find active or latest version
+      const ver = state.submissionVersions.find(
+        (v) => v.id === item.activeDraftVersionId || v.id === item.latestSubmittedVersionId
+      );
+      if (!ver) continue;
+
+      let updatedCopy = { ...ver.copy };
+      let updatedAssets = [...ver.creativeAssets];
+      let updatedDate = ver.scheduledDate;
+
+      if (params.syncCopy) {
+        if (params.customCopy) {
+          updatedCopy = {
+            ...updatedCopy,
+            caption: params.customCopy.caption !== undefined ? params.customCopy.caption : updatedCopy.caption,
+            hashtags: params.customCopy.hashtags ? [...params.customCopy.hashtags] : updatedCopy.hashtags,
+            cta: params.customCopy.cta !== undefined ? params.customCopy.cta : updatedCopy.cta,
+            destinationUrl: params.customCopy.destinationUrl !== undefined ? params.customCopy.destinationUrl : updatedCopy.destinationUrl,
+          };
+        } else if (sourceVersion) {
+          updatedCopy = { ...sourceVersion.copy, hashtags: [...sourceVersion.copy.hashtags] };
+        }
+      }
+
+      if (params.syncCreative) {
+        if (params.customAssets) {
+          updatedAssets = [...params.customAssets];
+        } else if (sourceVersion) {
+          updatedAssets = [...sourceVersion.creativeAssets];
+        }
+      }
+
+      if (params.syncScheduledDate) {
+        if (params.customScheduledDate) {
+          updatedDate = params.customScheduledDate;
+        } else if (sourceVersion) {
+          updatedDate = sourceVersion.scheduledDate;
+        }
+      }
+
+      const newFingerprints = computeVersionFingerprints({
+        copy: updatedCopy,
+        creativeAssets: updatedAssets,
+        scheduledDate: updatedDate,
+      });
+
+      const updatedVer: SubmissionVersion = {
+        ...ver,
+        copy: updatedCopy,
+        creativeAssets: updatedAssets,
+        scheduledDate: updatedDate,
+        componentFingerprints: newFingerprints,
+      };
+      updatedVersions.push(updatedVer);
+
+      const updatedItem: ContentItem = {
+        ...item,
+        deadlines: {
+          ...item.deadlines,
+          scheduledPublicationDate: params.syncScheduledDate && updatedDate ? updatedDate : item.deadlines.scheduledPublicationDate,
+        },
+      };
+      updatedItems.push(updatedItem);
+
+      // Selective approval invalidation for this sibling
+      const componentsToReset: ApprovalComponentType[] = [];
+      if (params.syncCopy) componentsToReset.push("copy");
+      if (params.syncCreative) componentsToReset.push("creative");
+      if (params.syncScheduledDate) componentsToReset.push("posting_date");
+
+      for (const comp of componentsToReset) {
+        for (const role of ["founder", "consultant"] as const) {
+          resetDecisions.push({
+            id: `dec_sync_${item.id}_${comp}_${role}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            projectId: item.projectId,
+            contentItemId: item.id,
+            submissionVersionId: ver.id,
+            component: comp,
+            componentFingerprint:
+              comp === "copy"
+                ? newFingerprints.copyFingerprint
+                : comp === "creative"
+                ? newFingerprints.creativeFingerprint
+                : newFingerprints.postingDateFingerprint,
+            reviewerUserId: params.actorUserId,
+            reviewerRole: role,
+            decision: "pending",
+            decidedAt: now,
+            note: `Selectively reset via Multi-Platform sync (${comp})`,
+          });
+        }
+      }
+    }
+
+    const audit = createAuditEntry(
+      group.projectId,
+      params.actorUserId,
+      "sync_content_group_fields",
+      "content_group",
+      group.id,
+      `Synchronized selected fields across ${siblingItems.length} platform items in group '${group.title}'`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      submissionVersions: prev.submissionVersions.map((v) => {
+        const match = updatedVersions.find((uv) => uv.id === v.id);
+        return match || v;
+      }),
+      contentItems: prev.contentItems.map((i) => {
+        const match = updatedItems.find((ui) => ui.id === i.id);
+        return match || i;
+      }),
+      approvalDecisions: [...prev.approvalDecisions, ...resetDecisions],
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, affectedItemCount: siblingItems.length };
   };
 
   const updateContentItem = (itemId: string, updates: Partial<ContentItem>, reason?: string) => {
@@ -1418,8 +1779,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // --- PUBLICATION & ANALYTICS ---
   const markPublished = (params: {
     contentItemId: string;
-    submissionVersionId: string;
+    submissionVersionId?: string;
     liveUrl: string;
+    publishedAt?: string;
     actorUserId: string;
     externalEditOccurred?: boolean;
     externalEditNote?: string;
@@ -1428,13 +1790,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const item = prev.contentItems.find((i) => i.id === params.contentItemId);
       if (!item) return prev;
 
+      const effectiveVersionId = params.submissionVersionId || item.latestSubmittedVersionId || item.activeDraftVersionId || "ver_v1";
+      const canonicalPublishedAt = params.publishedAt || new Date().toISOString();
+
       const pubRec: PublicationRecord = {
         id: "pub_" + Math.random().toString(36).substr(2, 9),
         projectId: item.projectId,
         contentItemId: params.contentItemId,
-        submissionVersionId: params.submissionVersionId,
+        submissionVersionId: effectiveVersionId,
         liveUrl: params.liveUrl,
-        publishedAt: new Date().toISOString(),
+        publishedAt: canonicalPublishedAt,
         markedPublishedByUserId: params.actorUserId,
         externalEditOccurred: !!params.externalEditOccurred,
         externalEditNote: params.externalEditNote,
@@ -1446,18 +1811,71 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         "mark_published",
         "publication_record",
         pubRec.id,
-        `Marked '${item.title}' as PUBLISHED at ${params.liveUrl}`
+        `Marked '${item.title}' as PUBLISHED at ${params.liveUrl} (Canonical Published Date: ${canonicalPublishedAt})`
       );
 
       return {
         ...prev,
         publicationRecords: [...prev.publicationRecords, pubRec],
         contentItems: prev.contentItems.map((i) =>
-          i.id === item.id ? { ...i, stage: "published", liveUrl: params.liveUrl } : i
+          i.id === item.id
+            ? {
+                ...i,
+                stage: "published",
+                publishedAt: canonicalPublishedAt,
+                liveUrl: params.liveUrl,
+                publishedByUserId: params.actorUserId,
+              }
+            : i
         ),
         auditRecords: [audit, ...prev.auditRecords],
       };
     });
+  };
+
+  const updatePublicationDetails = (params: {
+    contentItemId: string;
+    publishedAt?: string;
+    liveUrl?: string;
+    reason: string;
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const item = state.contentItems.find((i) => i.id === params.contentItemId);
+    if (!item) return { success: false, error: "Content item not found" };
+    if (!params.reason.trim()) {
+      return { success: false, error: "Mandatory reason required to update publication details." };
+    }
+
+    const oldPublishedAt = item.publishedAt;
+    const oldLiveUrl = item.liveUrl;
+
+    const audit = createAuditEntry(
+      item.projectId,
+      params.actorUserId,
+      "update_publication_details",
+      "content_item",
+      item.id,
+      `Updated publication details: publishedAt (${oldPublishedAt || "none"} -> ${params.publishedAt || oldPublishedAt}), liveUrl (${oldLiveUrl || "none"} -> ${params.liveUrl || oldLiveUrl})`,
+      params.reason,
+      { publishedAt: oldPublishedAt, liveUrl: oldLiveUrl },
+      { publishedAt: params.publishedAt, liveUrl: params.liveUrl }
+    );
+
+    setState((prev) => ({
+      ...prev,
+      contentItems: prev.contentItems.map((i) =>
+        i.id === item.id
+          ? {
+              ...i,
+              publishedAt: params.publishedAt !== undefined ? params.publishedAt : i.publishedAt,
+              liveUrl: params.liveUrl !== undefined ? params.liveUrl : i.liveUrl,
+            }
+          : i
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
   };
 
   const importAnalyticsBatch = (params: {
@@ -2034,6 +2452,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         archiveProject,
         restoreProject,
         createCampaign,
+        createContentGroupWithItems,
+        syncContentGroupFields,
         createContentItem,
         updateContentItem,
         assignContentItem,
@@ -2055,6 +2475,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         resolveChangeRequest,
         resubmitItemVersion,
         markPublished,
+        updatePublicationDetails,
         importAnalyticsBatch,
         createScript,
         updateScript,

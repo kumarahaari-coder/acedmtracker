@@ -90,11 +90,24 @@ export interface ContentDeadlines {
   actualPublicationTime?: string;
 }
 
+export interface ContentGroup {
+  id: string;
+  projectId: string;
+  title: string;
+  description?: string;
+  conceptNotes?: string;
+  contentItemIds: string[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ContentItem {
   id: string;
   projectId: string;
   campaignId?: string;
   contentFamilyId?: string;
+  contentGroupId?: string;
   title: string;
   platform: ContentPlatform;
   contentType: ContentType;
@@ -105,7 +118,9 @@ export interface ContentItem {
   currentVersionNumber: number; // 1, 2, 3...
   activeDraftVersionId?: string;
   latestSubmittedVersionId?: string;
-  liveUrl?: string;
+  publishedAt?: string; // Canonical ISO publication timestamp
+  liveUrl?: string; // Canonical external live URL
+  publishedByUserId?: string;
   // Note: Derived commercial metrics are computed from AnalyticsSnapshot[]
 }
 
@@ -228,7 +243,8 @@ export type DeadlineKind =
   | 'submission'
   | 'resubmission'
   | 'approval_target'
-  | 'scheduled_publication';
+  | 'scheduled_publication'
+  | 'actual_publication';
 
 export interface DeadlineRecord {
   id: string;
@@ -448,6 +464,7 @@ export interface AppState {
   projects: Project[];
   campaigns: Campaign[];
   contentFamilies: ContentFamily[];
+  contentGroups: ContentGroup[];
   contentItems: ContentItem[];
   contentAssignments: ContentAssignment[];
   workSessions: WorkSession[];

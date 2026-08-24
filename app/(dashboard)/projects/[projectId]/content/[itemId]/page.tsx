@@ -21,8 +21,10 @@ import {
   Eye,
   FileCode2,
   FileText,
+  Globe,
   History,
   Image as ImageIcon,
+  Layers,
   Link as LinkIcon,
   Lock,
   MessageSquare,
@@ -50,6 +52,7 @@ import {
   WorkSession,
   WorkSessionAdjustment,
   AssignmentRole,
+  ContentGroup,
 } from "@/lib/types";
 import {
   getItemApprovalMatrixSummary,
@@ -84,6 +87,9 @@ export default function ContentItemWorkspacePage() {
     resumeWorkSession,
     stopWorkSession,
     adjustWorkSessionDuration,
+    syncContentGroupFields,
+    markPublished,
+    updatePublicationDetails,
     generateExternalReviewLink,
   } = useAppState();
 
@@ -100,6 +106,34 @@ export default function ContentItemWorkspacePage() {
 
   const project = state.projects.find((p) => p.id === projectId);
   const item = state.contentItems.find((i) => i.id === itemId);
+
+  // Multi-Platform Content Group (Phase 3)
+  const contentGroup = item?.contentGroupId
+    ? state.contentGroups.find((g) => g.id === item.contentGroupId)
+    : undefined;
+  const siblingGroupItems = item?.contentGroupId
+    ? state.contentItems.filter((i) => i.contentGroupId === item.contentGroupId)
+    : [];
+
+  // Phase 3 Modals State
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [syncCopyCheck, setSyncCopyCheck] = useState(true);
+  const [syncCreativeCheck, setSyncCreativeCheck] = useState(true);
+  const [syncDateCheck, setSyncDateCheck] = useState(false);
+  const [syncReason, setSyncReason] = useState("");
+
+  const [isMarkPublishedModalOpen, setIsMarkPublishedModalOpen] = useState(false);
+  const [publishLiveUrlInput, setPublishLiveUrlInput] = useState(item?.liveUrl || "");
+  const [publishDateInput, setPublishDateInput] = useState(
+    item?.publishedAt ? item.publishedAt.slice(0, 16) : new Date().toISOString().slice(0, 16)
+  );
+
+  const [isEditPublicationModalOpen, setIsEditPublicationModalOpen] = useState(false);
+  const [editPublishedDateInput, setEditPublishedDateInput] = useState(
+    item?.publishedAt ? item.publishedAt.slice(0, 16) : new Date().toISOString().slice(0, 16)
+  );
+  const [editLiveUrlInput, setEditLiveUrlInput] = useState(item?.liveUrl || "");
+  const [editPublicationReason, setEditPublicationReason] = useState("");
 
   // Active Assignment & Work Sessions (Phase 2)
   const activeAssignment = state.contentAssignments.find(
@@ -493,6 +527,58 @@ export default function ContentItemWorkspacePage() {
             )}
           </div>
 
+          {/* Multi-Platform Creative Group Card (Phase 3) */}
+          {contentGroup && (
+            <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
+                  <Layers className="h-3.5 w-3.5 text-[#0071e3]" /> Multi-Platform Group
+                </h3>
+                <span className="text-[11px] font-medium text-[#0071e3] bg-[#f0f7ff] px-2 py-0.5 rounded-full border border-[#d0e5ff]">
+                  {siblingGroupItems.length} Platforms
+                </span>
+              </div>
+
+              <div>
+                <h4 className="font-semibold text-[13px] text-[#1d1d1f] truncate">{contentGroup.title}</h4>
+                {contentGroup.conceptNotes && (
+                  <p className="text-[11px] text-[#6e6e73] mt-0.5 line-clamp-2">{contentGroup.conceptNotes}</p>
+                )}
+              </div>
+
+              {/* Sibling Platform Switcher Pills */}
+              <div className="space-y-1 pt-1">
+                <span className="text-[11px] font-medium text-[#86868b] block">Linked Deliverables:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {siblingGroupItems.map((sibling) => (
+                    <Link
+                      key={sibling.id}
+                      href={`/projects/${projectId}/content/${sibling.id}`}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] font-medium transition ${
+                        sibling.id === item.id
+                          ? "bg-[#1d1d1f] text-white"
+                          : "bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#1d1d1f] border border-black/[0.06]"
+                      }`}
+                    >
+                      <span>{sibling.platform}</span>
+                      <span className="text-[10px] opacity-75">({sibling.stage.replace(/_/g, " ")})</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sync Action */}
+              {(canManageWorkflow || activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
+                <button
+                  onClick={() => setIsSyncModalOpen(true)}
+                  className="w-full mt-1 flex items-center justify-center gap-1.5 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] py-2 text-[12px] font-medium text-[#1d1d1f] border border-black/[0.06] transition"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-[#0071e3]" /> Sync Across Platforms...
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Content Assignment & Work Ownership (Phase 2) */}
           <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
             <div className="flex items-center justify-between">
@@ -738,6 +824,88 @@ export default function ContentItemWorkspacePage() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Canonical Publication Details (Phase 3) */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
+                <Globe className="h-3.5 w-3.5 text-[#0071e3]" /> Publication Status
+              </h3>
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
+                  item.stage === "published"
+                    ? "bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
+                    : "bg-[#f2f2f7] text-[#86868b]"
+                }`}
+              >
+                {item.stage === "published" ? "● Published Live" : "Unpublished"}
+              </span>
+            </div>
+
+            {item.stage === "published" ? (
+              <div className="space-y-2.5 text-[13px]">
+                <div className="flex justify-between items-center">
+                  <span className="text-[#86868b]">Canonical Live Date</span>
+                  <span className="font-bold text-[#1f6f32]">
+                    {formatDateTime(item.publishedAt)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[#86868b]">Originally Scheduled</span>
+                  <span className="font-medium text-[#1d1d1f]">
+                    {formatDate(item.deadlines.scheduledPublicationDate)}
+                  </span>
+                </div>
+                {item.liveUrl && (
+                  <div className="pt-1">
+                    <span className="text-[11px] text-[#86868b] block">Live Link:</span>
+                    <a
+                      href={item.liveUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[12px] text-[#0066cc] hover:underline flex items-center gap-1 truncate font-medium mt-0.5"
+                    >
+                      <ExternalLink className="h-3 w-3 shrink-0" /> {item.liveUrl}
+                    </a>
+                  </div>
+                )}
+
+                {(canAdmin || activeRole === "founder" || activeRole === "admin") && (
+                  <button
+                    onClick={() => {
+                      setEditPublishedDateInput(
+                        item.publishedAt ? item.publishedAt.slice(0, 16) : new Date().toISOString().slice(0, 16)
+                      );
+                      setEditLiveUrlInput(item.liveUrl || "");
+                      setEditPublicationReason("");
+                      setIsEditPublicationModalOpen(true);
+                    }}
+                    className="w-full text-center text-[11px] text-[#0066cc] hover:underline font-medium pt-1"
+                  >
+                    Edit Canonical Publication Details...
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2 pt-1">
+                <p className="text-[12px] text-[#6e6e73]">
+                  Scheduled for {formatDate(item.deadlines.scheduledPublicationDate)}.
+                </p>
+                {(approvalSummary.allComponentsApproved || canOverride || canManageWorkflow) && (
+                  <button
+                    onClick={() => {
+                      setPublishLiveUrlInput(item.liveUrl || "");
+                      setPublishDateInput(new Date().toISOString().slice(0, 16));
+                      setIsMarkPublishedModalOpen(true);
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#1f6f32] hover:bg-[#195a28] py-2 text-[12px] font-medium text-white shadow-sm transition"
+                  >
+                    <Check className="h-3.5 w-3.5" /> Mark Deliverable as Published...
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Linked Script */}
@@ -1666,6 +1834,287 @@ export default function ContentItemWorkspacePage() {
                 Understood
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Platform Selective Sync Modal (Phase 3) */}
+      {isSyncModalOpen && contentGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <div>
+                <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Apply to Linked Platform Items</h3>
+                <p className="text-[12px] text-[#6e6e73]">
+                  Group: &quot;{contentGroup.title}&quot; ({siblingGroupItems.length} platforms)
+                </p>
+              </div>
+              <button onClick={() => setIsSyncModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!syncCopyCheck && !syncCreativeCheck && !syncDateCheck) {
+                  alert("Please select at least one component to synchronize.");
+                  return;
+                }
+                const res = syncContentGroupFields({
+                  contentGroupId: contentGroup.id,
+                  sourceItemId: item.id,
+                  syncCopy: syncCopyCheck,
+                  syncCreative: syncCreativeCheck,
+                  syncScheduledDate: syncDateCheck,
+                  actorUserId: activeUserId,
+                  reason: syncReason.trim() || undefined,
+                });
+                if (res.success) {
+                  setIsSyncModalOpen(false);
+                  alert(`Successfully synchronized selected components across ${res.affectedItemCount} platform items.`);
+                } else {
+                  alert(res.error || "Failed to synchronize platform items.");
+                }
+              }}
+              className="space-y-4 text-[13px]"
+            >
+              <div className="space-y-2.5 bg-[#fbfbfd] p-3.5 rounded-xl border border-black/[0.06]">
+                <span className="text-[12px] font-semibold text-[#1d1d1f] block">Select Components to Propagate:</span>
+                
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={syncCopyCheck}
+                    onChange={(e) => setSyncCopyCheck(e.target.checked)}
+                    className="mt-0.5 rounded border-black/[0.2]"
+                  />
+                  <div>
+                    <span className="font-medium text-[#1d1d1f] block">Copy / Caption & CTA</span>
+                    <span className="text-[11px] text-[#86868b]">
+                      Propagates caption, hashtags, and CTA. Selectively resets Copy approval on target items.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={syncCreativeCheck}
+                    onChange={(e) => setSyncCreativeCheck(e.target.checked)}
+                    className="mt-0.5 rounded border-black/[0.2]"
+                  />
+                  <div>
+                    <span className="font-medium text-[#1d1d1f] block">Creative Media Assets</span>
+                    <span className="text-[11px] text-[#86868b]">
+                      Shares physical asset references (no duplicate files). Selectively resets Creative approval.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={syncDateCheck}
+                    onChange={(e) => setSyncDateCheck(e.target.checked)}
+                    className="mt-0.5 rounded border-black/[0.2]"
+                  />
+                  <div>
+                    <span className="font-medium text-[#1d1d1f] block">Scheduled Release Date</span>
+                    <span className="text-[11px] text-[#86868b]">
+                      Syncs planned release date. Selectively resets Posting Date approval.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Audit Reason for Propagation</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Master creative revision approved by client, propagating to Instagram and Facebook..."
+                  value={syncReason}
+                  onChange={(e) => setSyncReason(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsSyncModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Synchronize Platforms
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Mark Published Modal (Phase 3) */}
+      {isMarkPublishedModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Confirm Deliverable Publication</h3>
+              <button onClick={() => setIsMarkPublishedModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!publishLiveUrlInput.trim()) {
+                  alert("Please enter the live URL.");
+                  return;
+                }
+                markPublished({
+                  contentItemId: item.id,
+                  submissionVersionId: currentVersion.id,
+                  liveUrl: publishLiveUrlInput.trim(),
+                  publishedAt: publishDateInput ? new Date(publishDateInput).toISOString() : new Date().toISOString(),
+                  actorUserId: activeUserId,
+                });
+                setIsMarkPublishedModalOpen(false);
+              }}
+              className="space-y-3 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Live Published URL *</label>
+                <input
+                  type="url"
+                  placeholder="https://instagram.com/p/... or https://linkedin.com/posts/..."
+                  value={publishLiveUrlInput}
+                  onChange={(e) => setPublishLiveUrlInput(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Actual Live Publication Timestamp</label>
+                <input
+                  type="datetime-local"
+                  value={publishDateInput}
+                  onChange={(e) => setPublishDateInput(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+                <span className="text-[11px] text-[#86868b] mt-1 block">
+                  Original planned date ({formatDate(item.deadlines.scheduledPublicationDate)}) will be preserved in schedule history.
+                </span>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsMarkPublishedModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#1f6f32] hover:bg-[#195a28] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Mark as Published
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Publication Details Modal (Phase 3 Audited Corrections) */}
+      {isEditPublicationModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Edit Canonical Publication Details</h3>
+              <button onClick={() => setIsEditPublicationModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editPublicationReason.trim()) {
+                  alert("Please provide a mandatory reason for updating publication details.");
+                  return;
+                }
+                const res = updatePublicationDetails({
+                  contentItemId: item.id,
+                  publishedAt: editPublishedDateInput ? new Date(editPublishedDateInput).toISOString() : undefined,
+                  liveUrl: editLiveUrlInput.trim() || undefined,
+                  reason: editPublicationReason.trim(),
+                  actorUserId: activeUserId,
+                });
+                if (res.success) {
+                  setIsEditPublicationModalOpen(false);
+                } else {
+                  alert(res.error || "Failed to update publication details.");
+                }
+              }}
+              className="space-y-3 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Canonical Live Date & Time *</label>
+                <input
+                  type="datetime-local"
+                  value={editPublishedDateInput}
+                  onChange={(e) => setEditPublishedDateInput(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Live URL</label>
+                <input
+                  type="url"
+                  value={editLiveUrlInput}
+                  onChange={(e) => setEditLiveUrlInput(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Mandatory Reason for Correction *</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Correcting publication timestamp to match actual Meta API broadcast time..."
+                  value={editPublicationReason}
+                  onChange={(e) => setEditPublicationReason(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsEditPublicationModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Save Audited Update
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
