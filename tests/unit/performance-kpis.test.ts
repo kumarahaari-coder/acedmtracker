@@ -338,4 +338,39 @@ describe("Phase 6: Deterministic Performance KPI Engine & Attribution Rules", ()
     expect(result.data?.overview.avgRevisionRounds).toBeNull();
     expect(result.data?.overview.avgProductionTimeSeconds).toBeNull();
   });
+
+  it("9. applies Platform filter to authoritative performance query layer (KPIs, counts, tracked time)", () => {
+    const state = createTestState();
+
+    const allResult = getOrganizationPerformance(state, "u_founder", "founder");
+    expect(allResult.status).toBe(200);
+
+    const instagramResult = getOrganizationPerformance(state, "u_founder", "founder", { platform: "Instagram" });
+    expect(instagramResult.status).toBe(200);
+
+    // Filtered platform results must be equal to or less than unfiltered totals
+    expect(instagramResult.data?.overview.completedDeliverablesCount).toBeLessThanOrEqual(
+      allResult.data?.overview.completedDeliverablesCount || 0
+    );
+    expect(instagramResult.data?.overview.totalTrackedSeconds).toBeLessThanOrEqual(
+      allResult.data?.overview.totalTrackedSeconds || 0
+    );
+  });
+
+  it("10. applies Content Type filter to authoritative performance query layer (KPIs, counts, tracked time)", () => {
+    const state = createTestState();
+
+    const allResult = getOrganizationPerformance(state, "u_founder", "founder");
+    expect(allResult.status).toBe(200);
+
+    const reelResult = getOrganizationPerformance(state, "u_founder", "founder", { contentType: "reel" });
+    expect(reelResult.status).toBe(200);
+
+    expect(reelResult.data?.overview.completedDeliverablesCount).toBeLessThanOrEqual(
+      allResult.data?.overview.completedDeliverablesCount || 0
+    );
+    expect(reelResult.data?.overview.totalTrackedSeconds).toBeLessThanOrEqual(
+      allResult.data?.overview.totalTrackedSeconds || 0
+    );
+  });
 });

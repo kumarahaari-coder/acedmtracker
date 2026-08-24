@@ -111,7 +111,7 @@ export default function PerformanceDashboardPage() {
               viewMode === "scorecards" ? "bg-white text-[#1d1d1f] shadow-sm font-semibold" : "text-[#6e6e73] hover:text-[#1d1d1f]"
             }`}
           >
-            Designer Scorecards
+            Designer Metric Summaries
           </button>
           <button
             onClick={() => setViewMode("workload")}
@@ -177,11 +177,13 @@ export default function PerformanceDashboardPage() {
             onChange={(e) => setSelectedPlatform(e.target.value)}
             className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none"
           >
-            <option value="all">All Channels</option>
+            <option value="all">All Platforms</option>
             <option value="Instagram">Instagram</option>
-            <option value="LinkedIn">LinkedIn</option>
             <option value="Facebook">Facebook</option>
+            <option value="LinkedIn">LinkedIn</option>
             <option value="YouTube">YouTube</option>
+            <option value="X">X</option>
+            <option value="Email">Email</option>
           </select>
 
           {/* Content Type Filter */}
@@ -190,10 +192,10 @@ export default function PerformanceDashboardPage() {
             onChange={(e) => setSelectedContentType(e.target.value)}
             className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none"
           >
-            <option value="all">All Formats</option>
+            <option value="all">All Content Types</option>
             <option value="post">Post</option>
             <option value="carousel">Carousel</option>
-            <option value="reel">Reel / Video</option>
+            <option value="reel">Reel</option>
             <option value="trial_reel">Trial Reel</option>
           </select>
         </div>
@@ -293,7 +295,7 @@ export default function PerformanceDashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-black/[0.06] pb-3">
             <div>
               <h2 className="text-[18px] font-bold text-[#1d1d1f] flex items-center gap-2">
-                <Users className="h-5 w-5 text-[#0071e3]" /> Designer Performance Scorecards
+                <Users className="h-5 w-5 text-[#0071e3]" /> Designer Performance Metrics
               </h2>
               <p className="text-[12px] text-[#86868b]">
                 Objective operational metrics across delivery, revision cycles, production effort, and active workload.

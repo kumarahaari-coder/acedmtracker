@@ -9,6 +9,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
+  Filter,
   FolderKanban,
   LineChart,
   Lock,
@@ -26,13 +27,18 @@ export default function ProjectPerformancePage() {
   const { activeRole, activeUserId } = useRole();
 
   const [dateRange, setDateRange] = useState<"7d" | "30d" | "90d" | "all">("all");
-  const [viewMode, setViewMode] = useState<"scorecards" | "workload">("scorecards");
+  const [selectedDesignerId, setSelectedDesignerId] = useState<string>("all");
+  const [selectedPlatform, setSelectedPlatform] = useState<string>("all");
+  const [selectedContentType, setSelectedContentType] = useState<string>("all");
 
   const project = state.projects.find((p) => p.id === projectId);
 
   const filters: PerformanceFilters = {
     dateRange,
     projectId,
+    designerId: selectedDesignerId,
+    platform: selectedPlatform,
+    contentType: selectedContentType,
   };
 
   const perfResult = getOrganizationPerformance(state, activeUserId, activeRole, filters);
@@ -61,6 +67,13 @@ export default function ProjectPerformancePage() {
 
   const { overview, scorecards, workload } = perfResult.data;
 
+  // Find designers assigned to this project
+  const projectMembers = state.projectMemberships.filter((m) => m.projectId === projectId && m.status === "active");
+  const projectMemberUserIds = new Set(projectMembers.map((m) => m.userId));
+  const projectDesigners = state.users.filter(
+    (u) => projectMemberUserIds.has(u.id) && (u.role === "designer" || u.jobTitle?.toLowerCase().includes("designer") || u.jobTitle?.toLowerCase().includes("editor"))
+  );
+
   return (
     <div className="p-6 sm:p-10 max-w-7xl mx-auto space-y-8 animate-in fade-in">
       {/* Header */}
@@ -77,16 +90,73 @@ export default function ProjectPerformancePage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <Link
+          href={`/projects/${projectId}`}
+          className="inline-flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-4 py-2 text-[13px] font-medium text-[#1d1d1f] border border-black/[0.08] transition self-start md:self-auto"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back to Project Overview
+        </Link>
+      </div>
+
+      {/* Unified Filter Bar */}
+      <div className="bg-white border border-black/[0.08] p-4 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-wrap items-center justify-between gap-3 text-[13px]">
+        <div className="flex items-center gap-2 text-[#86868b] font-medium">
+          <Filter className="h-4 w-4 text-[#0071e3]" /> Filters:
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 justify-end">
+          {/* Date Range */}
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value as any)}
-            className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[13px] text-[#1d1d1f] font-semibold focus:outline-none"
+            className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none"
           >
             <option value="7d">Last 7 Days</option>
             <option value="30d">Last 30 Days</option>
             <option value="90d">Last 90 Days</option>
             <option value="all">All Time</option>
+          </select>
+
+          {/* Project Designer Filter */}
+          <select
+            value={selectedDesignerId}
+            onChange={(e) => setSelectedDesignerId(e.target.value)}
+            className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none max-w-[180px]"
+          >
+            <option value="all">All Project Designers ({projectDesigners.length})</option>
+            {projectDesigners.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} {d.status === "inactive" ? "(Inactive)" : ""}
+              </option>
+            ))}
+          </select>
+
+          {/* Platform Filter */}
+          <select
+            value={selectedPlatform}
+            onChange={(e) => setSelectedPlatform(e.target.value)}
+            className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none"
+          >
+            <option value="all">All Platforms</option>
+            <option value="Instagram">Instagram</option>
+            <option value="Facebook">Facebook</option>
+            <option value="LinkedIn">LinkedIn</option>
+            <option value="YouTube">YouTube</option>
+            <option value="X">X</option>
+            <option value="Email">Email</option>
+          </select>
+
+          {/* Content Type Filter */}
+          <select
+            value={selectedContentType}
+            onChange={(e) => setSelectedContentType(e.target.value)}
+            className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none"
+          >
+            <option value="all">All Content Types</option>
+            <option value="post">Post</option>
+            <option value="carousel">Carousel</option>
+            <option value="reel">Reel</option>
+            <option value="trial_reel">Trial Reel</option>
           </select>
         </div>
       </div>
@@ -160,7 +230,7 @@ export default function ProjectPerformancePage() {
         </div>
       </div>
 
-      {/* Project Scorecards Table */}
+      {/* Project Team Performance Table */}
       <div className="bg-white border border-black/[0.08] rounded-3xl p-6 sm:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
         <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
           <h2 className="text-[18px] font-bold text-[#1d1d1f] flex items-center gap-2">
@@ -187,7 +257,7 @@ export default function ProjectPerformancePage() {
               {scorecards.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-6 text-center text-[#86868b]">
-                    No team performance records recorded for this project yet.
+                    No team performance records match the current filter selection for this project.
                   </td>
                 </tr>
               ) : (

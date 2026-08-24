@@ -52,8 +52,8 @@ describe("Rendered Performance Dashboard & Drilldown Flow", () => {
     expect(screen.getByText(/Avg Production Time/i)).toBeDefined();
     expect(screen.getByText(/Team Presence Today/i)).toBeDefined();
 
-    // Scorecards Table
-    expect(screen.getByText(/Designer Performance Scorecards/i)).toBeDefined();
+    // Designer Metrics Table
+    expect(screen.getByText(/Designer Performance Metrics/i)).toBeDefined();
     expect(screen.getAllByText("Rohan Verma").length).toBeGreaterThan(0);
   });
 
@@ -120,6 +120,6 @@ describe("Rendered Performance Dashboard & Drilldown Flow", () => {
     );
 
     expect(screen.getByText("Access Restricted")).toBeDefined();
-    expect(screen.queryByText(/Designer Performance Scorecards/i)).toBeNull();
+    expect(screen.queryByText(/Designer Performance Metrics/i)).toBeNull();
   });
 });
