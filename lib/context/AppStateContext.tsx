@@ -259,6 +259,24 @@ interface AppStateContextType {
     reason: string;
     actorUserId: string;
   }) => { success: boolean; error?: string };
+  // Client Portal & Visibility (Phase 5)
+  setClientVisibility: (params: {
+    contentItemId: string;
+    clientVisible: boolean;
+    actorUserId: string;
+    reason?: string;
+  }) => { success: boolean; error?: string };
+  updateProjectClientAnalyticsConfig: (params: {
+    projectId: string;
+    allowedMetricKeys: string[];
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
+  createClientUserAndAssign: (params: {
+    name: string;
+    email: string;
+    projectId: string;
+    actorUserId: string;
+  }) => { success: boolean; user?: User; membership?: ProjectMembership; error?: string };
   // Notifications
   markNotificationRead: (notifId: string) => void;
 }
@@ -2603,6 +2621,154 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
+  // --- CLIENT PORTAL & VISIBILITY (Phase 5) ---
+  const setClientVisibility = (params: {
+    contentItemId: string;
+    clientVisible: boolean;
+    actorUserId: string;
+    reason?: string;
+  }): { success: boolean; error?: string } => {
+    const item = state.contentItems.find((i) => i.id === params.contentItemId);
+    if (!item) return { success: false, error: "Content item not found." };
+
+    const updatedItem: ContentItem = {
+      ...item,
+      clientVisible: params.clientVisible,
+    };
+
+    const audit = createAuditEntry(
+      item.projectId,
+      params.actorUserId,
+      "update_client_visibility",
+      "content_item",
+      item.id,
+      `Set client visibility to ${params.clientVisible ? "ON" : "OFF"} for '${item.title}'`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      contentItems: prev.contentItems.map((i) => (i.id === item.id ? updatedItem : i)),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const updateProjectClientAnalyticsConfig = (params: {
+    projectId: string;
+    allowedMetricKeys: string[];
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const project = state.projects.find((p) => p.id === params.projectId);
+    if (!project) return { success: false, error: "Project not found." };
+
+    const updatedProject: Project = {
+      ...project,
+      clientAnalyticsConfig: {
+        allowedMetricKeys: params.allowedMetricKeys,
+      },
+    };
+
+    const audit = createAuditEntry(
+      project.id,
+      params.actorUserId,
+      "update_client_analytics_config",
+      "project",
+      project.id,
+      `Updated client analytics metric whitelist: [${params.allowedMetricKeys.join(", ")}]`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projects: prev.projects.map((p) => (p.id === project.id ? updatedProject : p)),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const createClientUserAndAssign = (params: {
+    name: string;
+    email: string;
+    projectId: string;
+    actorUserId: string;
+  }): { success: boolean; user?: User; membership?: ProjectMembership; error?: string } => {
+    const project = state.projects.find((p) => p.id === params.projectId);
+    if (!project) return { success: false, error: "Project not found." };
+
+    const existingUser = state.users.find((u) => u.email.toLowerCase() === params.email.toLowerCase());
+    const now = new Date().toISOString();
+
+    let clientUser: User;
+    let newUsers = [...state.users];
+
+    if (existingUser) {
+      clientUser = existingUser;
+    } else {
+      clientUser = {
+        id: "u_client_" + Math.random().toString(36).substr(2, 9),
+        name: params.name.trim(),
+        email: params.email.trim(),
+        avatar: params.name.charAt(0).toUpperCase() || "C",
+        role: "client",
+        jobTitle: "Client Representative",
+        status: "active",
+        dateJoined: now.split("T")[0],
+        createdByUserId: params.actorUserId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      newUsers = [clientUser, ...newUsers];
+    }
+
+    const existingMembership = state.projectMemberships.find(
+      (m) => m.projectId === params.projectId && m.userId === clientUser.id
+    );
+
+    let membership: ProjectMembership;
+    let newMemberships = [...state.projectMemberships];
+
+    if (existingMembership) {
+      membership = {
+        ...existingMembership,
+        status: "active",
+        membershipRole: "client",
+        removedAt: undefined,
+      };
+      newMemberships = newMemberships.map((m) => (m.id === existingMembership.id ? membership : m));
+    } else {
+      membership = {
+        id: "pm_" + Math.random().toString(36).substr(2, 9),
+        projectId: params.projectId,
+        userId: clientUser.id,
+        status: "active",
+        membershipRole: "client",
+        addedByUserId: params.actorUserId,
+        addedAt: now,
+      };
+      newMemberships = [membership, ...newMemberships];
+    }
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "create_client_access",
+      "project_membership",
+      membership.id,
+      `Granted Client Portal access for '${clientUser.name}' (${clientUser.email})`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      users: newUsers,
+      projectMemberships: newMemberships,
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, user: clientUser, membership };
+  };
+
   const markNotificationRead = (notifId: string) => {
     setState((prev) => ({
       ...prev,
@@ -2667,6 +2833,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         checkInAttendance,
         checkOutAttendance,
         adjustAttendance,
+        setClientVisibility,
+        updateProjectClientAnalyticsConfig,
+        createClientUserAndAssign,
         markNotificationRead,
       }}
     >

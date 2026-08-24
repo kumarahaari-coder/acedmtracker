@@ -43,6 +43,9 @@ export interface Project {
   status: 'active' | 'archived' | 'retention';
   targetRequirements: TargetRequirements;
   workflowStages: string[];
+  clientAnalyticsConfig?: {
+    allowedMetricKeys: string[]; // e.g. ['reach', 'impressions', 'engagementRate', 'clicks', 'leads']
+  };
   createdAt: string;
   archivedAt?: string;
   retentionExpiresAt?: string;
@@ -121,6 +124,7 @@ export interface ContentItem {
   publishedAt?: string; // Canonical ISO publication timestamp
   liveUrl?: string; // Canonical external live URL
   publishedByUserId?: string;
+  clientVisible?: boolean; // True when authorized for Client Portal rendering
   // Note: Derived commercial metrics are computed from AnalyticsSnapshot[]
 }
 

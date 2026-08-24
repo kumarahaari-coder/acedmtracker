@@ -199,6 +199,9 @@ export function getInitialDeterministicState(): AppState {
         status: "active",
         targetRequirements: { posts: 15, carousels: 5, reels: 12, trialReels: 4 },
         workflowStages: ["Idea", "Draft", "Submitted", "In Review", "Changes Requested", "Approved", "Scheduled", "Published", "Reported"],
+        clientAnalyticsConfig: {
+          allowedMetricKeys: ["reach", "impressions", "engagementRate", "clicks", "leads"],
+        },
         createdAt: "2026-06-01T08:00:00.000Z",
       },
     ],
@@ -270,6 +273,7 @@ export function getInitialDeterministicState(): AppState {
         currentVersionNumber: 2,
         activeDraftVersionId: "ver_acme_1_v2",
         latestSubmittedVersionId: "ver_acme_1_v1",
+        clientVisible: false,
       },
       {
         id: "item_acme_2",
@@ -290,6 +294,7 @@ export function getInitialDeterministicState(): AppState {
         },
         currentVersionNumber: 1,
         latestSubmittedVersionId: "ver_acme_2_v1",
+        clientVisible: true,
       },
       {
         id: "item_acme_3",
@@ -311,6 +316,7 @@ export function getInitialDeterministicState(): AppState {
         publishedByUserId: "u_founder",
         currentVersionNumber: 1,
         latestSubmittedVersionId: "ver_acme_3_v1",
+        clientVisible: true,
       },
       {
         id: "item_acme_4",
@@ -327,7 +333,8 @@ export function getInitialDeterministicState(): AppState {
           scheduledPublicationDate: "2026-08-24T15:00:00.000Z"
         },
         currentVersionNumber: 1,
-        latestSubmittedVersionId: "ver_acme_4_v1"
+        latestSubmittedVersionId: "ver_acme_4_v1",
+        clientVisible: true,
       },
       {
         id: "item_solar_1",

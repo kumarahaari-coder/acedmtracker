@@ -36,6 +36,7 @@ import {
   Settings,
   Share2,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Square,
   Timer,
@@ -91,6 +92,7 @@ export default function ContentItemWorkspacePage() {
     markPublished,
     updatePublicationDetails,
     generateExternalReviewLink,
+    setClientVisibility,
   } = useAppState();
 
   const {
@@ -576,6 +578,40 @@ export default function ContentItemWorkspacePage() {
                   <Sparkles className="h-3.5 w-3.5 text-[#0071e3]" /> Sync Across Platforms...
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Client Portal Visibility Control (Phase 5) */}
+          {(canManageWorkflow || activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
+            <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck className="h-4 w-4 text-[#34c759]" />
+                  <span className="text-[13px] font-semibold text-[#1d1d1f]">Client Portal Visibility</span>
+                </div>
+                <button
+                  onClick={() =>
+                    setClientVisibility({
+                      contentItemId: item.id,
+                      clientVisible: !item.clientVisible,
+                      actorUserId: activeUserId,
+                      reason: `Toggled client visibility to ${!item.clientVisible ? "ON" : "OFF"}`,
+                    })
+                  }
+                  className={`px-3 py-1 rounded-full text-[11px] font-bold transition ${
+                    item.clientVisible
+                      ? "bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
+                      : "bg-[#f2f2f7] text-[#86868b] border border-black/[0.06]"
+                  }`}
+                >
+                  {item.clientVisible ? "● Visible to Client" : "Hidden from Client"}
+                </button>
+              </div>
+              <p className="text-[11px] text-[#6e6e73]">
+                {item.clientVisible
+                  ? "Approved deliverables are visible in the authenticated Client Portal."
+                  : "Private to agency team. Hidden from client overview, calendar, and creative library."}
+              </p>
             </div>
           )}
 

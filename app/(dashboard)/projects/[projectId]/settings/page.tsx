@@ -18,9 +18,22 @@ import {
   AlertCircle,
   Power,
   ExternalLink,
+  ShieldCheck,
+  LineChart,
+  UserCheck,
 } from "lucide-react";
 import { UserRole, User } from "@/lib/types";
 import { formatDate } from "@/lib/formatters";
+
+const ALL_AVAILABLE_METRICS = [
+  { key: "reach", label: "Organic Reach", desc: "Total unique accounts reached" },
+  { key: "impressions", label: "Impressions", desc: "Total post views" },
+  { key: "engagementRate", label: "Engagement Rate (%)", desc: "Interactions divided by reach" },
+  { key: "clicks", label: "Link Clicks", desc: "Traffic routed to destination URLs" },
+  { key: "leads", label: "Form Leads", desc: "Verified inbound lead submissions" },
+  { key: "revenue", label: "Commercial Revenue ($)", desc: "Direct sales & commercial conversion value" },
+  { key: "roas", label: "Return on Ad Spend (ROAS)", desc: "Campaign revenue to spend ratio" },
+];
 
 export default function ProjectSettingsPage() {
   const params = useParams();
@@ -31,6 +44,8 @@ export default function ProjectSettingsPage() {
     restoreProject,
     addProjectMember,
     removeProjectMember,
+    createClientUserAndAssign,
+    updateProjectClientAnalyticsConfig,
   } = useAppState();
   const { canAdmin, activeRole, activeUserId, canManageTeamMembers } = useRole();
   const actorUserId = activeUserId;
@@ -40,10 +55,37 @@ export default function ProjectSettingsPage() {
     (m) => m.projectId === projectId && m.status === "active"
   );
 
+  // Agency Team memberships (non-client)
+  const agencyMemberships = activeMemberships.filter((m) => {
+    const user = state.users.find((u) => u.id === m.userId);
+    return user?.role !== "client" && m.membershipRole !== "client";
+  });
+
+  // Client memberships
+  const clientMemberships = activeMemberships.filter((m) => {
+    const user = state.users.find((u) => u.id === m.userId);
+    return user?.role === "client" || m.membershipRole === "client";
+  });
+
   // Add Member to Project Modal
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<UserRole>("designer");
+
+  // Invite Client Modal
+  const [isInviteClientModalOpen, setIsInviteClientModalOpen] = useState(false);
+  const [clientName, setClientName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+
+  // Analytics Whitelist Configuration State
+  const initialWhitelist = project?.clientAnalyticsConfig?.allowedMetricKeys || [
+    "reach",
+    "impressions",
+    "engagementRate",
+    "clicks",
+    "leads",
+  ];
+  const [selectedMetrics, setSelectedMetrics] = useState<string[]>(initialWhitelist);
 
   // Archive Modal
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -61,7 +103,7 @@ export default function ProjectSettingsPage() {
 
   // Active users in organization who are not yet in this project
   const eligibleNonMembers = state.users.filter(
-    (u) => u.status === "active" && !activeMemberships.some((m) => m.userId === u.id)
+    (u) => u.status === "active" && u.role !== "client" && !activeMemberships.some((m) => m.userId === u.id)
   );
 
   const handleAddProjectMemberSubmit = (e: React.FormEvent) => {
@@ -88,6 +130,43 @@ export default function ProjectSettingsPage() {
     }
   };
 
+  const handleInviteClientSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientName.trim() || !clientEmail.trim()) {
+      alert("Please enter client name and email.");
+      return;
+    }
+
+    const res = createClientUserAndAssign({
+      name: clientName.trim(),
+      email: clientEmail.trim(),
+      projectId,
+      actorUserId,
+    });
+
+    if (res.success) {
+      setIsInviteClientModalOpen(false);
+      setClientName("");
+      setClientEmail("");
+      showToast(`Granted portal access to ${clientName.trim()}.`);
+    } else {
+      alert(res.error || "Failed to grant client access.");
+    }
+  };
+
+  const handleSaveAnalyticsWhitelist = () => {
+    const res = updateProjectClientAnalyticsConfig({
+      projectId,
+      allowedMetricKeys: selectedMetrics,
+      actorUserId,
+    });
+    if (res.success) {
+      showToast("Updated client analytics metric whitelist.");
+    } else {
+      alert(res.error || "Failed to update whitelist.");
+    }
+  };
+
   const handleRemoveMembership = (membershipId: string, userName: string) => {
     if (confirm(`Remove ${userName} from project "${project.name}"?`)) {
       const res = removeProjectMember(membershipId, actorUserId, "Removed by manager");
@@ -100,7 +179,7 @@ export default function ProjectSettingsPage() {
   };
 
   return (
-    <div className="p-8 sm:p-10 max-w-5xl mx-auto space-y-6 animate-in fade-in">
+    <div className="p-8 sm:p-10 max-w-5xl mx-auto space-y-8 animate-in fade-in">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-20 right-8 z-50 flex items-center gap-2 rounded-2xl bg-[#1d1d1f] text-white px-4 py-2.5 text-[13px] shadow-xl animate-in fade-in slide-in-from-top-2">
@@ -116,15 +195,16 @@ export default function ProjectSettingsPage() {
             Project Settings
           </h1>
           <p className="text-[14px] text-[#6e6e73]">
-            Manage project team memberships, client scope, and lifecycle configurations.
+            Manage project team memberships, client portal access, and analytics whitelists.
           </p>
         </div>
 
         <Link
-          href="/team"
+          href={`/portal/${projectId}`}
+          target="_blank"
           className="inline-flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-4 py-2 text-[13px] font-medium text-[#1d1d1f] border border-black/[0.06] transition"
         >
-          <Users className="h-4 w-4 text-[#0071e3]" /> Global Team Directory →
+          <ExternalLink className="h-4 w-4 text-[#0071e3]" /> Open Client Portal View ↗
         </Link>
       </div>
 
@@ -165,7 +245,131 @@ export default function ProjectSettingsPage() {
         </div>
       </div>
 
-      {/* Project Memberships Card */}
+      {/* CLIENT ACCESS & PORTAL MANAGEMENT (Phase 5) */}
+      <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[17px] font-semibold text-[#1d1d1f] flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-[#34c759]" /> Client Portal Access
+            </h2>
+            <p className="text-[12px] text-[#6e6e73]">
+              Authenticated client contacts authorized to view the Client Portal for this workspace.
+            </p>
+          </div>
+
+          {(canAdmin || activeRole === "founder" || activeRole === "consultant") && (
+            <button
+              onClick={() => setIsInviteClientModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-2 text-[13px] font-medium text-white shadow-sm transition"
+            >
+              <UserPlus className="h-4 w-4" /> + Invite Client Contact
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-2.5">
+          {clientMemberships.length > 0 ? (
+            clientMemberships.map((membership) => {
+              const user = state.users.find((u) => u.id === membership.userId);
+              const userName = user?.name || "Client Representative";
+              const userEmail = user?.email || "";
+
+              return (
+                <div
+                  key={membership.id}
+                  className="flex items-center justify-between p-3.5 rounded-xl border border-black/[0.06] bg-[#fbfbfd] text-[13px]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-full bg-[#eaf6ed] text-[#1f6f32] font-semibold flex items-center justify-center text-[13px] border border-[#ceead6]">
+                      {user?.avatar || "C"}
+                    </div>
+                    <div>
+                      <div className="font-semibold text-[#1d1d1f] flex items-center gap-2">
+                        <span>{userName}</span>
+                        <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]">
+                          Portal Access Active
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-[#86868b] flex items-center gap-2 mt-0.5">
+                        <span>{userEmail}</span>
+                        <span>• Added {formatDate(membership.addedAt)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(canAdmin || activeRole === "founder" || activeRole === "consultant") && (
+                    <button
+                      onClick={() => handleRemoveMembership(membership.id, userName)}
+                      className="text-[#86868b] hover:text-[#b42318] p-2 rounded-lg hover:bg-[#fff0ee] transition"
+                      title="Revoke Portal Access"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <p className="text-[12px] text-[#86868b] p-4 text-center bg-[#fbfbfd] rounded-xl border border-black/[0.04]">
+              No authenticated client accounts assigned yet. Use &quot;+ Invite Client Contact&quot; to grant portal access.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* CLIENT ANALYTICS WHITELIST CONFIGURATION (Phase 5) */}
+      <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+        <div>
+          <h2 className="text-[17px] font-semibold text-[#1d1d1f] flex items-center gap-2">
+            <LineChart className="h-5 w-5 text-[#0071e3]" /> Client Analytics Metric Whitelist
+          </h2>
+          <p className="text-[12px] text-[#6e6e73]">
+            Select which campaign metrics are exposed in the Client Portal. Unchecked metrics are omitted from client query payloads.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+          {ALL_AVAILABLE_METRICS.map((metric) => {
+            const isChecked = selectedMetrics.includes(metric.key);
+            return (
+              <label
+                key={metric.key}
+                className={`p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer transition ${
+                  isChecked ? "bg-[#f0f7ff] border-[#0071e3]" : "bg-[#fbfbfd] border-black/[0.06] hover:bg-white"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedMetrics([...selectedMetrics, metric.key]);
+                    } else {
+                      setSelectedMetrics(selectedMetrics.filter((k) => k !== metric.key));
+                    }
+                  }}
+                  className="mt-0.5 rounded text-[#0071e3] focus:ring-[#0071e3]"
+                />
+                <div>
+                  <div className="font-semibold text-[13px] text-[#1d1d1f]">{metric.label}</div>
+                  <div className="text-[11px] text-[#6e6e73]">{metric.desc}</div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="pt-2 flex justify-end">
+          <button
+            onClick={handleSaveAnalyticsWhitelist}
+            className="rounded-full bg-[#1d1d1f] hover:bg-[#2d2d2f] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
+          >
+            Save Whitelist Configuration
+          </button>
+        </div>
+      </div>
+
+      {/* Assigned Internal Project Team Memberships */}
       <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -173,7 +377,7 @@ export default function ProjectSettingsPage() {
               <Users className="h-4 w-4 text-[#0071e3]" /> Assigned Project Team
             </h2>
             <p className="text-[12px] text-[#6e6e73]">
-              Authorized agency team members with active access to this specific workspace.
+              Authorized agency staff with active access to this specific workspace.
             </p>
           </div>
 
@@ -192,7 +396,7 @@ export default function ProjectSettingsPage() {
         </div>
 
         <div className="space-y-2.5">
-          {activeMemberships.map((membership) => {
+          {agencyMemberships.map((membership) => {
             const user = state.users.find((u) => u.id === membership.userId);
             const userName = user?.name || "Unknown Member";
             const userEmail = user?.email || "";
@@ -273,6 +477,66 @@ export default function ProjectSettingsPage() {
           )}
         </div>
       </div>
+
+      {/* Invite Client Modal */}
+      {isInviteClientModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Invite Client Contact</h3>
+              <button onClick={() => setIsInviteClientModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleInviteClientSubmit} className="space-y-3.5 text-[13px]">
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Client Contact Name *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dr. Ramesh Mehta"
+                  value={clientName}
+                  onChange={(e) => setClientName(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Client Email Address *</label>
+                <input
+                  type="email"
+                  placeholder="e.g. ramesh@clientdomain.com"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                  required
+                />
+              </div>
+
+              <p className="text-[12px] text-[#6e6e73]">
+                Creates an authenticated Client account and grants active portal access for this project.
+              </p>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsInviteClientModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Grant Portal Access
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Add Existing Member to Project Modal */}
       {isAddMemberModalOpen && (
