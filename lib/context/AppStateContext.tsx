@@ -24,6 +24,8 @@ import {
   Script,
   SubmissionAsset,
   SubmissionVersion,
+  User,
+  ProjectMembership,
   UserRole,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
@@ -115,6 +117,9 @@ interface AppStateContextType {
     changedByUserId: string;
     reason: string;
   }) => void;
+  // Team Memberships
+  addProjectMember: (params: { projectId: string; name: string; email: string; role: UserRole }) => { user: User; membership: ProjectMembership };
+  removeProjectMember: (projectId: string, userId: string) => void;
   // External Guest Links
   generateExternalReviewLink: (params: {
     projectId: string;
@@ -623,9 +628,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       `Requested change on ${reqData.component}: '${reqData.requestedChange}'`,
       reqData.priority
     );
+
+    const notifDesigner: Notification = {
+      id: "notif_" + Math.random().toString(36).substr(2, 9),
+      projectId: reqData.projectId,
+      recipientUserId: "u_designer1",
+      eventType: "changes_requested",
+      entityType: "content_item",
+      entityId: reqData.contentItemId,
+      title: `Changes Requested on ${reqData.component.toUpperCase()}`,
+      message: `${reqData.reviewerName} requested changes: "${reqData.requestedChange}"`,
+      createdAt: new Date().toISOString(),
+    };
+
     setState((prev) => ({
       ...prev,
       changeRequests: [...prev.changeRequests, newReq],
+      contentItems: prev.contentItems.map((i) =>
+        i.id === reqData.contentItemId ? { ...i, stage: "changes_requested" } : i
+      ),
+      notifications: [notifDesigner, ...prev.notifications],
       auditRecords: [audit, ...prev.auditRecords],
     }));
     return newReq;
@@ -1162,6 +1184,78 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  // --- TEAM MEMBERSHIPS ---
+  const addProjectMember = (params: {
+    projectId: string;
+    name: string;
+    email: string;
+    role: UserRole;
+  }): { user: User; membership: ProjectMembership } => {
+    let user = state.users.find((u) => u.email.toLowerCase() === params.email.toLowerCase());
+    let newUsers = [...state.users];
+
+    if (!user) {
+      user = {
+        id: "u_" + Math.random().toString(36).substr(2, 9),
+        name: params.name.trim(),
+        email: params.email.trim().toLowerCase(),
+        avatar: params.name.trim().charAt(0).toUpperCase() || "U",
+      };
+      newUsers.push(user);
+    }
+
+    const membership: ProjectMembership = {
+      projectId: params.projectId,
+      userId: user.id,
+      role: params.role,
+      status: "active",
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      "u_admin",
+      "add_project_member",
+      "project_membership",
+      `${params.projectId}_${user.id}`,
+      `Added member '${user.name}' (${user.email}) with role '${params.role}'`
+    );
+
+    setState((prev) => {
+      const filtered = prev.projectMemberships.filter(
+        (m) => !(m.projectId === params.projectId && m.userId === user!.id)
+      );
+      return {
+        ...prev,
+        users: newUsers,
+        projectMemberships: [...filtered, membership],
+        auditRecords: [audit, ...prev.auditRecords],
+      };
+    });
+
+    return { user, membership };
+  };
+
+  const removeProjectMember = (projectId: string, userId: string) => {
+    setState((prev) => {
+      const user = prev.users.find((u) => u.id === userId);
+      const audit = createAuditEntry(
+        projectId,
+        "u_admin",
+        "remove_project_member",
+        "project_membership",
+        `${projectId}_${userId}`,
+        `Removed member '${user?.name || userId}' from project`
+      );
+      return {
+        ...prev,
+        projectMemberships: prev.projectMemberships.filter(
+          (m) => !(m.projectId === projectId && m.userId === userId)
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      };
+    });
+  };
+
   const markNotificationRead = (notifId: string) => {
     setState((prev) => ({
       ...prev,
@@ -1205,6 +1299,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         addComment,
         resolveComment,
         updateDeadline,
+        addProjectMember,
+        removeProjectMember,
         generateExternalReviewLink,
         revokeExternalReviewLink,
         markNotificationRead,

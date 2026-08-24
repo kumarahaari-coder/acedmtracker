@@ -216,6 +216,17 @@ export default function ContentItemWorkspacePage() {
       requestedChange: crText.trim(),
       priority: crPriority,
     });
+
+    recordApprovalDecision({
+      contentItemId: item.id,
+      submissionVersionId: currentVersion.id,
+      component: crComponent,
+      reviewerUserId: activeUserId,
+      reviewerRole: activeRole === "founder" ? "founder" : "consultant",
+      decision: "changes_requested",
+      note: crText.trim(),
+    });
+
     setIsChangeRequestModalOpen(false);
     setCrText("");
   };
