@@ -27,6 +27,10 @@ import {
   User,
   ProjectMembership,
   UserRole,
+  AssignmentRole,
+  ContentAssignment,
+  WorkSession,
+  WorkSessionAdjustment,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
 import { getInitialDeterministicState } from "../mockData";
@@ -42,10 +46,42 @@ interface AppStateContextType {
   archiveProject: (projectId: string, reason?: string) => void;
   restoreProject: (projectId: string) => void;
   createCampaign: (campaign: Omit<Campaign, "id">) => Campaign;
-  // Content Actions
+  // Content Actions & Assignments (Phase 2)
   createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[]) => ContentItem;
   updateContentItem: (itemId: string, updates: Partial<ContentItem>, reason?: string) => void;
-  assignContentItem: (params: { contentItemId: string; assigneeUserId: string; actorUserId: string; reason?: string }) => void;
+  assignContentItem: (params: {
+    projectId?: string;
+    contentItemId: string;
+    assigneeUserId: string;
+    assignmentRole?: AssignmentRole;
+    dueAt?: string;
+    actorUserId: string;
+    reason?: string;
+  }) => { success: boolean; assignment?: ContentAssignment; error?: string };
+  acceptContentAssignment: (assignmentId: string, actorUserId: string) => { success: boolean; error?: string };
+  updateAssignmentDeadline: (params: {
+    assignmentId: string;
+    newDueAt: string;
+    reason: string;
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
+  // Work Sessions & Time Tracking (Phase 2)
+  startWorkSession: (params: {
+    projectId: string;
+    contentItemId: string;
+    assignmentId: string;
+    userId: string;
+    notes?: string;
+  }) => { success: boolean; session?: WorkSession; error?: string; activeSession?: WorkSession };
+  pauseWorkSession: (sessionId: string, actorUserId: string) => { success: boolean; error?: string };
+  resumeWorkSession: (sessionId: string, actorUserId: string) => { success: boolean; error?: string; activeSession?: WorkSession };
+  stopWorkSession: (sessionId: string, actorUserId: string, notes?: string) => { success: boolean; error?: string };
+  adjustWorkSessionDuration: (params: {
+    sessionId: string;
+    adjustedDurationSeconds: number;
+    reason: string;
+    actorUserId: string;
+  }) => { success: boolean; adjustment?: WorkSessionAdjustment; error?: string };
   createDraftVersion: (itemId: string, baseVersionId?: string) => SubmissionVersion;
   updateDraftVersion: (versionId: string, updates: Partial<SubmissionVersion>) => void;
   submitVersion: (versionId: string, actorUserId: string) => void;
@@ -372,50 +408,538 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   };
 
   const assignContentItem = (params: {
+    projectId?: string;
     contentItemId: string;
     assigneeUserId: string;
+    assignmentRole?: AssignmentRole;
+    dueAt?: string;
     actorUserId: string;
     reason?: string;
-  }) => {
-    setState((prev) => {
-      const item = prev.contentItems.find((i) => i.id === params.contentItemId);
-      if (!item) return prev;
-      const assignee = prev.users.find((u) => u.id === params.assigneeUserId);
-      const actor = prev.users.find((u) => u.id === params.actorUserId);
+  }): { success: boolean; assignment?: ContentAssignment; error?: string } => {
+    const item = state.contentItems.find((i) => i.id === params.contentItemId);
+    if (!item) return { success: false, error: "Content item not found" };
+
+    const effectiveProjectId = params.projectId || item.projectId;
+    const assignee = state.users.find((u) => u.id === params.assigneeUserId);
+    if (!assignee) return { success: false, error: "Assignee user not found" };
+    if (assignee.status === "inactive") {
+      return { success: false, error: "Cannot assign deliverable to an inactive user. Reactivate account first." };
+    }
+
+    // Check project membership
+    const isMember = state.projectMemberships.some(
+      (m) => m.projectId === effectiveProjectId && m.userId === params.assigneeUserId && m.status === "active"
+    );
+    if (!isMember) {
+      return { success: false, error: `User '${assignee.name}' is not an active member of this project.` };
+    }
+
+    const now = new Date().toISOString();
+    const effectiveDueAt = params.dueAt || item.deadlines.submissionDeadline || new Date(Date.now() + 86400000 * 3).toISOString();
+
+    // Find existing active assignment for this item
+    const existingActiveAssignment = state.contentAssignments.find(
+      (a) => a.contentItemId === item.id && (a.status === "assigned" || a.status === "accepted" || a.status === "in_progress")
+    );
+
+    let createdOrUpdatedAssignment: ContentAssignment;
+
+    if (existingActiveAssignment && existingActiveAssignment.assigneeUserId !== params.assigneeUserId) {
+      // Reassignment: Preserve old assignment in history as 'reassigned'
+      const updatedOldAssignment: ContentAssignment = {
+        ...existingActiveAssignment,
+        status: "reassigned",
+        reassignmentReason: params.reason || "Reassigned to another team member",
+        completedAt: now,
+        updatedAt: now,
+      };
+
+      createdOrUpdatedAssignment = {
+        id: "asgn_" + Math.random().toString(36).substr(2, 9),
+        projectId: effectiveProjectId,
+        contentItemId: item.id,
+        assigneeUserId: params.assigneeUserId,
+        assignmentRole: params.assignmentRole || "designer",
+        status: "assigned",
+        assignedByUserId: params.actorUserId,
+        assignedAt: now,
+        initialDueAt: effectiveDueAt,
+        currentDueAt: effectiveDueAt,
+        replacedAssignmentId: existingActiveAssignment.id,
+        createdAt: now,
+        updatedAt: now,
+      };
 
       const audit = createAuditEntry(
-        item.projectId,
+        effectiveProjectId,
         params.actorUserId,
-        "assign_content_item",
-        "content_item",
-        item.id,
-        `Assigned '${item.title}' to ${assignee?.name || params.assigneeUserId}`,
+        "reassign_content_item",
+        "content_assignment",
+        createdOrUpdatedAssignment.id,
+        `Reassigned '${item.title}' from ${existingActiveAssignment.assigneeUserId} to ${assignee.name}`,
         params.reason
       );
 
       const notif: Notification = {
         id: "notif_" + Math.random().toString(36).substr(2, 9),
-        projectId: item.projectId,
+        projectId: effectiveProjectId,
+        recipientUserId: params.assigneeUserId,
+        eventType: "assignment",
+        entityType: "content_item",
+        entityId: item.id,
+        title: "Creative Reassigned to You",
+        message: `You have been assigned to '${item.title}' (${item.platform}).`,
+        createdAt: now,
+      };
+
+      setState((prev) => ({
+        ...prev,
+        contentAssignments: [
+          ...prev.contentAssignments.map((a) => (a.id === existingActiveAssignment.id ? updatedOldAssignment : a)),
+          createdOrUpdatedAssignment,
+        ],
+        contentItems: prev.contentItems.map((i) =>
+          i.id === item.id
+            ? {
+                ...i,
+                accountableOwnerId: params.assigneeUserId,
+                deadlines: { ...i.deadlines, submissionDeadline: effectiveDueAt },
+              }
+            : i
+        ),
+        notifications: [notif, ...prev.notifications],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+    } else {
+      // New initial assignment or update existing assignee
+      createdOrUpdatedAssignment = {
+        id: existingActiveAssignment ? existingActiveAssignment.id : "asgn_" + Math.random().toString(36).substr(2, 9),
+        projectId: effectiveProjectId,
+        contentItemId: item.id,
+        assigneeUserId: params.assigneeUserId,
+        assignmentRole: params.assignmentRole || (existingActiveAssignment?.assignmentRole || "designer"),
+        status: existingActiveAssignment?.status || "assigned",
+        assignedByUserId: params.actorUserId,
+        assignedAt: existingActiveAssignment ? existingActiveAssignment.assignedAt : now,
+        initialDueAt: existingActiveAssignment ? existingActiveAssignment.initialDueAt : effectiveDueAt,
+        currentDueAt: effectiveDueAt,
+        createdAt: existingActiveAssignment ? existingActiveAssignment.createdAt : now,
+        updatedAt: now,
+      };
+
+      const audit = createAuditEntry(
+        effectiveProjectId,
+        params.actorUserId,
+        "assign_content_item",
+        "content_assignment",
+        createdOrUpdatedAssignment.id,
+        `Assigned '${item.title}' to ${assignee.name} (Role: ${createdOrUpdatedAssignment.assignmentRole})`,
+        params.reason
+      );
+
+      const notif: Notification = {
+        id: "notif_" + Math.random().toString(36).substr(2, 9),
+        projectId: effectiveProjectId,
         recipientUserId: params.assigneeUserId,
         eventType: "assignment",
         entityType: "content_item",
         entityId: item.id,
         title: "New Creative Assigned",
-        message: `${actor?.name || "Team Lead"} assigned you to '${item.title}' (${item.platform})`,
-        createdAt: new Date().toISOString(),
+        message: `You were assigned to '${item.title}' (${item.platform}). Submission due by ${new Date(effectiveDueAt).toLocaleDateString()}`,
+        createdAt: now,
       };
 
+      setState((prev) => {
+        const filtered = prev.contentAssignments.filter((a) => a.id !== createdOrUpdatedAssignment.id);
+        return {
+          ...prev,
+          contentAssignments: [...filtered, createdOrUpdatedAssignment],
+          contentItems: prev.contentItems.map((i) =>
+            i.id === item.id
+              ? {
+                  ...i,
+                  accountableOwnerId: params.assigneeUserId,
+                  deadlines: { ...i.deadlines, submissionDeadline: effectiveDueAt },
+                }
+              : i
+          ),
+          notifications: [notif, ...prev.notifications],
+          auditRecords: [audit, ...prev.auditRecords],
+        };
+      });
+    }
+
+    return { success: true, assignment: createdOrUpdatedAssignment };
+  };
+
+  const acceptContentAssignment = (assignmentId: string, actorUserId: string): { success: boolean; error?: string } => {
+    const assignment = state.contentAssignments.find((a) => a.id === assignmentId);
+    if (!assignment) return { success: false, error: "Assignment not found" };
+    if (assignment.assigneeUserId !== actorUserId) {
+      return { success: false, error: "Unauthorized: You can only accept your own assignment" };
+    }
+
+    const now = new Date().toISOString();
+    const audit = createAuditEntry(
+      assignment.projectId,
+      actorUserId,
+      "accept_assignment",
+      "content_assignment",
+      assignmentId,
+      `Accepted assignment for deliverable`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      contentAssignments: prev.contentAssignments.map((a) =>
+        a.id === assignmentId ? { ...a, status: "accepted", acceptedAt: now, updatedAt: now } : a
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const updateAssignmentDeadline = (params: {
+    assignmentId: string;
+    newDueAt: string;
+    reason: string;
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const assignment = state.contentAssignments.find((a) => a.id === params.assignmentId);
+    if (!assignment) return { success: false, error: "Assignment not found" };
+    if (!params.reason.trim()) {
+      return { success: false, error: "Mandatory reason required for deadline change" };
+    }
+
+    const now = new Date().toISOString();
+    const historyEntry = {
+      previousDueAt: assignment.currentDueAt,
+      newDueAt: params.newDueAt,
+      changedByUserId: params.actorUserId,
+      changedAt: now,
+      reason: params.reason.trim(),
+    };
+
+    const audit = createAuditEntry(
+      assignment.projectId,
+      params.actorUserId,
+      "update_assignment_deadline",
+      "content_assignment",
+      params.assignmentId,
+      `Updated deadline from ${assignment.currentDueAt} to ${params.newDueAt}`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      contentAssignments: prev.contentAssignments.map((a) =>
+        a.id === params.assignmentId
+          ? {
+              ...a,
+              currentDueAt: params.newDueAt,
+              dueAtHistory: [...(a.dueAtHistory || []), historyEntry],
+              updatedAt: now,
+            }
+          : a
+      ),
+      contentItems: prev.contentItems.map((i) =>
+        i.id === assignment.contentItemId
+          ? { ...i, deadlines: { ...i.deadlines, submissionDeadline: params.newDueAt } }
+          : i
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  // --- TIME TRACKING & WORK SESSIONS (Phase 2) ---
+  const startWorkSession = (params: {
+    projectId: string;
+    contentItemId: string;
+    assignmentId: string;
+    userId: string;
+    notes?: string;
+  }): { success: boolean; session?: WorkSession; error?: string; activeSession?: WorkSession } => {
+    // 1. Concurrency Enforcement: Check if user already has an active session
+    const existingActive = state.workSessions.find(
+      (ws) => ws.userId === params.userId && ws.status === "active"
+    );
+    if (existingActive) {
+      const activeItem = state.contentItems.find((i) => i.id === existingActive.contentItemId);
       return {
-        ...prev,
-        contentItems: prev.contentItems.map((i) =>
-          i.id === params.contentItemId
-            ? { ...i, accountableOwnerId: params.assigneeUserId }
-            : i
-        ),
-        notifications: [notif, ...prev.notifications],
-        auditRecords: [audit, ...prev.auditRecords],
+        success: false,
+        error: `Active timer already running on '${activeItem?.title || "another item"}'. Please pause or stop it first.`,
+        activeSession: existingActive,
       };
-    });
+    }
+
+    // 2. Validate Membership & Status
+    const user = state.users.find((u) => u.id === params.userId);
+    if (!user || user.status === "inactive") {
+      return { success: false, error: "Inactive user cannot start a work session." };
+    }
+
+    const membership = state.projectMemberships.find(
+      (m) => m.projectId === params.projectId && m.userId === params.userId && m.status === "active"
+    );
+    if (!membership) {
+      return { success: false, error: "Unauthorized: User is not an active member of this project." };
+    }
+
+    // 3. Validate Assignment
+    const assignment = state.contentAssignments.find((a) => a.id === params.assignmentId);
+    if (!assignment) {
+      return { success: false, error: "Assignment not found." };
+    }
+    if (assignment.assigneeUserId !== params.userId) {
+      return { success: false, error: "Cannot start a work session on another team member's assignment." };
+    }
+    if (assignment.status === "reassigned") {
+      return { success: false, error: "Cannot start timer on a reassigned historical task." };
+    }
+
+    const now = new Date().toISOString();
+    const newSession: WorkSession = {
+      id: "ws_" + Math.random().toString(36).substr(2, 9),
+      projectId: params.projectId,
+      contentItemId: params.contentItemId,
+      assignmentId: params.assignmentId,
+      userId: params.userId,
+      startedAt: now,
+      accumulatedSeconds: 0,
+      activeSegmentStartedAt: now,
+      status: "active",
+      adjustments: [],
+      notes: params.notes,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.userId,
+      "start_timer",
+      "work_session",
+      newSession.id,
+      `Started work session timer for deliverable`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      workSessions: [...prev.workSessions, newSession],
+      contentAssignments: prev.contentAssignments.map((a) =>
+        a.id === params.assignmentId
+          ? {
+              ...a,
+              status: a.status === "assigned" || a.status === "accepted" ? "in_progress" : a.status,
+              startedAt: a.startedAt || now,
+              updatedAt: now,
+            }
+          : a
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, session: newSession };
+  };
+
+  const pauseWorkSession = (sessionId: string, actorUserId: string): { success: boolean; error?: string } => {
+    const session = state.workSessions.find((ws) => ws.id === sessionId);
+    if (!session) return { success: false, error: "Work session not found." };
+    if (session.userId !== actorUserId) {
+      return { success: false, error: "Unauthorized: You can only pause your own work session." };
+    }
+    if (session.status !== "active") {
+      return { success: false, error: "Session is not currently active." };
+    }
+
+    const now = new Date().toISOString();
+    const segmentDuration = session.activeSegmentStartedAt
+      ? Math.max(0, Math.floor((Date.now() - Date.parse(session.activeSegmentStartedAt)) / 1000))
+      : 0;
+
+    const newAccumulated = session.accumulatedSeconds + segmentDuration;
+
+    const audit = createAuditEntry(
+      session.projectId,
+      actorUserId,
+      "pause_timer",
+      "work_session",
+      sessionId,
+      `Paused timer (accumulated: ${Math.round(newAccumulated / 60)} mins)`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      workSessions: prev.workSessions.map((ws) =>
+        ws.id === sessionId
+          ? {
+              ...ws,
+              accumulatedSeconds: newAccumulated,
+              activeSegmentStartedAt: null,
+              status: "paused",
+              updatedAt: now,
+            }
+          : ws
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const resumeWorkSession = (
+    sessionId: string,
+    actorUserId: string
+  ): { success: boolean; error?: string; activeSession?: WorkSession } => {
+    // Check concurrency
+    const existingActive = state.workSessions.find(
+      (ws) => ws.userId === actorUserId && ws.status === "active" && ws.id !== sessionId
+    );
+    if (existingActive) {
+      const activeItem = state.contentItems.find((i) => i.id === existingActive.contentItemId);
+      return {
+        success: false,
+        error: `Active timer already running on '${activeItem?.title || "another item"}'. Please pause or stop it first.`,
+        activeSession: existingActive,
+      };
+    }
+
+    const session = state.workSessions.find((ws) => ws.id === sessionId);
+    if (!session) return { success: false, error: "Work session not found." };
+    if (session.userId !== actorUserId) {
+      return { success: false, error: "Unauthorized: You can only resume your own work session." };
+    }
+    if (session.status !== "paused") {
+      return { success: false, error: "Session is not currently paused." };
+    }
+
+    const now = new Date().toISOString();
+    const audit = createAuditEntry(
+      session.projectId,
+      actorUserId,
+      "resume_timer",
+      "work_session",
+      sessionId,
+      `Resumed work session timer`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      workSessions: prev.workSessions.map((ws) =>
+        ws.id === sessionId
+          ? {
+              ...ws,
+              activeSegmentStartedAt: now,
+              status: "active",
+              updatedAt: now,
+            }
+          : ws
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const stopWorkSession = (
+    sessionId: string,
+    actorUserId: string,
+    notes?: string
+  ): { success: boolean; error?: string } => {
+    const session = state.workSessions.find((ws) => ws.id === sessionId);
+    if (!session) return { success: false, error: "Work session not found." };
+    if (session.userId !== actorUserId) {
+      return { success: false, error: "Unauthorized: You can only stop your own work session." };
+    }
+
+    const now = new Date().toISOString();
+    let finalAccumulated = session.accumulatedSeconds;
+    if (session.status === "active" && session.activeSegmentStartedAt) {
+      finalAccumulated += Math.max(0, Math.floor((Date.now() - Date.parse(session.activeSegmentStartedAt)) / 1000));
+    }
+
+    const audit = createAuditEntry(
+      session.projectId,
+      actorUserId,
+      "stop_timer",
+      "work_session",
+      sessionId,
+      `Stopped work session timer (Total recorded: ${Math.round(finalAccumulated / 60)} mins)`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      workSessions: prev.workSessions.map((ws) =>
+        ws.id === sessionId
+          ? {
+              ...ws,
+              accumulatedSeconds: finalAccumulated,
+              activeSegmentStartedAt: null,
+              status: "completed",
+              endedAt: now,
+              notes: notes || ws.notes,
+              updatedAt: now,
+            }
+          : ws
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const adjustWorkSessionDuration = (params: {
+    sessionId: string;
+    adjustedDurationSeconds: number;
+    reason: string;
+    actorUserId: string;
+  }): { success: boolean; adjustment?: WorkSessionAdjustment; error?: string } => {
+    const session = state.workSessions.find((ws) => ws.id === params.sessionId);
+    if (!session) return { success: false, error: "Work session not found." };
+    if (!params.reason.trim()) {
+      return { success: false, error: "Mandatory reason required for time tracking adjustment." };
+    }
+
+    const now = new Date().toISOString();
+    const adjustment: WorkSessionAdjustment = {
+      id: "adj_" + Math.random().toString(36).substr(2, 9),
+      workSessionId: params.sessionId,
+      previousDurationSeconds: session.accumulatedSeconds,
+      adjustedDurationSeconds: params.adjustedDurationSeconds,
+      reason: params.reason.trim(),
+      adjustedByUserId: params.actorUserId,
+      adjustedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      session.projectId,
+      params.actorUserId,
+      "adjust_timer_duration",
+      "work_session",
+      params.sessionId,
+      `Adjusted session duration from ${session.accumulatedSeconds}s to ${params.adjustedDurationSeconds}s`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      workSessions: prev.workSessions.map((ws) =>
+        ws.id === params.sessionId
+          ? {
+              ...ws,
+              accumulatedSeconds: params.adjustedDurationSeconds,
+              adjustments: [...(ws.adjustments || []), adjustment],
+              updatedAt: now,
+            }
+          : ws
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true, adjustment };
   };
 
   const createDraftVersion = (itemId: string, baseVersionId?: string): SubmissionVersion => {
@@ -480,10 +1004,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const item = prev.contentItems.find((i) => i.id === version.contentItemId);
       if (!item) return prev;
 
+      const now = new Date().toISOString();
       const frozenVersion: SubmissionVersion = {
         ...version,
         isDraft: false,
-        submittedAt: new Date().toISOString(),
+        submittedAt: now,
         componentFingerprints: computeVersionFingerprints({
           copy: version.copy,
           creativeAssets: version.creativeAssets,
@@ -509,12 +1034,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         entityId: item.id,
         title: `Version ${version.versionNumber} Submitted for Review`,
         message: `'${item.title}' is ready for Founder and Consultant approval.`,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
       };
 
       return {
         ...prev,
         submissionVersions: prev.submissionVersions.map((v) => (v.id === versionId ? frozenVersion : v)),
+        contentAssignments: prev.contentAssignments.map((a) => {
+          if (a.contentItemId === item.id && (a.status === "assigned" || a.status === "accepted" || a.status === "in_progress")) {
+            return {
+              ...a,
+              status: "submitted" as const,
+              firstSubmittedAt: a.firstSubmittedAt || (version.versionNumber === 1 ? now : undefined),
+              updatedAt: now,
+            };
+          }
+          return a;
+        }),
         contentItems: prev.contentItems.map((i) =>
           i.id === item.id
             ? { ...i, stage: "in_review", latestSubmittedVersionId: versionId, activeDraftVersionId: undefined }
@@ -1501,6 +2037,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         createContentItem,
         updateContentItem,
         assignContentItem,
+        acceptContentAssignment,
+        updateAssignmentDeadline,
+        startWorkSession,
+        pauseWorkSession,
+        resumeWorkSession,
+        stopWorkSession,
+        adjustWorkSessionDuration,
         createDraftVersion,
         updateDraftVersion,
         submitVersion,

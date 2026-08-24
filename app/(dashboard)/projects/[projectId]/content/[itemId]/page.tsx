@@ -16,6 +16,7 @@ import {
   Clock,
   Copy,
   Download,
+  Edit3,
   ExternalLink,
   Eye,
   FileCode2,
@@ -25,12 +26,17 @@ import {
   Link as LinkIcon,
   Lock,
   MessageSquare,
+  Pause,
+  Play,
   Plus,
   RotateCcw,
   Send,
+  Settings,
   Share2,
   ShieldAlert,
   Sparkles,
+  Square,
+  Timer,
   User,
   Users,
   X,
@@ -40,6 +46,10 @@ import {
   ComponentDecision,
   ContentItem,
   SubmissionVersion,
+  ContentAssignment,
+  WorkSession,
+  WorkSessionAdjustment,
+  AssignmentRole,
 } from "@/lib/types";
 import {
   getItemApprovalMatrixSummary,
@@ -67,6 +77,13 @@ export default function ContentItemWorkspacePage() {
     resubmitItemVersion,
     addComment,
     assignContentItem,
+    acceptContentAssignment,
+    updateAssignmentDeadline,
+    startWorkSession,
+    pauseWorkSession,
+    resumeWorkSession,
+    stopWorkSession,
+    adjustWorkSessionDuration,
     generateExternalReviewLink,
   } = useAppState();
 
@@ -78,10 +95,51 @@ export default function ContentItemWorkspacePage() {
     canRespondToChanges,
     canUploadCreative,
     canManageWorkflow,
+    canAdmin,
   } = useRole();
 
   const project = state.projects.find((p) => p.id === projectId);
   const item = state.contentItems.find((i) => i.id === itemId);
+
+  // Active Assignment & Work Sessions (Phase 2)
+  const activeAssignment = state.contentAssignments.find(
+    (a) => a.contentItemId === itemId && a.status !== "reassigned"
+  );
+  const itemWorkSessions = state.workSessions.filter((ws) => ws.contentItemId === itemId);
+  const currentActiveSession = itemWorkSessions.find(
+    (ws) => ws.userId === activeUserId && ws.status === "active"
+  );
+  const currentPausedSession = itemWorkSessions.find(
+    (ws) => ws.userId === activeUserId && ws.status === "paused"
+  );
+
+  // Live timer tick state
+  const [ticker, setTicker] = useState(0);
+  React.useEffect(() => {
+    if (!currentActiveSession) return;
+    const interval = setInterval(() => {
+      setTicker((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [currentActiveSession]);
+
+  // Phase 2 Modals State
+  const [isReassignModalOpen, setIsReassignModalOpen] = useState(false);
+  const [reassignUserId, setReassignUserId] = useState("");
+  const [reassignRole, setReassignRole] = useState<AssignmentRole>("designer");
+  const [reassignDueAt, setReassignDueAt] = useState("");
+  const [reassignReason, setReassignReason] = useState("");
+
+  const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
+  const [newDeadlineVal, setNewDeadlineVal] = useState("");
+  const [deadlineReasonVal, setDeadlineReasonVal] = useState("");
+
+  const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
+  const [adjustSessionId, setAdjustSessionId] = useState("");
+  const [adjustMinutes, setAdjustMinutes] = useState(0);
+  const [adjustReason, setAdjustReason] = useState("");
+
+  const [concurrencyErrorMessage, setConcurrencyErrorMessage] = useState<string | null>(null);
 
   // Versions for this item
   const itemVersions = state.submissionVersions.filter(
@@ -435,14 +493,24 @@ export default function ContentItemWorkspacePage() {
             )}
           </div>
 
-          {/* Assigned Designer / Accountable Owner */}
+          {/* Content Assignment & Work Ownership (Phase 2) */}
           <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
-                <User className="h-3.5 w-3.5 text-[#0071e3]" /> Assigned Designer
+                <User className="h-3.5 w-3.5 text-[#0071e3]" /> Assigned Work
               </h3>
-              <span className="text-[11px] font-medium text-[#0071e3] capitalize bg-[#f0f7ff] px-2 py-0.5 rounded-full border border-[#d0e5ff]">
-                {assignedMember?.role || "Designer"}
+              <span
+                className={`text-[11px] font-semibold capitalize px-2.5 py-0.5 rounded-full border ${
+                  activeAssignment?.status === "completed"
+                    ? "bg-[#eaf6ed] text-[#1f6f32] border-[#ceead6]"
+                    : activeAssignment?.status === "submitted"
+                    ? "bg-[#eaf4ff] text-[#0066cc] border-[#b8daff]"
+                    : activeAssignment?.status === "in_progress"
+                    ? "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]"
+                    : "bg-[#f2f2f7] text-[#1d1d1f] border-black/[0.06]"
+                }`}
+              >
+                {activeAssignment?.status?.replace(/_/g, " ") || "Assigned"}
               </span>
             </div>
 
@@ -455,34 +523,195 @@ export default function ContentItemWorkspacePage() {
                   {assignedMember?.name || "Unassigned"}
                 </div>
                 <div className="text-[11px] text-[#86868b] truncate">
-                  {assignedMember?.email || "No email on record"}
+                  Role: {activeAssignment?.assignmentRole || assignedMember?.role || "Designer"}
                 </div>
               </div>
             </div>
 
-            {(canManageWorkflow || activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
-              <div className="pt-2 border-t border-black/[0.06] space-y-1">
-                <label className="block text-[11px] font-medium text-[#86868b]">Reassign To:</label>
-                <select
-                  value={item.accountableOwnerId || ""}
-                  onChange={(e) => {
-                    if (e.target.value && e.target.value !== item.accountableOwnerId) {
-                      assignContentItem({
-                        contentItemId: item.id,
-                        assigneeUserId: e.target.value,
-                        actorUserId: activeUserId,
-                      });
-                    }
+            {/* Accept assignment action for assignee */}
+            {activeAssignment?.status === "assigned" && activeAssignment.assigneeUserId === activeUserId && (
+              <button
+                onClick={() => acceptContentAssignment(activeAssignment.id, activeUserId)}
+                className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] py-2 text-[12px] font-medium text-white shadow-sm transition"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" /> Accept Deliverable Assignment
+              </button>
+            )}
+
+            {/* Management Actions: Reassign & Edit Deadline */}
+            {(activeRole === "founder" || activeRole === "consultant" || activeRole === "admin" || canManageWorkflow) && (
+              <div className="pt-2 border-t border-black/[0.06] flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setReassignUserId(activeAssignment?.assigneeUserId || item.accountableOwnerId || "");
+                    setReassignRole(activeAssignment?.assignmentRole || "designer");
+                    setReassignDueAt(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline || "");
+                    setReassignReason("");
+                    setIsReassignModalOpen(true);
                   }}
-                  className="w-full bg-[#f5f5f7] border border-black/[0.08] rounded-xl p-2 text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                  className="flex-1 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] py-1.5 text-[12px] font-medium text-[#1d1d1f] border border-black/[0.06] transition text-center"
                 >
-                  {projectMembers.map((m) => (
-                    <option key={m.userId} value={m.userId}>
-                      {m.name} ({m.role.replace(/_/g, " ")})
-                    </option>
-                  ))}
-                </select>
+                  Reassign...
+                </button>
+                <button
+                  onClick={() => {
+                    setNewDeadlineVal(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline || "");
+                    setDeadlineReasonVal("");
+                    setIsDeadlineModalOpen(true);
+                  }}
+                  className="flex-1 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] py-1.5 text-[12px] font-medium text-[#1d1d1f] border border-black/[0.06] transition text-center"
+                >
+                  Edit Due Date
+                </button>
               </div>
+            )}
+          </div>
+
+          {/* Time Tracking & Check-In Widget (Phase 2) */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
+                <Timer className="h-3.5 w-3.5 text-[#0071e3]" /> Time Tracking
+              </h3>
+              <span
+                className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                  currentActiveSession
+                    ? "bg-[#eaf6ed] text-[#1f6f32] animate-pulse"
+                    : currentPausedSession
+                    ? "bg-[#fff8e6] text-[#9a6700]"
+                    : "bg-[#f2f2f7] text-[#86868b]"
+                }`}
+              >
+                {currentActiveSession ? "● Tracking Live" : currentPausedSession ? "❚❚ Paused" : "Inactive"}
+              </span>
+            </div>
+
+            {/* Live Clock Display */}
+            <div className="p-3 bg-[#fbfbfd] border border-black/[0.06] rounded-xl flex items-center justify-between">
+              <div>
+                <span className="text-[11px] text-[#86868b] block">Current Session:</span>
+                <span className="text-[20px] font-mono font-bold text-[#1d1d1f]">
+                  {currentActiveSession
+                    ? (() => {
+                        const elapsed =
+                          currentActiveSession.accumulatedSeconds +
+                          Math.max(
+                            0,
+                            Math.floor((Date.now() - Date.parse(currentActiveSession.activeSegmentStartedAt || "")) / 1000)
+                          );
+                        const mins = Math.floor(elapsed / 60);
+                        const secs = elapsed % 60;
+                        return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                      })()
+                    : currentPausedSession
+                    ? (() => {
+                        const mins = Math.floor(currentPausedSession.accumulatedSeconds / 60);
+                        const secs = currentPausedSession.accumulatedSeconds % 60;
+                        return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                      })()
+                    : "00:00"}
+                </span>
+              </div>
+
+              {/* Timer Controls */}
+              <div className="flex items-center gap-1.5">
+                {currentActiveSession ? (
+                  <>
+                    <button
+                      onClick={() => pauseWorkSession(currentActiveSession.id, activeUserId)}
+                      className="p-2 rounded-lg bg-[#fff8e6] text-[#9a6700] hover:bg-[#ffe082] transition"
+                      title="Pause Timer"
+                    >
+                      <Pause className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => stopWorkSession(currentActiveSession.id, activeUserId)}
+                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] transition"
+                      title="Stop & Complete Session"
+                    >
+                      <Square className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : currentPausedSession ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        const res = resumeWorkSession(currentPausedSession.id, activeUserId);
+                        if (!res.success && res.error) {
+                          setConcurrencyErrorMessage(res.error);
+                        }
+                      }}
+                      className="p-2 rounded-lg bg-[#eaf6ed] text-[#1f6f32] hover:bg-[#ceead6] transition"
+                      title="Resume Timer"
+                    >
+                      <Play className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => stopWorkSession(currentPausedSession.id, activeUserId)}
+                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] transition"
+                      title="Stop Session"
+                    >
+                      <Square className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : (
+                  (activeRole === "designer" || activeAssignment?.assigneeUserId === activeUserId || canAdmin) && (
+                    <button
+                      onClick={() => {
+                        if (!activeAssignment) {
+                          alert("Please assign this deliverable before starting time tracking.");
+                          return;
+                        }
+                        const res = startWorkSession({
+                          projectId,
+                          contentItemId: item.id,
+                          assignmentId: activeAssignment.id,
+                          userId: activeUserId,
+                        });
+                        if (!res.success && res.error) {
+                          setConcurrencyErrorMessage(res.error);
+                        }
+                      }}
+                      className="flex items-center gap-1 rounded-lg bg-[#0071e3] hover:bg-[#0077ed] text-white px-3 py-1.5 text-[12px] font-medium transition shadow-sm"
+                    >
+                      <Play className="h-3 w-3" /> Check-In & Start
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            {/* Total Item Tracked Time */}
+            <div className="flex items-center justify-between text-[12px] pt-1">
+              <span className="text-[#86868b]">Total Verified Time:</span>
+              <span className="font-semibold text-[#1d1d1f]">
+                {Math.round(
+                  itemWorkSessions.reduce((acc, ws) => {
+                    let s = ws.accumulatedSeconds;
+                    if (ws.status === "active" && ws.activeSegmentStartedAt) {
+                      s += Math.max(0, Math.floor((Date.now() - Date.parse(ws.activeSegmentStartedAt)) / 1000));
+                    }
+                    return acc + s;
+                  }, 0) / 60
+                )}{" "}
+                mins ({itemWorkSessions.length} session(s))
+              </span>
+            </div>
+
+            {/* Admin Manual Adjustment Button */}
+            {(canAdmin || activeRole === "founder" || activeRole === "admin") && itemWorkSessions.length > 0 && (
+              <button
+                onClick={() => {
+                  const lastSession = itemWorkSessions[itemWorkSessions.length - 1];
+                  setAdjustSessionId(lastSession.id);
+                  setAdjustMinutes(Math.round(lastSession.accumulatedSeconds / 60));
+                  setAdjustReason("");
+                  setIsAdjustmentModalOpen(true);
+                }}
+                className="w-full text-center text-[11px] text-[#0066cc] hover:underline font-medium pt-1"
+              >
+                Adjust Tracked Session Duration...
+              </button>
             )}
           </div>
 
@@ -491,9 +720,15 @@ export default function ContentItemWorkspacePage() {
             <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Operational Deadlines</h3>
             <div className="space-y-2 text-[13px]">
               <div className="flex justify-between">
-                <span className="text-[#86868b]">Submission Due</span>
+                <span className="text-[#86868b]">Initial Due</span>
                 <span className="font-medium text-[#1d1d1f]">
-                  {formatDate(item.deadlines.submissionDeadline)}
+                  {formatDate(activeAssignment?.initialDueAt || item.deadlines.submissionDeadline)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#86868b]">Current Due</span>
+                <span className="font-semibold text-[#1d1d1f]">
+                  {formatDate(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline)}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -1116,6 +1351,319 @@ export default function ContentItemWorkspacePage() {
                 className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
               >
                 Save Change Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reassignment Modal (Phase 2) */}
+      {isReassignModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Reassign Deliverable</h3>
+              <button onClick={() => setIsReassignModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!reassignUserId) {
+                  alert("Please select a team member.");
+                  return;
+                }
+                const res = assignContentItem({
+                  projectId,
+                  contentItemId: item.id,
+                  assigneeUserId: reassignUserId,
+                  assignmentRole: reassignRole,
+                  dueAt: reassignDueAt || undefined,
+                  actorUserId: activeUserId,
+                  reason: reassignReason.trim() || undefined,
+                });
+                if (res.success) {
+                  setIsReassignModalOpen(false);
+                } else {
+                  alert(res.error || "Failed to reassign deliverable.");
+                }
+              }}
+              className="space-y-3 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">New Assignee *</label>
+                <select
+                  value={reassignUserId}
+                  onChange={(e) => setReassignUserId(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f] bg-white"
+                >
+                  <option value="">-- Choose Team Member --</option>
+                  {projectMembers.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name} ({m.role.replace(/_/g, " ")})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Assignment Role</label>
+                <select
+                  value={reassignRole}
+                  onChange={(e) => setReassignRole(e.target.value as AssignmentRole)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f] bg-white"
+                >
+                  <option value="designer">Designer</option>
+                  <option value="video_editor">Video Editor</option>
+                  <option value="collaborator">Collaborator</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Submission Due Date</label>
+                <input
+                  type="date"
+                  value={reassignDueAt ? reassignDueAt.slice(0, 10) : ""}
+                  onChange={(e) => setReassignDueAt(e.target.value ? new Date(e.target.value).toISOString() : "")}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Reassignment Reason</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Workload balancing, specialized 3D skill required..."
+                  value={reassignReason}
+                  onChange={(e) => setReassignReason(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsReassignModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Confirm Reassignment
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Deadline Modal (Phase 2) */}
+      {isDeadlineModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Adjust Submission Deadline</h3>
+              <button onClick={() => setIsDeadlineModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newDeadlineVal || !deadlineReasonVal.trim()) {
+                  alert("Please provide both a new deadline date and a mandatory reason.");
+                  return;
+                }
+                if (!activeAssignment) {
+                  alert("No active assignment found for this deliverable.");
+                  return;
+                }
+                const res = updateAssignmentDeadline({
+                  assignmentId: activeAssignment.id,
+                  newDueAt: new Date(newDeadlineVal).toISOString(),
+                  reason: deadlineReasonVal.trim(),
+                  actorUserId: activeUserId,
+                });
+                if (res.success) {
+                  setIsDeadlineModalOpen(false);
+                } else {
+                  alert(res.error || "Failed to update deadline.");
+                }
+              }}
+              className="space-y-3 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">New Submission Due Date *</label>
+                <input
+                  type="date"
+                  value={newDeadlineVal ? newDeadlineVal.slice(0, 10) : ""}
+                  onChange={(e) => setNewDeadlineVal(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Reason for Deadline Adjustment *</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Scope expanded, additional client feedback round requested..."
+                  value={deadlineReasonVal}
+                  onChange={(e) => setDeadlineReasonVal(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsDeadlineModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Save New Due Date
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Duration Adjustment Modal (Phase 2 Admin Corrections) */}
+      {isAdjustmentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Adjust Tracked Session Time</h3>
+              <button onClick={() => setIsAdjustmentModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!adjustSessionId || !adjustReason.trim()) {
+                  alert("Please provide the adjusted duration and a mandatory reason.");
+                  return;
+                }
+                const res = adjustWorkSessionDuration({
+                  sessionId: adjustSessionId,
+                  adjustedDurationSeconds: Math.max(0, adjustMinutes * 60),
+                  reason: adjustReason.trim(),
+                  actorUserId: activeUserId,
+                });
+                if (res.success) {
+                  setIsAdjustmentModalOpen(false);
+                } else {
+                  alert(res.error || "Failed to adjust session duration.");
+                }
+              }}
+              className="space-y-3 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Select Work Session *</label>
+                <select
+                  value={adjustSessionId}
+                  onChange={(e) => {
+                    setAdjustSessionId(e.target.value);
+                    const s = itemWorkSessions.find((ws) => ws.id === e.target.value);
+                    if (s) setAdjustMinutes(Math.round(s.accumulatedSeconds / 60));
+                  }}
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f] bg-white"
+                >
+                  {itemWorkSessions.map((ws, idx) => (
+                    <option key={ws.id} value={ws.id}>
+                      Session #{idx + 1} ({formatDateTime(ws.startedAt)}) — {Math.round(ws.accumulatedSeconds / 60)} mins
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Adjusted Duration (Minutes) *</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={adjustMinutes}
+                  onChange={(e) => setAdjustMinutes(Number(e.target.value) || 0)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Mandatory Reason for Adjustment *</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Designer accidentally left timer running during lunch break..."
+                  value={adjustReason}
+                  onChange={(e) => setAdjustReason(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsAdjustmentModalOpen(false)}
+                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                >
+                  Save Audited Correction
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Concurrency Error Alert Modal */}
+      {concurrencyErrorMessage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-[#fff0ee] text-[#b42318] flex items-center justify-center shrink-0">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-[17px] font-bold text-[#1d1d1f]">Active Timer Concurrency Limit</h3>
+                <p className="text-[12px] text-[#6e6e73]">
+                  You can only track one active work session at a time.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[13px] text-[#1d1d1f] bg-[#fbfbfd] p-3 rounded-xl border border-black/[0.06]">
+              {concurrencyErrorMessage}
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-black/[0.06]">
+              <button
+                onClick={() => setConcurrencyErrorMessage(null)}
+                className="rounded-full bg-[#1d1d1f] hover:bg-black px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+              >
+                Understood
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
@@ -10,16 +10,35 @@ import {
   Briefcase,
   CheckCircle2,
   Clock,
+  ExternalLink,
   Layers,
+  Pause,
+  Play,
   Sparkles,
+  Timer,
   UserCheck,
 } from "lucide-react";
 import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate } from "@/lib/formatters";
 
 export default function MyWorkDashboardPage() {
-  const { state } = useAppState();
+  const { state, pauseWorkSession } = useAppState();
   const { activeRole, activeUserId, canApprove, setActiveProjectId } = useRole();
+
+  // Active running timer for current user
+  const activeWorkSession = state.workSessions.find(
+    (ws) => ws.userId === activeUserId && ws.status === "active"
+  );
+  const activeWorkItem = activeWorkSession
+    ? state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)
+    : null;
+
+  const [ticker, setTicker] = useState(0);
+  useEffect(() => {
+    if (!activeWorkSession) return;
+    const interval = setInterval(() => setTicker((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [activeWorkSession]);
 
   // Get active user's assigned projects
   const accessibleProjectIds = new Set(
@@ -103,6 +122,66 @@ export default function MyWorkDashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Active Work Session Live Banner (Phase 2) */}
+      {activeWorkSession && activeWorkItem && (
+        <div className="bg-[#1d1d1f] text-white rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in">
+          <div className="flex items-center gap-3.5">
+            <div className="h-10 w-10 rounded-full bg-[#34c759]/20 text-[#34c759] flex items-center justify-center font-bold shrink-0 animate-pulse">
+              <Timer className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider bg-[#34c759]/20 text-[#34c759] px-2 py-0.5 rounded-full">
+                  Tracking Live
+                </span>
+                <span className="text-[13px] text-[#86868b]">{activeWorkItem.platform}</span>
+              </div>
+              <h3 className="font-semibold text-[15px] text-white truncate max-w-lg mt-0.5">
+                {activeWorkItem.title}
+              </h3>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <span className="text-[11px] text-[#86868b] block">Elapsed Duration:</span>
+              <span className="text-[22px] font-mono font-bold text-white tracking-tight">
+                {(() => {
+                  const elapsed =
+                    activeWorkSession.accumulatedSeconds +
+                    Math.max(
+                      0,
+                      Math.floor((Date.now() - Date.parse(activeWorkSession.activeSegmentStartedAt || "")) / 1000)
+                    );
+                  const hrs = Math.floor(elapsed / 3600);
+                  const mins = Math.floor((elapsed % 3600) / 60);
+                  const secs = elapsed % 60;
+                  if (hrs > 0) {
+                    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                  }
+                  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                })()}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
+                className="flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-[13px] font-medium transition"
+              >
+                <Pause className="h-3.5 w-3.5" /> Pause
+              </button>
+              <Link
+                href={`/projects/${activeWorkSession.projectId}/content/${activeWorkSession.contentItemId}`}
+                className="flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white text-[13px] font-medium transition shadow-sm"
+              >
+                Open Workspace <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cross-Project Summary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">

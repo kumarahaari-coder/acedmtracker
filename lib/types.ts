@@ -375,6 +375,66 @@ export interface AuditRecord {
   after?: any;
 }
 
+export type AssignmentRole = 'designer' | 'video_editor' | 'collaborator';
+export type AssignmentStatus = 'assigned' | 'accepted' | 'in_progress' | 'submitted' | 'reassigned' | 'completed';
+
+export interface AssignmentDueHistory {
+  previousDueAt: string;
+  newDueAt: string;
+  changedByUserId: string;
+  changedAt: string;
+  reason: string;
+}
+
+export interface ContentAssignment {
+  id: string;
+  projectId: string;
+  contentItemId: string;
+  assigneeUserId: string;
+  assignmentRole: AssignmentRole;
+  status: AssignmentStatus;
+  assignedByUserId: string;
+  assignedAt: string;
+  acceptedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  initialDueAt: string;
+  currentDueAt: string;
+  dueAtHistory?: AssignmentDueHistory[];
+  firstSubmittedAt?: string;
+  reassignmentReason?: string;
+  replacedAssignmentId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkSessionAdjustment {
+  id: string;
+  workSessionId: string;
+  previousDurationSeconds: number;
+  adjustedDurationSeconds: number;
+  reason: string;
+  adjustedByUserId: string;
+  adjustedAt: string;
+}
+
+export interface WorkSession {
+  id: string;
+  projectId: string;
+  contentItemId: string;
+  assignmentId: string;
+  userId: string;
+  startedAt: string;
+  endedAt?: string;
+  accumulatedSeconds: number;
+  activeSegmentStartedAt?: string | null;
+  status: 'active' | 'paused' | 'completed';
+  adjustments: WorkSessionAdjustment[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StorageEnvelope<T> {
   schemaVersion: number;
   seededAt: string;
@@ -389,6 +449,8 @@ export interface AppState {
   campaigns: Campaign[];
   contentFamilies: ContentFamily[];
   contentItems: ContentItem[];
+  contentAssignments: ContentAssignment[];
+  workSessions: WorkSession[];
   submissionVersions: SubmissionVersion[];
   approvalDecisions: ApprovalDecision[];
   founderOverrides: FounderOverride[];
