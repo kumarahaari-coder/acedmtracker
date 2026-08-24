@@ -15,6 +15,7 @@ import {
   Trello,
   Layers,
 } from "lucide-react";
+import { useRole } from "@/lib/context/RoleContext";
 
 interface SidebarProps {
   projectId: string;
@@ -22,6 +23,7 @@ interface SidebarProps {
 
 export function Sidebar({ projectId }: SidebarProps) {
   const pathname = usePathname();
+  const { canViewAuditHistory } = useRole();
 
   const navItems = [
     { label: "Overview", href: `/projects/${projectId}`, icon: LayoutDashboard },
@@ -31,7 +33,9 @@ export function Sidebar({ projectId }: SidebarProps) {
     { label: "Script Library", href: `/projects/${projectId}/scripts`, icon: FileCode2 },
     { label: "Asset Vault", href: `/projects/${projectId}/assets`, icon: FolderKanban },
     { label: "Analytics Hub", href: `/projects/${projectId}/analytics`, icon: BarChart2 },
-    { label: "Audit Trail", href: `/projects/${projectId}/audit`, icon: History },
+    ...(canViewAuditHistory
+      ? [{ label: "Audit Trail", href: `/projects/${projectId}/audit`, icon: History }]
+      : []),
     { label: "Settings & Team", href: `/projects/${projectId}/settings`, icon: Settings },
   ];
 

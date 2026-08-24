@@ -6,6 +6,8 @@ import {
   ContentItem,
   FounderOverride,
   SubmissionVersion,
+  AuditRecord,
+  UserRole,
 } from "./types";
 
 export interface ComponentApprovalSummary {
@@ -208,3 +210,52 @@ export function computeBestTimeRecommendation(
     topPlatform: "Instagram Carousels & Reels",
   };
 }
+
+export interface AuditHistoryResponse {
+  status: 200 | 403;
+  data?: AuditRecord[];
+  error?: string;
+  isRestricted: boolean;
+}
+
+export function getAuthoritativeAuditHistory(
+  state: AppState,
+  projectId: string,
+  actorUserId: string,
+  actorRole: UserRole
+): AuditHistoryResponse {
+  // 1. Explicit Role Gate: Only Founder, Admin, and Consultant may access internal audit ledger
+  if (actorRole === "designer" || actorRole === "client" || (actorRole as string) === "external_reviewer") {
+    return {
+      status: 403,
+      isRestricted: true,
+      error: "403 Forbidden: Internal audit history is strictly restricted to agency management (Founder, Admin, Consultant).",
+    };
+  }
+
+  // 2. Project Scope Gate: Consultant must have active project membership
+  if (actorRole === "consultant") {
+    const hasMembership = state.projectMemberships.some(
+      (m) => m.projectId === projectId && m.userId === actorUserId && m.status === "active"
+    );
+    if (!hasMembership) {
+      return {
+        status: 403,
+        isRestricted: true,
+        error: "403 Forbidden: Consultant does not have an active project membership on this workspace.",
+      };
+    }
+  }
+
+  // 3. Organization-level & Project-level Audit Records (sorted descending by timestamp)
+  const records = state.auditRecords
+    .filter((r) => r.projectId === projectId || r.projectId === "org_ace_assured")
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  return {
+    status: 200,
+    isRestricted: false,
+    data: records,
+  };
+}
+
