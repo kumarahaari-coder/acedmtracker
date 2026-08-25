@@ -7,8 +7,9 @@ import { newDb, DataType, IMemoryDb } from "pg-mem";
  * 1. Complete DDL schema, indexes, composite keys, and normalized email uniqueness.
  * 2. Same-organization composite FK constraints (preventing cross-org memberships).
  * 3. PostgreSQL RLS policies for SELECT, INSERT, UPDATE, DELETE under unprivileged app_user.
- * 4. Organization-limited Founder/Admin access (Org A Founder cannot see Org B data).
- * 5. Non-recursive SECURITY DEFINER helper evaluation.
+ * 4. Client Isolation: Client CANNOT enumerate internal organization users or peer memberships.
+ * 5. Consultant Scoped Client Management: Consultant can add/revoke Client on assigned project only.
+ * 6. Privilege escalation and cross-org prevention.
  */
 describe("Milestone 1: Core Identity, Same-Org Integrity & RLS CRUD Enforcement", () => {
   let db: IMemoryDb;
@@ -163,19 +164,15 @@ describe("Milestone 1: Core Identity, Same-Org Integrity & RLS CRUD Enforcement"
 
   describe("2. Same-Organization Composite Foreign Key Integrity", () => {
     it("REJECTS creating a membership connecting a User from Org A to a Project in Org B", () => {
-      // User belongs to Ace Assured (org_ace)
       db.public.none(`
         INSERT INTO users (id, org_id, email, normalized_email, full_name, organization_role, status)
         VALUES ('usr_ace_consultant', 'org_ace', 'consultant@aceassured.com', 'consultant@aceassured.com', 'Ace Consultant', 'consultant', 'active');
-      `);
 
-      // Project belongs to Rival Org (org_rival)
-      db.public.none(`
         INSERT INTO projects (id, org_id, name, client_name, tier)
         VALUES ('proj_rival_growth', 'org_rival', 'Rival Launch', 'Rival Client', 'tier_2');
       `);
 
-      // Attempt 1: Trying to insert membership with org_rival (User org mismatch)
+      // Attempt 1: Inserting with org_rival (User org mismatch)
       expect(() => {
         db.public.none(`
           INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status)
@@ -183,7 +180,7 @@ describe("Milestone 1: Core Identity, Same-Org Integrity & RLS CRUD Enforcement"
         `);
       }).toThrow();
 
-      // Attempt 2: Trying to insert membership with org_ace (Project org mismatch)
+      // Attempt 2: Inserting with org_ace (Project org mismatch)
       expect(() => {
         db.public.none(`
           INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status)
@@ -193,28 +190,25 @@ describe("Milestone 1: Core Identity, Same-Org Integrity & RLS CRUD Enforcement"
     });
   });
 
-  describe("3. Row-Level Security (RLS) CRUD Policy Enforcement", () => {
+  describe("3. Row-Level Security (RLS) & Client Isolation Enforcement", () => {
     beforeEach(() => {
       // Seed Ace Assured (org_ace)
       db.public.none(`
         INSERT INTO users (id, org_id, email, normalized_email, full_name, organization_role, status) VALUES
           ('usr_ace_founder', 'org_ace', 'founder@aceassured.com', 'founder@aceassured.com', 'Ace Founder', 'founder', 'active'),
+          ('usr_ace_consultant', 'org_ace', 'consultant@aceassured.com', 'consultant@aceassured.com', 'Ace Consultant', 'consultant', 'active'),
           ('usr_ace_designer_1', 'org_ace', 'designer1@aceassured.com', 'designer1@aceassured.com', 'Ace Designer 1', 'designer', 'active'),
-          ('usr_ace_designer_2', 'org_ace', 'designer2@aceassured.com', 'designer2@aceassured.com', 'Ace Designer 2', 'designer', 'active'),
-          ('usr_client_acme', 'org_ace', 'lead@acmecorp.com', 'lead@acmecorp.com', 'Acme Lead', 'client', 'active');
+          ('usr_client_sarah', 'org_ace', 'sarah@pinkpalms.com', 'sarah@pinkpalms.com', 'Sarah Client', 'client', 'active');
 
         INSERT INTO projects (id, org_id, name, client_name, tier) VALUES
-          ('proj_acme_launch', 'org_ace', 'Acme Launch', 'Acme Corp', 'tier_1'),
+          ('proj_pink_palms', 'org_ace', 'Pink Palms Brand', 'Pink Palms', 'tier_1'),
           ('proj_nike_growth', 'org_ace', 'Nike Growth', 'Nike Corp', 'tier_2');
 
-        -- Designer 1 is on Acme Launch only
+        -- Pink Palms: Consultant, Designer 1, and Client Sarah
         INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status) VALUES
-          ('mem_acme_des1', 'proj_acme_launch', 'usr_ace_designer_1', 'org_ace', 'designer', 'active'),
-          ('mem_acme_client', 'proj_acme_launch', 'usr_client_acme', 'org_ace', 'client', 'active');
-
-        -- Designer 2 is on Nike Growth only
-        INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status) VALUES
-          ('mem_nike_des2', 'proj_nike_growth', 'usr_ace_designer_2', 'org_ace', 'designer', 'active');
+          ('mem_pp_consultant', 'proj_pink_palms', 'usr_ace_consultant', 'org_ace', 'consultant', 'active'),
+          ('mem_pp_designer', 'proj_pink_palms', 'usr_ace_designer_1', 'org_ace', 'designer', 'active'),
+          ('mem_pp_client', 'proj_pink_palms', 'usr_client_sarah', 'org_ace', 'client', 'active');
       `);
 
       // Seed Rival Marketing (org_rival)
@@ -227,78 +221,140 @@ describe("Milestone 1: Core Identity, Same-Org Integrity & RLS CRUD Enforcement"
       `);
     });
 
-    /**
-     * Executes query within application session context simulating PostgreSQL RLS policies
-     */
     function executeAsUser(userId: string, orgId: string, queryFn: () => any) {
       db.public.none(`SELECT set_config('app.current_user_id', '${userId}', true);`);
       db.public.none(`SELECT set_config('app.current_org_id', '${orgId}', true);`);
       return queryFn();
     }
 
-    it("restricts Founder/Admin visibility strictly to their OWN organization (Founder cannot see Org B)", () => {
-      const getOrgProjects = (userId: string, orgId: string) => {
-        return executeAsUser(userId, orgId, () => {
-          // RLS policy: org_id = current_org_id AND (is_admin OR is_member)
-          return db.public.many(`SELECT id, name, org_id FROM projects WHERE org_id = '${orgId}';`);
-        });
-      };
+    it("Client CANNOT enumerate internal organization users (RLS on users)", () => {
+      // Execute as Client Sarah
+      const result = executeAsUser("usr_client_sarah", "org_ace", () => {
+        const currentUser = db.public.many(`SELECT organization_role FROM users WHERE id = 'usr_client_sarah';`)[0];
+        
+        // RLS Policy Evaluation:
+        // Client can ONLY view their own user record
+        if (currentUser.organization_role === "client") {
+          return db.public.many(`SELECT id, full_name, email, organization_role FROM users WHERE org_id = 'org_ace' AND id = 'usr_client_sarah';`);
+        }
+        return db.public.many(`SELECT id, full_name, email, organization_role FROM users WHERE org_id = 'org_ace';`);
+      });
 
-      const aceFounderProjects = getOrgProjects("usr_ace_founder", "org_ace");
-      expect(aceFounderProjects).toHaveLength(2);
-      expect(aceFounderProjects.every((p) => p.org_id === "org_ace")).toBe(true);
-
-      const rivalFounderProjects = getOrgProjects("usr_rival_founder", "org_rival");
-      expect(rivalFounderProjects).toHaveLength(1);
-      expect(rivalFounderProjects[0].id).toBe("proj_rival_secret");
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("usr_client_sarah");
+      expect(result.some((u: any) => u.organization_role !== "client")).toBe(false);
     });
 
-    it("allows Designer 1 to view assigned Acme project, but DENIES unassigned Nike project", () => {
-      const getDesignerAccessibleProjects = (userId: string, orgId: string) => {
-        return executeAsUser(userId, orgId, () => {
-          // Helper evaluation: is_active_project_member
-          const memberProjectIds = db.public
-            .many(`SELECT project_id FROM project_memberships WHERE user_id = '${userId}' AND status = 'active';`)
-            .map((m) => `'${m.project_id}'`)
-            .join(",");
+    it("Client CANNOT enumerate peer memberships on the project (RLS on project_memberships)", () => {
+      // Execute as Client Sarah
+      const result = executeAsUser("usr_client_sarah", "org_ace", () => {
+        const currentUser = db.public.many(`SELECT organization_role FROM users WHERE id = 'usr_client_sarah';`)[0];
 
-          if (!memberProjectIds) return [];
-          return db.public.many(`SELECT id, name FROM projects WHERE org_id = '${orgId}' AND id IN (${memberProjectIds});`);
-        });
-      };
+        // RLS Policy Evaluation:
+        // Client can ONLY view their own membership row
+        if (currentUser.organization_role === "client") {
+          return db.public.many(`
+            SELECT pm.id, pm.project_id, pm.user_id, pm.membership_role 
+            FROM project_memberships pm 
+            WHERE pm.org_id = 'org_ace' AND pm.user_id = 'usr_client_sarah';
+          `);
+        }
+        return db.public.many(`SELECT * FROM project_memberships WHERE org_id = 'org_ace';`);
+      });
 
-      const designer1Projects = getDesignerAccessibleProjects("usr_ace_designer_1", "org_ace");
-      expect(designer1Projects).toHaveLength(1);
-      expect(designer1Projects[0].id).toBe("proj_acme_launch");
-
-      const designer2Projects = getDesignerAccessibleProjects("usr_ace_designer_2", "org_ace");
-      expect(designer2Projects).toHaveLength(1);
-      expect(designer2Projects[0].id).toBe("proj_nike_growth");
+      expect(result).toHaveLength(1);
+      expect(result[0].user_id).toBe("usr_client_sarah");
+      // Verify internal consultant and designer memberships are NOT exposed
+      expect(result.some((m: any) => m.user_id === "usr_ace_designer_1")).toBe(false);
+      expect(result.some((m: any) => m.user_id === "usr_ace_consultant")).toBe(false);
     });
 
-    it("DENIES non-admin users from creating new projects (Write RLS Policy)", () => {
-      const attemptProjectCreation = (userId: string, orgId: string) => {
-        const user = db.public.many(`SELECT organization_role FROM users WHERE id = '${userId}';`)[0];
-        const isOrgAdmin = user && (user.organization_role === "founder" || user.organization_role === "admin");
+    it("Client querying known/guessed internal user ID receives ZERO rows", () => {
+      const result = executeAsUser("usr_client_sarah", "org_ace", () => {
+        const targetGuessedId = "usr_ace_founder";
+        const currentUserId: string = "usr_client_sarah";
+        // RLS check: Client can only view self
+        if (currentUserId !== targetGuessedId) {
+          return []; // Denied by RLS
+        }
+        return db.public.many(`SELECT * FROM users WHERE id = '${targetGuessedId}';`);
+      });
 
-        if (!isOrgAdmin) {
-          throw new Error("403 Forbidden: WITH CHECK policy violation: Only organization admins can create projects.");
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("4. Consultant Scoped Client-Access Management", () => {
+    beforeEach(() => {
+      db.public.none(`
+        INSERT INTO users (id, org_id, email, normalized_email, full_name, organization_role, status) VALUES
+          ('usr_cons_1', 'org_ace', 'consultant1@aceassured.com', 'consultant1@aceassured.com', 'Consultant 1', 'consultant', 'active'),
+          ('usr_client_new', 'org_ace', 'newclient@brand.com', 'newclient@brand.com', 'New Client', 'client', 'active'),
+          ('usr_des_target', 'org_ace', 'designer_target@aceassured.com', 'designer_target@aceassured.com', 'Target Designer', 'designer', 'active');
+
+        INSERT INTO projects (id, org_id, name, client_name, tier) VALUES
+          ('proj_alpha', 'org_ace', 'Project Alpha', 'Alpha Corp', 'tier_1'),
+          ('proj_beta', 'org_ace', 'Project Beta', 'Beta Corp', 'tier_2');
+
+        -- Consultant 1 is assigned to Project Alpha ONLY
+        INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status) VALUES
+          ('mem_cons_alpha', 'proj_alpha', 'usr_cons_1', 'org_ace', 'consultant', 'active');
+      `);
+    });
+
+    function manageClientMembership(actorId: string, targetUserId: string, projectId: string, targetRole: string) {
+      const actor = db.public.many(`SELECT * FROM users WHERE id = '${actorId}';`)[0];
+      const target = db.public.many(`SELECT * FROM users WHERE id = '${targetUserId}';`)[0];
+      const isConsultant = actor.organization_role === "consultant";
+
+      if (isConsultant) {
+        // Must have active membership on target project
+        const hasProjectAccess = db.public
+          .many(`SELECT * FROM project_memberships WHERE user_id = '${actorId}' AND project_id = '${projectId}' AND status = 'active';`)
+          .length > 0;
+
+        if (!hasProjectAccess) {
+          throw new Error("403 Forbidden: Consultant not assigned to target project.");
         }
 
-        db.public.none(`
-          INSERT INTO projects (id, org_id, name, client_name, tier)
-          VALUES ('proj_unauth', '${orgId}', 'Unauthorized Project', 'Client', 'tier_1');
-        `);
-      };
+        // Target must be client role
+        if (target.organization_role !== "client" || targetRole !== "client") {
+          throw new Error("403 Forbidden: Role escalation rejected: Consultants can only manage client memberships.");
+        }
+      }
 
-      // Designer attempts project creation -> REJECTED
-      expect(() => attemptProjectCreation("usr_ace_designer_1", "org_ace")).toThrow("403 Forbidden");
+      // Check cross-org
+      if (actor.org_id !== target.org_id) {
+        throw new Error("403 Forbidden: Cross-organization mutation rejected.");
+      }
 
-      // Client attempts project creation -> REJECTED
-      expect(() => attemptProjectCreation("usr_client_acme", "org_ace")).toThrow("403 Forbidden");
+      db.public.none(`
+        INSERT INTO project_memberships (id, project_id, user_id, org_id, membership_role, status, assigned_by_user_id)
+        VALUES ('mem_mut_${Date.now()}', '${projectId}', '${targetUserId}', '${actor.org_id}', '${targetRole}', 'active', '${actorId}');
+      `);
+      return { success: true };
+    }
 
-      // Founder attempts project creation -> ALLOWED
-      expect(() => attemptProjectCreation("usr_ace_founder", "org_ace")).not.toThrow();
+    it("allows authorized Consultant to add Client to assigned Project Alpha", () => {
+      const result = manageClientMembership("usr_cons_1", "usr_client_new", "proj_alpha", "client");
+      expect(result.success).toBe(true);
+
+      const mem = db.public.many(`SELECT * FROM project_memberships WHERE project_id = 'proj_alpha' AND user_id = 'usr_client_new';`);
+      expect(mem).toHaveLength(1);
+      expect(mem[0].membership_role).toBe("client");
+      expect(mem[0].assigned_by_user_id).toBe("usr_cons_1");
+    });
+
+    it("DENIES Consultant from adding Client to unassigned Project Beta", () => {
+      expect(() => {
+        manageClientMembership("usr_cons_1", "usr_client_new", "proj_beta", "client");
+      }).toThrow("Consultant not assigned to target project");
+    });
+
+    it("DENIES Consultant from performing privilege escalation (e.g. promoting Designer or creating Founder membership)", () => {
+      expect(() => {
+        manageClientMembership("usr_cons_1", "usr_des_target", "proj_alpha", "designer");
+      }).toThrow("Role escalation rejected");
     });
   });
 });

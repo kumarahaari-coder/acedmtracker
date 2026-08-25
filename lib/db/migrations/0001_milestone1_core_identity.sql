@@ -1,5 +1,5 @@
 -- ============================================================================
--- AceCore Phase B — Milestone 1 Production Migration
+-- AceCore Phase B — Milestone 1 Production Migration (Hardened)
 -- Core Identity: Organizations, Auth Tables, Users, Projects, ProjectMemberships
 -- Target Runtime: PostgreSQL 16+ (Neon Serverless) with RLS & app_user Role
 -- ============================================================================
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
 CREATE INDEX IF NOT EXISTS idx_users_normalized_email ON users(normalized_email);
 CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);
+CREATE INDEX IF NOT EXISTS idx_users_org_role ON users(org_id, organization_role);
 
 -- 4. Projects
 CREATE TABLE IF NOT EXISTS projects (
@@ -129,6 +130,19 @@ CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON project_memberships(org_id)
 -- ============================================================================
 -- Helper Functions (SECURITY DEFINER with locked search_path)
 -- ============================================================================
+CREATE OR REPLACE FUNCTION get_current_user_role(p_user_id UUID, p_org_id UUID)
+RETURNS VARCHAR
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+STABLE
+AS $$
+  SELECT organization_role FROM users
+  WHERE id = p_user_id
+    AND org_id = p_org_id
+    AND status = 'active';
+$$;
+
 CREATE OR REPLACE FUNCTION is_active_project_member(p_project_id UUID, p_user_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -140,6 +154,22 @@ AS $$
     SELECT 1 FROM project_memberships
     WHERE project_id = p_project_id
       AND user_id = p_user_id
+      AND status = 'active'
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION is_active_project_consultant(p_project_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM project_memberships
+    WHERE project_id = p_project_id
+      AND user_id = p_user_id
+      AND membership_role = 'consultant'
       AND status = 'active'
   );
 $$;
@@ -161,14 +191,20 @@ AS $$
 $$;
 
 -- Grant execution to app_user
+REVOKE ALL ON FUNCTION get_current_user_role(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_current_user_role(UUID, UUID) TO app_user;
+
 REVOKE ALL ON FUNCTION is_active_project_member(UUID, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION is_active_project_member(UUID, UUID) TO app_user;
+
+REVOKE ALL ON FUNCTION is_active_project_consultant(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION is_active_project_consultant(UUID, UUID) TO app_user;
 
 REVOKE ALL ON FUNCTION is_active_org_admin(UUID, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION is_active_org_admin(UUID, UUID) TO app_user;
 
 -- ============================================================================
--- Row-Level Security (RLS) Policies
+-- Row-Level Security (RLS) Policies (Hardened for Client Isolation)
 -- ============================================================================
 
 -- Organizations RLS
@@ -183,9 +219,21 @@ CREATE POLICY rls_org_select ON organizations
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users FORCE ROW LEVEL SECURITY;
 
+-- 1. Client users can ONLY select their own record (cannot enumerate internal employees)
+-- 2. Internal employees can select internal employees in the same organization
 CREATE POLICY rls_users_select ON users
     FOR SELECT
-    USING (org_id::text = current_setting('app.current_org_id', true));
+    USING (
+      org_id::text = current_setting('app.current_org_id', true)
+      AND (
+        -- Client can only view themselves
+        (get_current_user_role(NULLIF(current_setting('app.current_user_id', true), '')::uuid, org_id) = 'client' 
+          AND id::text = current_setting('app.current_user_id', true))
+        OR
+        -- Internal users can view internal users and client profiles
+        (get_current_user_role(NULLIF(current_setting('app.current_user_id', true), '')::uuid, org_id) IN ('founder', 'admin', 'consultant', 'designer'))
+      )
+    );
 
 CREATE POLICY rls_users_admin_write ON users
     FOR ALL
@@ -227,26 +275,58 @@ CREATE POLICY rls_projects_admin_write ON projects
 ALTER TABLE project_memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_memberships FORCE ROW LEVEL SECURITY;
 
+-- 1. Client can ONLY select their own membership record (cannot enumerate internal team on project)
+-- 2. Internal users can view project memberships for assigned projects or org-wide for Admins
 CREATE POLICY rls_memberships_select ON project_memberships
     FOR SELECT
     USING (
       org_id::text = current_setting('app.current_org_id', true)
       AND (
+        -- Client can only view their own membership
+        (get_current_user_role(NULLIF(current_setting('app.current_user_id', true), '')::uuid, org_id) = 'client' 
+          AND user_id::text = current_setting('app.current_user_id', true))
+        OR
+        -- Org admins can view all project memberships in org
         is_active_org_admin(org_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
-        OR user_id::text = current_setting('app.current_user_id', true)
-        OR is_active_project_member(project_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+        OR
+        -- Internal team members can view memberships for projects they belong to
+        (
+          get_current_user_role(NULLIF(current_setting('app.current_user_id', true), '')::uuid, org_id) IN ('consultant', 'designer')
+          AND is_active_project_member(project_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+        )
       )
     );
 
-CREATE POLICY rls_memberships_admin_write ON project_memberships
+-- Write Policy:
+-- 1. Org Admins can manage any membership in the org.
+-- 2. Consultants can manage CLIENT memberships ONLY on projects where they are active consultants.
+CREATE POLICY rls_memberships_write ON project_memberships
     FOR ALL
     USING (
       org_id::text = current_setting('app.current_org_id', true)
-      AND is_active_org_admin(org_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+      AND (
+        -- Org Admin write
+        is_active_org_admin(org_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+        OR
+        -- Consultant write (strictly client role on assigned project)
+        (
+          is_active_project_consultant(project_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+          AND membership_role = 'client'
+        )
+      )
     )
     WITH CHECK (
       org_id::text = current_setting('app.current_org_id', true)
-      AND is_active_org_admin(org_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+      AND (
+        -- Org Admin write
+        is_active_org_admin(org_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+        OR
+        -- Consultant write (strictly client role on assigned project)
+        (
+          is_active_project_consultant(project_id, NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+          AND membership_role = 'client'
+        )
+      )
     );
 
 -- Table Grants for app_user
