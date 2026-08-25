@@ -436,16 +436,18 @@ export default function ContentItemWorkspacePage() {
 
         {/* Right Header Actions */}
         <div className="flex items-center gap-3">
-          {/* Share with Client Link Generator */}
-          <button
-            onClick={() => {
-              setGeneratedLinkUrl("");
-              setIsShareModalOpen(true);
-            }}
-            className="flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[13px] font-medium text-[#1d1d1f] transition"
-          >
-            <Share2 className="h-3.5 w-3.5" /> Client Preview Link
-          </button>
+          {/* Share with Client Link Generator (Founder, Consultant, Admin only) */}
+          {(activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
+            <button
+              onClick={() => {
+                setGeneratedLinkUrl("");
+                setIsShareModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[13px] font-medium text-[#1d1d1f] transition"
+            >
+              <Share2 className="h-3.5 w-3.5" /> Client Preview Link
+            </button>
+          )}
 
           {/* Primary Action Button */}
           {approvalSummary.allComponentsApproved ? (
