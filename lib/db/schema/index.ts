@@ -5,3 +5,8 @@ export * from "./projects";
 export * from "./memberships";
 export * from "./content";
 export * from "./assets";
+export * from "./assignments";
+export * from "./approvals";
+export * from "./work-sessions";
+export * from "./attendance";
+export * from "./collaboration";
