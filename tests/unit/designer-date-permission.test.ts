@@ -13,11 +13,12 @@ describe("Designer Permissions & Date Protection", () => {
         return { appState, role };
       },
       {
-        wrapper: ({ children }: { children: React.ReactNode }) => (
-          <AppStateProvider>
-            <RoleProvider>{children}</RoleProvider>
-          </AppStateProvider>
-        ),
+        wrapper: ({ children }: { children: React.ReactNode }) =>
+          React.createElement(
+            AppStateProvider,
+            null,
+            React.createElement(RoleProvider, null, children)
+          ),
       }
     );
 
