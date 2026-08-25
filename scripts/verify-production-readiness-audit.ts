@@ -137,7 +137,7 @@ async function runProductionReadinessAcceptanceAudit() {
 
   // Designer accepts assignment
   const acceptRes = await acceptContentAssignmentAction({ actorUserId: designer.id, assignmentId: assignment.id });
-  if (!acceptRes.success || !('assignment' in acceptRes) || acceptRes.assignment.status !== "accepted") throw new Error("Acceptance failed");
+  if (!acceptRes.success || !('assignment' in acceptRes) || !acceptRes.assignment || acceptRes.assignment.status !== "accepted") throw new Error("Acceptance failed");
   console.log("  ✓ Designer accepted assignment (Authoritative status: 'accepted')");
 
   // Designer starts work session timer
