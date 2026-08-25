@@ -72,3 +72,26 @@ export function formatDurationHuman(totalSeconds: number | null | undefined): st
   return `${minutes}m`;
 }
 
+export function getCurrentISTDate(customDate?: Date): {
+  year: number;
+  month: number; // 0-indexed (0 = Jan, 7 = Aug)
+  day: number;
+  dateString: string; // YYYY-MM-DD
+} {
+  const d = customDate || new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const year = parseInt(parts.find((p) => p.type === "year")?.value || "2026", 10);
+  const month = parseInt(parts.find((p) => p.type === "month")?.value || "8", 10) - 1;
+  const day = parseInt(parts.find((p) => p.type === "day")?.value || "1", 10);
+  const dateString = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+  return { year, month, day, dateString };
+}
+
+

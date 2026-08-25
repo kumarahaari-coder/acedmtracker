@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
@@ -12,19 +12,36 @@ import {
   Clock,
   Plus,
   X,
+  Layers,
+  Sparkles,
 } from "lucide-react";
 import { ContentItem, ContentPlatform, ContentType, DeadlineKind } from "@/lib/types";
-import { formatDate } from "@/lib/formatters";
+import { formatDate, getCurrentISTDate } from "@/lib/formatters";
 
 export default function CalendarPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "proj_acme";
   const { state, updateDeadline, createContentItem, updatePublicationDetails } = useAppState();
-  const { activeRole } = useRole();
+  const { activeRole, activeUserId } = useRole();
 
   const [viewMode, setViewMode] = useState<"month" | "week">("month");
   const [dateLayer, setDateLayer] = useState<DeadlineKind>("scheduled_publication");
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 7, 20)); // August 20, 2026
+
+  // Dynamic runtime IST current date
+  const [todayIST, setTodayIST] = useState(() => getCurrentISTDate());
+
+  useEffect(() => {
+    // Refresh today marker whenever component mounts or window gains focus
+    setTodayIST(getCurrentISTDate());
+    const onFocus = () => setTodayIST(getCurrentISTDate());
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  // Viewport navigation state (defaults to current IST month/year)
+  const [currentDate, setCurrentDate] = useState(
+    () => new Date(todayIST.year, todayIST.month, todayIST.day)
+  );
 
   // Reschedule Modal
   const [selectedItemForReschedule, setSelectedItemForReschedule] = useState<ContentItem | null>(null);
@@ -36,9 +53,10 @@ export default function CalendarPage() {
   const [quickTitle, setQuickTitle] = useState("");
   const [quickPlatform, setQuickPlatform] = useState<ContentPlatform>("Instagram");
   const [quickType, setQuickType] = useState<ContentType>("carousel");
-  const [quickDate, setQuickDate] = useState("2026-08-26");
+  const [quickDate, setQuickDate] = useState(() => todayIST.dateString);
   const [quickAssigneeId, setQuickAssigneeId] = useState("u_designer1");
 
+  const project = state.projects.find((p) => p.id === projectId);
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
   const projectMembers = state.projectMemberships
     .filter((m) => m.projectId === projectId)
@@ -118,132 +136,179 @@ export default function CalendarPage() {
     }
   };
 
-  const handleSaveReschedule = () => {
+  const handleToday = () => {
+    const t = getCurrentISTDate();
+    setTodayIST(t);
+    setCurrentDate(new Date(t.year, t.month, t.day));
+  };
+
+  const handleRescheduleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!selectedItemForReschedule || !newDateVal) return;
+
     if (dateLayer === "actual_publication") {
       updatePublicationDetails({
         contentItemId: selectedItemForReschedule.id,
-        publishedAt: new Date(newDateVal).toISOString(),
-        reason: rescheduleReason || "Operational calendar adjustment",
-        actorUserId: "u_consultant",
+        publishedAt: newDateVal,
+        reason: rescheduleReason || "Date adjusted via Calendar actual publication layer",
+        actorUserId: activeUserId,
       });
     } else {
       updateDeadline({
         contentItemId: selectedItemForReschedule.id,
-        kind: dateLayer as "submission" | "resubmission" | "approval_target" | "scheduled_publication",
-        newDueAt: new Date(newDateVal).toISOString(),
-        changedByUserId: "u_consultant",
-        reason: rescheduleReason || "Operational calendar adjustment",
+        kind: dateLayer,
+        newDueAt: newDateVal,
+        changedByUserId: activeUserId,
+        reason: rescheduleReason || `Rescheduled in calendar ${dateLayer} layer`,
       });
     }
+
     setSelectedItemForReschedule(null);
-    setNewDateVal("");
     setRescheduleReason("");
   };
 
-  const handleCreateQuickItem = () => {
+  const handleQuickCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!quickTitle.trim()) return;
+
     createContentItem({
       projectId,
-      title: quickTitle,
+      title: quickTitle.trim(),
       platform: quickPlatform,
       contentType: quickType,
       stage: "draft",
-      accountableOwnerId: quickAssigneeId || "u_designer1",
-      collaboratorIds: ["u_consultant"],
+      accountableOwnerId: quickAssigneeId,
+      collaboratorIds: [],
       deadlines: {
-        submissionDeadline: new Date(quickDate + "T18:00:00Z").toISOString(),
-        scheduledPublicationDate: new Date(quickDate + "T10:00:00Z").toISOString(),
+        submissionDeadline: quickDate,
+        scheduledPublicationDate: quickDate,
       },
     });
+
     setIsQuickCreateOpen(false);
     setQuickTitle("");
   };
 
   return (
-    <div className="p-8 sm:p-10 max-w-7xl mx-auto space-y-6">
-      {/* Calendar Header & Controls */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-2 border-b border-black/[0.06]">
+    <div className="p-8 sm:p-10 max-w-7xl mx-auto space-y-6 animate-in fade-in">
+      {/* Header & Controls */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-black/[0.06]">
         <div>
-          <h1 className="text-[28px] sm:text-[36px] font-bold text-[#1d1d1f] tracking-tight">
-            Content Calendar
-          </h1>
-          <p className="text-[14px] text-[#6e6e73]">
-            Multi-layer date planning (Submissions, Approvals, Scheduled Releases).
+          <div className="flex items-center gap-2.5">
+            <CalendarIcon className="h-6 w-6 text-[#0071e3]" />
+            <h1 className="text-[28px] sm:text-[34px] font-bold text-[#1d1d1f] tracking-tight">
+              Production Calendar
+            </h1>
+          </div>
+          <p className="text-[14px] text-[#6e6e73] mt-1">
+            Visual milestone scheduling with multi-layer deadline resolution in{" "}
+            <span className="font-semibold text-[#1d1d1f]">Asia/Kolkata (IST)</span>.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* View Mode Toggle: Month vs Week */}
-          <div className="flex items-center bg-[#ffffff] border border-black/[0.08] rounded-full p-1 shadow-sm text-[13px]">
-            <button
-              onClick={() => setViewMode("month")}
-              className={`px-3.5 py-1 rounded-full font-medium transition ${
-                viewMode === "month" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
-              }`}
-            >
-              Month
-            </button>
-            <button
-              onClick={() => setViewMode("week")}
-              className={`px-3.5 py-1 rounded-full font-medium transition ${
-                viewMode === "week" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
-              }`}
-            >
-              Week
-            </button>
-          </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsQuickCreateOpen(true)}
+            className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-2 text-[13px] font-medium text-white shadow-sm transition"
+          >
+            <Plus className="h-4 w-4" /> Quick Schedule Item
+          </button>
+        </div>
+      </div>
 
-          {/* Date Layer Selector */}
-          <div className="flex items-center gap-2 bg-[#ffffff] border border-black/[0.08] rounded-full px-3.5 py-1 text-[13px] shadow-sm">
-            <span className="text-[12px] text-[#86868b] font-medium">Layer:</span>
-            <select
-              value={dateLayer}
-              onChange={(e) => setDateLayer(e.target.value as DeadlineKind)}
-              className="bg-transparent text-[#1d1d1f] font-medium focus:outline-none text-[13px]"
-            >
-              <option value="scheduled_publication">Publication Timeline (Live / Scheduled)</option>
-              <option value="actual_publication">Actual Published Live Date Only</option>
-              <option value="submission">Submission Deadlines</option>
-              <option value="resubmission">Resubmission Deadlines</option>
-              <option value="approval_target">Approval Targets</option>
-            </select>
-          </div>
-
-          {/* Navigator */}
-          <div className="flex items-center gap-1 bg-[#ffffff] border border-black/[0.08] rounded-full px-2 py-1 shadow-sm">
+      {/* Toolbar: Navigation, Today, View Mode, and Layer Selectors */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white border border-black/[0.08] p-4 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        {/* Month/Week Navigation */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 bg-[#f5f5f7] p-1 rounded-xl border border-black/[0.04]">
             <button
               onClick={handlePrev}
-              className="p-1 text-[#6e6e73] hover:text-[#1d1d1f] rounded-full transition"
+              className="p-1.5 rounded-lg hover:bg-white text-[#1d1d1f] transition shadow-xs"
+              title="Previous"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="text-[13px] font-semibold text-[#1d1d1f] px-2 min-w-[120px] text-center">
-              {viewMode === "month"
-                ? `${monthNames[month]} ${year}`
-                : `Week of ${formatDate(weekDays[0])}`}
-            </span>
             <button
               onClick={handleNext}
-              className="p-1 text-[#6e6e73] hover:text-[#1d1d1f] rounded-full transition"
+              className="p-1.5 rounded-lg hover:bg-white text-[#1d1d1f] transition shadow-xs"
+              title="Next"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
 
           <button
-            onClick={() => setIsQuickCreateOpen(true)}
-            className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-1.5 text-[13px] font-medium text-white shadow-sm transition"
+            onClick={handleToday}
+            className="px-3.5 py-1.5 rounded-xl border border-black/[0.08] bg-white hover:bg-[#f5f5f7] text-[13px] font-semibold text-[#1d1d1f] shadow-xs transition"
           >
-            <Plus className="h-3.5 w-3.5" /> Quick Schedule
+            Today
           </button>
+
+          <span className="text-[16px] font-bold text-[#1d1d1f] tracking-tight">
+            {monthNames[month]} {year}
+          </span>
         </div>
+
+        {/* View Mode Toggle */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-[#f5f5f7] p-1 rounded-xl border border-black/[0.04] text-[12px] font-medium">
+            <button
+              onClick={() => setViewMode("month")}
+              className={`px-3.5 py-1 rounded-lg transition ${
+                viewMode === "month" ? "bg-white text-[#1d1d1f] shadow-xs font-semibold" : "text-[#6e6e73]"
+              }`}
+            >
+              Month
+            </button>
+            <button
+              onClick={() => setViewMode("week")}
+              className={`px-3.5 py-1 rounded-lg transition ${
+                viewMode === "week" ? "bg-white text-[#1d1d1f] shadow-xs font-semibold" : "text-[#6e6e73]"
+              }`}
+            >
+              Week
+            </button>
+          </div>
+        </div>
+
+        {/* Milestone Layer Selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] font-semibold text-[#86868b] uppercase tracking-wider hidden md:inline">
+            Milestone Layer:
+          </span>
+          <select
+            value={dateLayer}
+            onChange={(e) => setDateLayer(e.target.value as DeadlineKind)}
+            className="rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+          >
+            <option value="scheduled_publication">Scheduled Publication (with Live Resolution)</option>
+            <option value="submission">First Submission Deadline</option>
+            <option value="resubmission">Revision / Resubmission</option>
+            <option value="approval_target">Target Approval Date</option>
+            <option value="actual_publication">Historical Live Date (publishedAt)</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Layer Explanation Banner */}
+      <div className="px-4 py-2 bg-[#fbfbfd] border border-black/[0.06] rounded-xl text-[12px] text-[#6e6e73] flex items-center justify-between">
+        <span>
+          Current Layer:{" "}
+          <strong className="text-[#1d1d1f] capitalize">
+            {dateLayer.replace(/_/g, " ")}
+          </strong>
+          {dateLayer === "scheduled_publication" &&
+            " — Published items dynamically resolve to their actual live date (publishedAt), while pending items stay at scheduledPublicationDate."}
+        </span>
+        <span className="text-[11px] text-[#86868b] font-medium">
+          Org Timezone: Asia/Kolkata
+        </span>
       </div>
 
       {/* Month View Grid */}
       {viewMode === "month" ? (
-        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] overflow-hidden shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="grid grid-cols-7 border-b border-black/[0.08] bg-[#f5f5f7] text-center text-[12px] font-semibold text-[#6e6e73] py-3">
+        <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl overflow-hidden shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+          <div className="grid grid-cols-7 border-b border-black/[0.08] bg-[#f5f5f7] text-center text-[12px] font-semibold text-[#6e6e73] py-2.5 divide-x divide-black/[0.06]">
             <div>Sun</div>
             <div>Mon</div>
             <div>Tue</div>
@@ -253,7 +318,7 @@ export default function CalendarPage() {
             <div>Sat</div>
           </div>
 
-          <div className="grid grid-cols-7 auto-rows-[120px] divide-x divide-y divide-black/[0.06]">
+          <div className="grid grid-cols-7 auto-rows-[125px] divide-x divide-y divide-black/[0.06]">
             {calendarDays.map((dayNum, idx) => {
               if (dayNum === null) {
                 return <div key={`empty-${idx}`} className="bg-[#fbfbfd]/50 p-2" />;
@@ -266,31 +331,37 @@ export default function CalendarPage() {
                 return d.startsWith(dateStr);
               });
 
-              const isToday = dayNum === 21 && month === 7 && year === 2026;
+              // Strict runtime IST Today match
+              const isToday =
+                dayNum === todayIST.day &&
+                month === todayIST.month &&
+                year === todayIST.year;
 
               return (
                 <div
                   key={`day-${dayNum}`}
                   className={`p-2.5 flex flex-col justify-between hover:bg-[#f5f5f7]/40 transition ${
-                    isToday ? "bg-[#eaf3fc]/50" : ""
+                    isToday ? "bg-[#0071e3]/[0.03]" : ""
                   }`}
                 >
                   <div className="flex items-center justify-between text-[12px]">
                     <span
                       className={`font-semibold ${
                         isToday
-                          ? "flex h-5 w-5 items-center justify-center rounded-full bg-[#0071e3] text-white font-bold text-[11px]"
-                          : "text-[#6e6e73]"
+                          ? "flex h-6 w-6 items-center justify-center rounded-full bg-[#0071e3] text-white font-bold text-[12px] shadow-sm"
+                          : "text-[#1d1d1f]"
                       }`}
                     >
                       {dayNum}
                     </span>
                     {dayItems.length > 0 && (
-                      <span className="text-[11px] text-[#86868b] font-medium">{dayItems.length} items</span>
+                      <span className="text-[11px] text-[#86868b] font-medium">
+                        {dayItems.length} {dayItems.length === 1 ? "item" : "items"}
+                      </span>
                     )}
                   </div>
 
-                  <div className="space-y-1 my-1 overflow-y-auto max-h-[75px]">
+                  <div className="space-y-1 my-1 overflow-y-auto max-h-[80px]">
                     {dayItems.map((item) => (
                       <div
                         key={item.id}
@@ -310,7 +381,9 @@ export default function CalendarPage() {
                         </div>
                         <div className="flex items-center justify-between text-[10px] text-[#86868b]">
                           <span>{item.platform}</span>
-                          <span className="capitalize text-[#1d1d1f]">{item.stage.replace("_", " ")}</span>
+                          <span className="capitalize text-[#1d1d1f]">
+                            {item.stage.replace("_", " ")}
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -322,14 +395,25 @@ export default function CalendarPage() {
         </div>
       ) : (
         /* Week View Grid */
-        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] overflow-hidden shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl overflow-hidden shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="grid grid-cols-7 border-b border-black/[0.08] bg-[#f5f5f7] text-center text-[12px] font-semibold text-[#6e6e73] py-3 divide-x divide-black/[0.06]">
             {weekDays.map((d, i) => {
-              const isToday = d.getDate() === 21 && d.getMonth() === 7 && d.getFullYear() === 2026;
+              const isToday =
+                d.getDate() === todayIST.day &&
+                d.getMonth() === todayIST.month &&
+                d.getFullYear() === todayIST.year;
               return (
                 <div key={i} className={`p-1 ${isToday ? "text-[#0071e3] font-bold" : ""}`}>
                   <div>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]}</div>
-                  <div className="text-[16px] font-bold text-[#1d1d1f] mt-0.5">{d.getDate()}</div>
+                  <div
+                    className={`text-[16px] font-bold mt-0.5 mx-auto ${
+                      isToday
+                        ? "flex h-7 w-7 items-center justify-center rounded-full bg-[#0071e3] text-white shadow-sm"
+                        : "text-[#1d1d1f]"
+                    }`}
+                  >
+                    {d.getDate()}
+                  </div>
                 </div>
               );
             })}
@@ -360,10 +444,14 @@ export default function CalendarPage() {
                         className="cursor-pointer rounded-xl border border-black/[0.08] bg-[#ffffff] p-2.5 hover:border-[#0071e3] transition space-y-1 shadow-xs"
                       >
                         <div className="flex items-center justify-between text-[10px] text-[#86868b]">
-                          <span className="rounded bg-[#f2f2f7] px-1.5 py-0.2 text-[#1d1d1f] font-medium">{item.platform}</span>
+                          <span className="rounded bg-[#f2f2f7] px-1.5 py-0.5 text-[#1d1d1f] font-medium">
+                            {item.platform}
+                          </span>
                           <span className="capitalize">{item.stage.replace("_", " ")}</span>
                         </div>
-                        <div className="font-semibold text-[#1d1d1f] truncate text-[12px]">{item.title}</div>
+                        <div className="font-semibold text-[#1d1d1f] truncate text-[12px]">
+                          {item.title}
+                        </div>
                       </div>
                     ))
                   )}
@@ -380,7 +468,7 @@ export default function CalendarPage() {
           <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
               <div>
-                <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Adjust Date & Reschedule</h3>
+                <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Adjust Date &amp; Reschedule</h3>
                 <p className="text-[12px] text-[#86868b]">Layer: {dateLayer.replace(/_/g, " ").toUpperCase()}</p>
               </div>
               <button
@@ -398,49 +486,57 @@ export default function CalendarPage() {
               </div>
 
               <div>
-                <label className="block text-[#1d1d1f] font-medium mb-1">New Target Date *</label>
+                <span className="text-[#86868b]">Platform &amp; Type:</span>
+                <div className="font-medium text-[#1d1d1f] mt-0.5">
+                  {selectedItemForReschedule.platform} • {selectedItemForReschedule.contentType}
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleRescheduleSubmit} className="space-y-4 pt-2">
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  New Date (YYYY-MM-DD)
+                </label>
                 <input
                   type="date"
                   value={newDateVal}
                   onChange={(e) => setNewDateVal(e.target.value)}
-                  className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3.5 py-2 text-[14px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                  required
                 />
               </div>
 
               <div>
-                <label className="block text-[#1d1d1f] font-medium mb-1">Reason for Rescheduling (Audited) *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Asset revised upon consultant request"
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Reason for Adjustment *
+                </label>
+                <textarea
                   value={rescheduleReason}
                   onChange={(e) => setRescheduleReason(e.target.value)}
-                  className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
+                  placeholder="e.g. Asset review delayed, aligned with client campaign date..."
+                  rows={2}
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-3 text-[13px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                  required
                 />
               </div>
-            </div>
 
-            <div className="flex items-center justify-between border-t border-black/[0.06] pt-3">
-              <Link
-                href={`/projects/${projectId}/content/${selectedItemForReschedule.id}`}
-                className="text-[13px] text-[#0066cc] hover:underline font-medium"
-              >
-                Open Workspace →
-              </Link>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-end gap-3 pt-2">
                 <button
+                  type="button"
                   onClick={() => setSelectedItemForReschedule(null)}
-                  className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
+                  className="rounded-full px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7]"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleSaveReschedule}
-                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
                 >
-                  Confirm Date
+                  Save Schedule Update
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
       )}
@@ -459,29 +555,34 @@ export default function CalendarPage() {
               </button>
             </div>
 
-            <div className="space-y-3 text-[13px]">
+            <form onSubmit={handleQuickCreateSubmit} className="space-y-3.5">
               <div>
-                <label className="block text-[#1d1d1f] font-medium mb-1">Title / Working Headline *</label>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Item Title *
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g. 3 Tips for High Retention"
                   value={quickTitle}
                   onChange={(e) => setQuickTitle(e.target.value)}
-                  className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
+                  placeholder="e.g. August Reel: Customer Testimonial"
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3.5 py-2 text-[14px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                  required
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1">Platform</label>
+                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                    Platform
+                  </label>
                   <select
                     value={quickPlatform}
                     onChange={(e) => setQuickPlatform(e.target.value as ContentPlatform)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
+                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
                   >
                     <option value="Instagram">Instagram</option>
-                    <option value="LinkedIn">LinkedIn</option>
                     <option value="Facebook">Facebook</option>
+                    <option value="LinkedIn">LinkedIn</option>
                     <option value="YouTube">YouTube</option>
                     <option value="X">X (Twitter)</option>
                     <option value="Email">Email</option>
@@ -489,62 +590,68 @@ export default function CalendarPage() {
                 </div>
 
                 <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1">Content Type</label>
+                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                    Content Type
+                  </label>
                   <select
                     value={quickType}
                     onChange={(e) => setQuickType(e.target.value as ContentType)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
+                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
                   >
+                    <option value="post">Standard Post</option>
                     <option value="carousel">Carousel</option>
-                    <option value="reel">Reel Video</option>
+                    <option value="reel">Reel / Short</option>
                     <option value="trial_reel">Trial Reel</option>
-                    <option value="post">Single Post</option>
                   </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1">Assign to Designer</label>
-                  <select
-                    value={quickAssigneeId}
-                    onChange={(e) => setQuickAssigneeId(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
-                  >
-                    {projectMembers.map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name} ({m.role.replace(/_/g, " ")})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1">Scheduled Target Date</label>
-                  <input
-                    type="date"
-                    value={quickDate}
-                    onChange={(e) => setQuickDate(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[#1d1d1f]"
-                  />
-                </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Scheduled Date
+                </label>
+                <input
+                  type="date"
+                  value={quickDate}
+                  onChange={(e) => setQuickDate(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3.5 py-2 text-[14px] text-[#1d1d1f] focus:outline-none"
+                  required
+                />
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-black/[0.06] pt-3">
-              <button
-                onClick={() => setIsQuickCreateOpen(false)}
-                className="rounded-full bg-[#f5f5f7] px-4 py-1.5 text-[13px] text-[#1d1d1f]"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateQuickItem}
-                className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
-              >
-                Create Item
-              </button>
-            </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Assign Designer / Lead
+                </label>
+                <select
+                  value={quickAssigneeId}
+                  onChange={(e) => setQuickAssigneeId(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
+                >
+                  {projectMembers.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name} ({m.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsQuickCreateOpen(false)}
+                  className="rounded-full px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
+                >
+                  Schedule Item
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

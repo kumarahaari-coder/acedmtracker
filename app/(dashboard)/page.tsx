@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Briefcase,
@@ -12,6 +13,7 @@ import {
   Clock,
   ExternalLink,
   Layers,
+  LogOut,
   Pause,
   Play,
   Sparkles,
@@ -25,6 +27,8 @@ export default function MyWorkDashboardPage() {
   const { state, pauseWorkSession, checkInAttendance, checkOutAttendance } = useAppState();
   const { activeRole, activeUserId, canApprove, setActiveProjectId } = useRole();
 
+  // Dynamic live IST date and time
+  const [liveISTTime, setLiveISTTime] = useState("");
   const todayDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -32,9 +36,60 @@ export default function MyWorkDashboardPage() {
     day: "2-digit",
   }).format(new Date());
 
+  useEffect(() => {
+    const updateTime = () => {
+      const formatted = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }).format(new Date());
+      setLiveISTTime(formatted);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const todayAttendance = state.attendanceRecords.find(
     (r) => r.userId === activeUserId && r.attendanceDate === todayDate
   );
+
+  // Attendance Submission State Guard (Anti-double click & inline feedback)
+  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
+  const [attendanceNotice, setAttendanceNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const handleCheckIn = () => {
+    if (isSubmittingAttendance) return;
+    setIsSubmittingAttendance(true);
+    setAttendanceNotice(null);
+
+    const res = checkInAttendance(activeUserId);
+    setIsSubmittingAttendance(false);
+
+    if (res.success) {
+      setAttendanceNotice({ type: "success", text: "Checked in successfully for today." });
+      setTimeout(() => setAttendanceNotice(null), 3000);
+    } else {
+      setAttendanceNotice({ type: "error", text: res.error || "Failed to record check in." });
+    }
+  };
+
+  const handleCheckOut = () => {
+    if (isSubmittingAttendance) return;
+    setIsSubmittingAttendance(true);
+    setAttendanceNotice(null);
+
+    const res = checkOutAttendance(activeUserId);
+    setIsSubmittingAttendance(false);
+
+    if (res.success) {
+      setAttendanceNotice({ type: "success", text: "Checked out successfully for today." });
+      setTimeout(() => setAttendanceNotice(null), 3000);
+    } else {
+      setAttendanceNotice({ type: "error", text: res.error || "Failed to record check out." });
+    }
+  };
 
   // Active running timer for current user
   const activeWorkSession = state.workSessions.find(
@@ -42,6 +97,9 @@ export default function MyWorkDashboardPage() {
   );
   const activeWorkItem = activeWorkSession
     ? state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)
+    : null;
+  const activeProject = activeWorkItem
+    ? state.projects.find((p) => p.id === activeWorkItem.projectId)
     : null;
 
   // Today's total tracked productive task seconds
@@ -95,10 +153,18 @@ export default function MyWorkDashboardPage() {
       state.founderOverrides
     );
     if (activeRole === "founder") {
-      return summary.copy.founder === "pending" || summary.creative.founder === "pending" || summary.posting_date.founder === "pending";
+      return (
+        summary.copy.founder === "pending" ||
+        summary.creative.founder === "pending" ||
+        summary.posting_date.founder === "pending"
+      );
     }
     if (activeRole === "consultant") {
-      return summary.copy.consultant === "pending" || summary.creative.consultant === "pending" || summary.posting_date.consultant === "pending";
+      return (
+        summary.copy.consultant === "pending" ||
+        summary.creative.consultant === "pending" ||
+        summary.posting_date.consultant === "pending"
+      );
     }
     return false;
   });
@@ -118,23 +184,23 @@ export default function MyWorkDashboardPage() {
     const deadline = i.deadlines.resubmissionDeadline || i.deadlines.submissionDeadline;
     if (!deadline) return false;
     const dueTime = new Date(deadline).getTime();
-    // Overdue or due within next 48 hours
     return dueTime < now.getTime() + 48 * 3600 * 1000;
   });
 
   return (
-    <div className="flex-1 p-8 sm:p-10 max-w-7xl mx-auto w-full space-y-8">
+    <div className="flex-1 p-8 sm:p-10 max-w-7xl mx-auto w-full space-y-8 animate-in fade-in">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3 border-b border-black/[0.06]">
         <div>
           <div className="flex items-center gap-2.5">
             <Briefcase className="h-7 w-7 text-[#0071e3]" />
-            <h1 className="text-[28px] sm:text-[36px] font-bold tracking-tight text-[#1d1d1f]">
+            <h1 className="text-[28px] sm:text-[34px] font-bold tracking-tight text-[#1d1d1f]">
               Cross-Project My Work
             </h1>
           </div>
           <p className="text-[14px] text-[#6e6e73] mt-1">
-            Personalized operational work queue across all accessible workspace projects.
+            Personalized operational queue and attendance presence for{" "}
+            <span className="font-semibold text-[#1d1d1f]">Asia/Kolkata (IST)</span>.
           </p>
         </div>
 
@@ -148,225 +214,233 @@ export default function MyWorkDashboardPage() {
         </div>
       </div>
 
-      {/* TODAY'S ATTENDANCE & EFFORT OVERVIEW (Phase 2.1) */}
-      <div className="bg-[#ffffff] border border-black/[0.08] rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
-        <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <Clock className="h-5 w-5 text-[#0071e3]" />
-            <h2 className="text-[16px] font-bold text-[#1d1d1f]">Today&apos;s Status (Asia/Kolkata)</h2>
-          </div>
-          <span className="text-[12px] text-[#86868b] font-medium">Date: {todayDate}</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* Attendance Box */}
-          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
-            <div>
-              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
-                Daily Attendance
-              </span>
-              <div className="mt-1">
-                {todayAttendance?.status === "checked_in" ? (
-                  <div>
-                    <span className="text-[18px] font-bold text-[#1f6f32] flex items-center gap-1.5">
-                      <CheckCircle2 className="h-4 w-4" /> Checked In
-                    </span>
-                    <span className="text-[12px] text-[#6e6e73]">
-                      Arrived at {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                  </div>
-                ) : todayAttendance?.status === "checked_out" ? (
-                  <div>
-                    <span className="text-[18px] font-bold text-[#9a6700]">
-                      Checked Out
-                    </span>
-                    <span className="text-[12px] text-[#6e6e73]">
-                      Ended at {new Date(todayAttendance.checkedOutAt || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                  </div>
-                ) : (
-                  <div>
-                    <span className="text-[18px] font-bold text-[#86868b]">
-                      Not Checked In
-                    </span>
-                    <span className="text-[12px] text-[#6e6e73]">
-                      Record your daily shift arrival
-                    </span>
-                  </div>
-                )}
+      {/* ATTENDANCE & WORK TIMER PANELS (Clean Apple Separation) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* 1. TODAY'S ATTENDANCE CARD */}
+        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[22px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-[#0071e3]" />
+                <h2 className="text-[16px] font-bold text-[#1d1d1f]">Today&apos;s Attendance</h2>
               </div>
-            </div>
 
-            <div>
               {todayAttendance?.status === "checked_in" ? (
-                <button
-                  onClick={() => checkOutAttendance(activeUserId)}
-                  className="w-full rounded-xl bg-[#fff0ee] hover:bg-[#ffd5d0] text-[#b42318] py-2 text-[12px] font-semibold transition"
-                >
-                  Check Out for the Day
-                </button>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Checked In
+                </span>
+              ) : todayAttendance?.status === "checked_out" ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#f2f2f7] text-[#6e6e73] border border-black/[0.06]">
+                  Checked Out
+                </span>
               ) : (
-                <button
-                  onClick={() => checkInAttendance(activeUserId)}
-                  className="w-full rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2 text-[12px] font-semibold shadow-sm transition"
-                >
-                  Check In Now
-                </button>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#fff8e6] text-[#9a6700] border border-[#f2e2a8]">
+                  Not Checked In
+                </span>
               )}
             </div>
-          </div>
 
-          {/* Tracked Work Today */}
-          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
-            <div>
-              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
-                Tracked Work Today
-              </span>
-              <div className="mt-1">
-                <span className="text-[26px] font-bold text-[#1d1d1f]">
-                  {todayHours}h {todayMins}m
-                </span>
-                <span className="text-[12px] text-[#6e6e73] block mt-0.5">
-                  Sum of verified task work sessions
-                </span>
-              </div>
-            </div>
-
-            <div className="text-[11px] text-[#86868b] bg-white p-2 rounded-xl border border-black/[0.04]">
-              Work sessions track task effort independently of attendance presence.
-            </div>
-          </div>
-
-          {/* Current Task Activity */}
-          <div className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] flex flex-col justify-between space-y-3">
-            <div>
-              <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">
-                Current Task
-              </span>
-              <div className="mt-1">
-                {activeWorkSession && activeWorkItem ? (
-                  <div>
-                    <span className="text-[14px] font-bold text-[#0066cc] truncate block">
-                      {activeWorkItem.title}
-                    </span>
-                    <span className="text-[12px] text-[#86868b] block">
-                      Platform: {activeWorkItem.platform}
-                    </span>
+            {/* Attendance Content */}
+            <div className="space-y-2">
+              {todayAttendance?.status === "checked_in" ? (
+                <div className="space-y-1">
+                  <div className="text-[20px] font-bold text-[#1d1d1f]">
+                    Checked in at{" "}
+                    {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </div>
+                  <div className="text-[13px] text-[#6e6e73] flex items-center gap-2">
+                    <span>Current Time: <strong>{liveISTTime || "—"}</strong></span>
+                    <span>• Status: Active Shift Presence</span>
+                  </div>
+                </div>
+              ) : todayAttendance?.status === "checked_out" ? (
+                <div className="space-y-1">
+                  <div className="text-[20px] font-bold text-[#1d1d1f]">
+                    Shift Completed for Today
+                  </div>
+                  <div className="text-[13px] text-[#6e6e73]">
+                    Recorded hours:{" "}
+                    {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}{" "}
+                    –{" "}
+                    {new Date(todayAttendance.checkedOutAt || "").toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="text-[18px] font-semibold text-[#1d1d1f]">
+                    You haven&apos;t checked in today.
+                  </div>
+                  <div className="text-[13px] text-[#6e6e73]">
+                    Confirm your daily shift presence in <strong className="text-[#1d1d1f]">Asia/Kolkata</strong>.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Feedback notice */}
+            {attendanceNotice && (
+              <div
+                className={`p-2.5 rounded-xl text-[12px] flex items-center gap-2 animate-in fade-in ${
+                  attendanceNotice.type === "success"
+                    ? "bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
+                    : "bg-[#fff0ee] text-[#b42318] border border-[#ffd5d0]"
+                }`}
+              >
+                {attendanceNotice.type === "success" ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
                 ) : (
-                  <div>
-                    <span className="text-[14px] font-medium text-[#86868b] block">
-                      No active task timer.
-                    </span>
-                    <span className="text-[12px] text-[#6e6e73] block">
-                      Open an assigned deliverable to start work.
-                    </span>
-                  </div>
+                  <AlertCircle className="h-4 w-4 shrink-0" />
                 )}
+                <span>{attendanceNotice.text}</span>
               </div>
+            )}
+          </div>
+
+          {/* Action Button */}
+          <div className="pt-2 border-t border-black/[0.04]">
+            {todayAttendance?.status === "checked_in" ? (
+              <button
+                onClick={handleCheckOut}
+                disabled={isSubmittingAttendance}
+                className="w-full rounded-xl bg-[#fff0ee] hover:bg-[#ffd5d0] text-[#b42318] py-2.5 text-[13px] font-semibold transition border border-[#ffd5d0] flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <LogOut className="h-4 w-4" /> Check Out for the Day
+              </button>
+            ) : todayAttendance?.status === "checked_out" ? (
+              <div className="text-center text-[12px] font-medium text-[#86868b] py-2 bg-[#fbfbfd] rounded-xl border border-black/[0.04]">
+                Shift presence closed. Thank you!
+              </div>
+            ) : (
+              <button
+                onClick={handleCheckIn}
+                disabled={isSubmittingAttendance}
+                className="w-full rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2.5 text-[13px] font-semibold shadow-sm transition flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <CheckCircle2 className="h-4 w-4" /> Check In Now
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 2. CURRENT TASK & WORK TIMER CARD */}
+        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[22px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
+              <div className="flex items-center gap-2">
+                <Timer className="h-5 w-5 text-[#0071e3]" />
+                <h2 className="text-[16px] font-bold text-[#1d1d1f]">Productivity Work Timer</h2>
+              </div>
+
+              {activeWorkSession ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6] animate-pulse">
+                  Timer Active
+                </span>
+              ) : (
+                <span className="text-[12px] font-semibold text-[#86868b] bg-[#f2f2f7] px-3 py-1 rounded-full">
+                  Timer Idle
+                </span>
+              )}
             </div>
 
-            {activeWorkSession && (
-              <div className="flex items-center gap-2">
+            {activeWorkSession && activeWorkItem ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-[#f0f7ff] text-[#0071e3]">
+                    {activeProject?.clientBrand || activeProject?.name || "Project"}
+                  </span>
+                  <span className="text-[12px] text-[#86868b]">{activeWorkItem.platform} • {activeWorkItem.contentType}</span>
+                </div>
+                <h3 className="text-[17px] font-bold text-[#1d1d1f] truncate">
+                  {activeWorkItem.title}
+                </h3>
+                <div className="text-[28px] font-mono font-bold text-[#0071e3] tracking-tight">
+                  {(() => {
+                    const elapsed =
+                      activeWorkSession.accumulatedSeconds +
+                      Math.max(
+                        0,
+                        Math.floor((Date.now() - Date.parse(activeWorkSession.activeSegmentStartedAt || "")) / 1000)
+                      );
+                    const hrs = Math.floor(elapsed / 3600);
+                    const mins = Math.floor((elapsed % 3600) / 60);
+                    const secs = elapsed % 60;
+                    if (hrs > 0) {
+                      return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                    }
+                    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                  })()}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-[18px] font-semibold text-[#1d1d1f]">
+                  No task timer running.
+                </div>
+                <div className="text-[13px] text-[#6e6e73]">
+                  Select an accepted assignment from below and click &quot;Start Work&quot; to begin tracking time.
+                </div>
+                <div className="pt-2 text-[13px] text-[#86868b]">
+                  Verified productive time today: <strong className="text-[#1d1d1f]">{todayHours}h {todayMins}m</strong>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 border-t border-black/[0.04]">
+            {activeWorkSession && activeWorkItem ? (
+              <div className="flex items-center gap-3">
                 <button
                   onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
-                  className="flex-1 rounded-xl bg-[#fff8e6] hover:bg-[#ffe082] text-[#9a6700] py-2 text-[12px] font-semibold transition"
+                  className="flex-1 rounded-xl bg-[#fff8e6] hover:bg-[#ffe082] text-[#9a6700] py-2.5 text-[13px] font-semibold transition flex items-center justify-center gap-1.5"
                 >
-                  Pause Timer
+                  <Pause className="h-4 w-4" /> Pause Timer
                 </button>
                 <Link
                   href={`/projects/${activeWorkSession.projectId}/content/${activeWorkSession.contentItemId}`}
-                  className="flex-1 text-center rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2 text-[12px] font-semibold transition shadow-sm"
+                  className="flex-1 text-center rounded-xl bg-[#1d1d1f] hover:bg-[#2d2d2f] text-white py-2.5 text-[13px] font-semibold transition shadow-sm flex items-center justify-center gap-1.5"
                 >
-                  Workspace →
+                  Open Workspace <ExternalLink className="h-3.5 w-3.5" />
                 </Link>
+              </div>
+            ) : (
+              <div className="text-[12px] text-[#86868b] text-center py-2 bg-[#fbfbfd] rounded-xl border border-black/[0.04]">
+                Task work sessions are independent from daily attendance presence.
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Active Work Session Live Banner (Phase 2) */}
-      {activeWorkSession && activeWorkItem && (
-        <div className="bg-[#1d1d1f] text-white rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in">
-          <div className="flex items-center gap-3.5">
-            <div className="h-10 w-10 rounded-full bg-[#34c759]/20 text-[#34c759] flex items-center justify-center font-bold shrink-0 animate-pulse">
-              <Timer className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider bg-[#34c759]/20 text-[#34c759] px-2 py-0.5 rounded-full">
-                  Tracking Live
-                </span>
-                <span className="text-[13px] text-[#86868b]">{activeWorkItem.platform}</span>
-              </div>
-              <h3 className="font-semibold text-[15px] text-white truncate max-w-lg mt-0.5">
-                {activeWorkItem.title}
-              </h3>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <span className="text-[11px] text-[#86868b] block">Elapsed Duration:</span>
-              <span className="text-[22px] font-mono font-bold text-white tracking-tight">
-                {(() => {
-                  const elapsed =
-                    activeWorkSession.accumulatedSeconds +
-                    Math.max(
-                      0,
-                      Math.floor((Date.now() - Date.parse(activeWorkSession.activeSegmentStartedAt || "")) / 1000)
-                    );
-                  const hrs = Math.floor(elapsed / 3600);
-                  const mins = Math.floor((elapsed % 3600) / 60);
-                  const secs = elapsed % 60;
-                  if (hrs > 0) {
-                    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-                  }
-                  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-                })()}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
-                className="flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-[13px] font-medium transition"
-              >
-                <Pause className="h-3.5 w-3.5" /> Pause
-              </button>
-              <Link
-                href={`/projects/${activeWorkSession.projectId}/content/${activeWorkSession.contentItemId}`}
-                className="flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white text-[13px] font-medium transition shadow-sm"
-              >
-                Open Workspace <ExternalLink className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Cross-Project Summary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="text-[13px] font-medium text-[#6e6e73]">Assigned To Me</div>
           <div className="text-[32px] font-bold text-[#1d1d1f] tracking-tight">{myAssignedItems.length}</div>
           <div className="text-[12px] text-[#86868b]">Deliverables under your ownership</div>
         </div>
 
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="text-[13px] font-medium text-[#6e6e73]">Awaiting My Review</div>
           <div className="text-[32px] font-bold text-[#9a6700] tracking-tight">{itemsNeedingReview.length}</div>
           <div className="text-[12px] text-[#86868b]">Pending your component decisions</div>
         </div>
 
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="text-[13px] font-medium text-[#6e6e73]">Open Change Requests</div>
           <div className="text-[32px] font-bold text-[#d70015] tracking-tight">{openChangeRequests.length}</div>
           <div className="text-[12px] text-[#86868b]">Requires Designer response</div>
         </div>
 
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="text-[13px] font-medium text-[#6e6e73]">Due Soon / Overdue</div>
           <div className="text-[32px] font-bold text-[#0071e3] tracking-tight">{urgentItems.length}</div>
           <div className="text-[12px] text-[#86868b]">Deadlines within 48 hours</div>
@@ -377,7 +451,7 @@ export default function MyWorkDashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Approvals Requiring Action (Founder / Consultant) */}
         {canApprove && (
-          <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+          <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
             <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-5 w-5 text-[#9a6700]" />
@@ -419,7 +493,7 @@ export default function MyWorkDashboardPage() {
         )}
 
         {/* Change Requests Requiring Action (Designer) */}
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-[#d70015]" />
@@ -453,7 +527,7 @@ export default function MyWorkDashboardPage() {
                       </span>
                     </div>
                     <div className="font-semibold text-[14px] text-[#1d1d1f] truncate">{item?.title}</div>
-                    <p className="text-[13px] text-[#6e6e73] line-clamp-1 italic">"{cr.requestedChange}"</p>
+                    <p className="text-[13px] text-[#6e6e73] line-clamp-1 italic">&quot;{cr.requestedChange}&quot;</p>
                   </Link>
                 );
               })
@@ -462,7 +536,7 @@ export default function MyWorkDashboardPage() {
         </div>
 
         {/* Assigned Deliverables */}
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
             <div className="flex items-center gap-2">
               <UserCheck className="h-5 w-5 text-[#0071e3]" />
@@ -503,7 +577,7 @@ export default function MyWorkDashboardPage() {
         </div>
 
         {/* Deadlines within 48 Hours */}
-        <div className="rounded-[20px] border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
             <div className="flex items-center gap-2">
               <Clock className="h-5 w-5 text-[#0071e3]" />

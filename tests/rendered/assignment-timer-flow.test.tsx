@@ -41,10 +41,8 @@ describe("Rendered Assignment Lifecycle & Work Timer Workflow", () => {
       </AppStateProvider>
     );
 
-    expect(screen.getByText(/Today's Status/i)).toBeDefined();
-    expect(screen.getByText(/Daily Attendance/i)).toBeDefined();
-    expect(screen.getByText(/Tracked Work Today/i)).toBeDefined();
-    expect(screen.getByText(/Current Task/i)).toBeDefined();
+    expect(screen.getByText(/Today's Attendance/i)).toBeDefined();
+    expect(screen.getByText(/Productivity Work Timer/i)).toBeDefined();
   });
 
   it("handles Check-In and Check-Out button clicks on My Work dashboard", async () => {
