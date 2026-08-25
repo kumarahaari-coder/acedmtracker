@@ -271,12 +271,31 @@ interface AppStateContextType {
     allowedMetricKeys: string[];
     actorUserId: string;
   }) => { success: boolean; error?: string };
+  addClientToProject: (params: {
+    name: string;
+    email: string;
+    jobTitle?: string;
+    phone?: string;
+    projectId: string;
+    actorUserId: string;
+  }) => { success: boolean; user?: User; membership?: ProjectMembership; error?: string };
   createClientUserAndAssign: (params: {
     name: string;
     email: string;
     projectId: string;
     actorUserId: string;
   }) => { success: boolean; user?: User; membership?: ProjectMembership; error?: string };
+  revokeClientAccess: (params: {
+    projectId: string;
+    userId: string;
+    actorUserId: string;
+    reason?: string;
+  }) => { success: boolean; error?: string };
+  reactivateClientAccess: (params: {
+    projectId: string;
+    userId: string;
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
   // Notifications
   markNotificationRead: (notifId: string) => void;
 }
@@ -2688,31 +2707,72 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const createClientUserAndAssign = (params: {
+  const addClientToProject = (params: {
     name: string;
     email: string;
+    jobTitle?: string;
+    phone?: string;
     projectId: string;
     actorUserId: string;
   }): { success: boolean; user?: User; membership?: ProjectMembership; error?: string } => {
+    // 1. Permission check
+    const actorUser = state.users.find((u) => u.id === params.actorUserId);
+    if (!actorUser) return { success: false, error: "Actor user not found." };
+
+    if (actorUser.role === "designer" || actorUser.role === "client") {
+      return {
+        success: false,
+        error: "Unauthorized: Designers and Clients cannot manage Client accounts.",
+      };
+    }
+
+    if (actorUser.role === "consultant") {
+      const hasMembership = state.projectMemberships.some(
+        (m) => m.projectId === params.projectId && m.userId === params.actorUserId && m.status === "active"
+      );
+      if (!hasMembership) {
+        return {
+          success: false,
+          error: "Unauthorized: Consultants can only manage client access for assigned projects.",
+        };
+      }
+    }
+
     const project = state.projects.find((p) => p.id === params.projectId);
     if (!project) return { success: false, error: "Project not found." };
 
-    const existingUser = state.users.find((u) => u.email.toLowerCase() === params.email.toLowerCase());
-    const now = new Date().toISOString();
+    const cleanEmail = params.email.trim().toLowerCase();
+    const cleanName = params.name.trim();
 
+    if (!cleanEmail || !cleanName) {
+      return { success: false, error: "Name and Email are required." };
+    }
+
+    // 2. Email collision check with internal team members
+    const existingUser = state.users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (existingUser && existingUser.role !== "client") {
+      return {
+        success: false,
+        error: `This email (${params.email}) is already registered as an internal team member (${existingUser.role}). Internal employee accounts cannot be added as clients.`,
+      };
+    }
+
+    const now = new Date().toISOString();
     let clientUser: User;
     let newUsers = [...state.users];
 
     if (existingUser) {
+      // Existing client user found
       clientUser = existingUser;
     } else {
+      // Create new client user
       clientUser = {
         id: "u_client_" + Math.random().toString(36).substr(2, 9),
-        name: params.name.trim(),
-        email: params.email.trim(),
-        avatar: params.name.charAt(0).toUpperCase() || "C",
+        name: cleanName,
+        email: cleanEmail,
+        avatar: cleanName.charAt(0).toUpperCase() || "C",
         role: "client",
-        jobTitle: "Client Representative",
+        jobTitle: params.jobTitle?.trim() || "Client Contact",
         status: "active",
         dateJoined: now.split("T")[0],
         createdByUserId: params.actorUserId,
@@ -2722,6 +2782,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       newUsers = [clientUser, ...newUsers];
     }
 
+    // 3. ProjectMembership handling
     const existingMembership = state.projectMemberships.find(
       (m) => m.projectId === params.projectId && m.userId === clientUser.id
     );
@@ -2730,10 +2791,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     let newMemberships = [...state.projectMemberships];
 
     if (existingMembership) {
+      if (existingMembership.status === "active") {
+        return {
+          success: false,
+          error: `Client '${clientUser.name}' already has active access to this project.`,
+        };
+      }
+      // Reactivate membership
       membership = {
         ...existingMembership,
         status: "active",
         membershipRole: "client",
+        addedByUserId: params.actorUserId,
+        addedAt: now,
         removedAt: undefined,
       };
       newMemberships = newMemberships.map((m) => (m.id === existingMembership.id ? membership : m));
@@ -2753,10 +2823,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const audit = createAuditEntry(
       params.projectId,
       params.actorUserId,
-      "create_client_access",
+      existingUser ? "add_existing_client_access" : "create_client_access",
       "project_membership",
       membership.id,
-      `Granted Client Portal access for '${clientUser.name}' (${clientUser.email})`
+      `Granted Client Portal access for '${clientUser.name}' (${clientUser.email}) on project '${project.name}'`
     );
 
     setState((prev) => ({
@@ -2767,6 +2837,145 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }));
 
     return { success: true, user: clientUser, membership };
+  };
+
+  const createClientUserAndAssign = (params: {
+    name: string;
+    email: string;
+    projectId: string;
+    actorUserId: string;
+  }) => {
+    return addClientToProject(params);
+  };
+
+  const revokeClientAccess = (params: {
+    projectId: string;
+    userId: string;
+    actorUserId: string;
+    reason?: string;
+  }): { success: boolean; error?: string } => {
+    const actorUser = state.users.find((u) => u.id === params.actorUserId);
+    if (!actorUser) return { success: false, error: "Actor user not found." };
+
+    if (actorUser.role === "designer" || actorUser.role === "client") {
+      return {
+        success: false,
+        error: "Unauthorized: Designers and Clients cannot revoke client access.",
+      };
+    }
+
+    if (actorUser.role === "consultant") {
+      const hasMembership = state.projectMemberships.some(
+        (m) => m.projectId === params.projectId && m.userId === params.actorUserId && m.status === "active"
+      );
+      if (!hasMembership) {
+        return {
+          success: false,
+          error: "Unauthorized: Consultants can only manage client access for assigned projects.",
+        };
+      }
+    }
+
+    const membership = state.projectMemberships.find(
+      (m) => m.projectId === params.projectId && m.userId === params.userId && m.status === "active"
+    );
+    if (!membership) {
+      return { success: false, error: "Active client project membership not found." };
+    }
+
+    const clientUser = state.users.find((u) => u.id === params.userId);
+    const now = new Date().toISOString();
+
+    const updatedMembership: ProjectMembership = {
+      ...membership,
+      status: "inactive",
+      removedAt: now,
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "revoke_client_access",
+      "project_membership",
+      membership.id,
+      `Revoked Client Portal access for '${clientUser?.name || params.userId}'`,
+      params.reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projectMemberships: prev.projectMemberships.map((m) =>
+        m.id === membership.id ? updatedMembership : m
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
+  };
+
+  const reactivateClientAccess = (params: {
+    projectId: string;
+    userId: string;
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const actorUser = state.users.find((u) => u.id === params.actorUserId);
+    if (!actorUser) return { success: false, error: "Actor user not found." };
+
+    if (actorUser.role === "designer" || actorUser.role === "client") {
+      return {
+        success: false,
+        error: "Unauthorized: Designers and Clients cannot manage client access.",
+      };
+    }
+
+    if (actorUser.role === "consultant") {
+      const hasMembership = state.projectMemberships.some(
+        (m) => m.projectId === params.projectId && m.userId === params.actorUserId && m.status === "active"
+      );
+      if (!hasMembership) {
+        return {
+          success: false,
+          error: "Unauthorized: Consultants can only manage client access for assigned projects.",
+        };
+      }
+    }
+
+    const membership = state.projectMemberships.find(
+      (m) => m.projectId === params.projectId && m.userId === params.userId
+    );
+    if (!membership) {
+      return { success: false, error: "Client project membership not found." };
+    }
+
+    const clientUser = state.users.find((u) => u.id === params.userId);
+    const now = new Date().toISOString();
+
+    const updatedMembership: ProjectMembership = {
+      ...membership,
+      status: "active",
+      addedByUserId: params.actorUserId,
+      addedAt: now,
+      removedAt: undefined,
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "reactivate_client_access",
+      "project_membership",
+      membership.id,
+      `Reactivated Client Portal access for '${clientUser?.name || params.userId}'`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projectMemberships: prev.projectMemberships.map((m) =>
+        m.id === membership.id ? updatedMembership : m
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
   };
 
   const markNotificationRead = (notifId: string) => {
@@ -2835,7 +3044,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         adjustAttendance,
         setClientVisibility,
         updateProjectClientAnalyticsConfig,
+        addClientToProject,
         createClientUserAndAssign,
+        revokeClientAccess,
+        reactivateClientAccess,
         markNotificationRead,
       }}
     >

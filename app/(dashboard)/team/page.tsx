@@ -69,8 +69,11 @@ export default function GlobalTeamPage() {
     day: "2-digit",
   }).format(new Date());
 
+  // Internal agency members (exclude client contacts)
+  const internalUsers = state.users.filter((u) => u.role !== "client");
+
   // Filtered employees
-  const filteredUsers = state.users.filter((u) => {
+  const filteredUsers = internalUsers.filter((u) => {
     const matchesSearch =
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -121,7 +124,7 @@ export default function GlobalTeamPage() {
               Organization Team
             </h1>
             <span className="bg-[#f5f5f7] border border-black/[0.08] text-[#1d1d1f] font-semibold text-[13px] px-3 py-0.5 rounded-full">
-              {state.users.length} Members
+              {internalUsers.length} Members
             </span>
           </div>
           <p className="text-[14px] text-[#6e6e73] mt-1">
