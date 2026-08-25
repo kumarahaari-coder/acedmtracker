@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderHook, act } from "@testing-library/react";
-import { AppStateProvider, useAppState } from "@/lib/context/AppStateContext";
-import { RoleProvider, useRole } from "@/lib/context/RoleContext";
+import { AppStateProvider, useAppState } from "../../lib/context/AppStateContext";
+import { RoleProvider, useRole } from "../../lib/context/RoleContext";
+import { ContentItem } from "../../lib/types";
 
 describe("Designer Permissions & Date Protection", () => {
   it("rejects Designer attempts to modify publishing dates or update publication details", () => {
@@ -13,12 +14,11 @@ describe("Designer Permissions & Date Protection", () => {
         return { appState, role };
       },
       {
-        wrapper: ({ children }: { children: React.ReactNode }) =>
-          React.createElement(
-            AppStateProvider,
-            null,
-            React.createElement(RoleProvider, null, children)
-          ),
+        wrapper: ({ children }: { children: React.ReactNode }) => (
+          <AppStateProvider>
+            <RoleProvider>{children}</RoleProvider>
+          </AppStateProvider>
+        ),
       }
     );
 
@@ -30,7 +30,7 @@ describe("Designer Permissions & Date Protection", () => {
 
     const designerId = result.current.role.activeUserId;
     const testItemId = result.current.appState.state.contentItems[0].id;
-    const originalItem = result.current.appState.state.contentItems.find((i) => i.id === testItemId)!;
+    const originalItem = result.current.appState.state.contentItems.find((i: ContentItem) => i.id === testItemId)!;
     const originalDate = originalItem.deadlines.scheduledPublicationDate;
 
     // Designer attempts to change scheduled_publication deadline
@@ -44,7 +44,7 @@ describe("Designer Permissions & Date Protection", () => {
       });
     });
 
-    const afterItem = result.current.appState.state.contentItems.find((i) => i.id === testItemId)!;
+    const afterItem = result.current.appState.state.contentItems.find((i: ContentItem) => i.id === testItemId)!;
     expect(afterItem.deadlines.scheduledPublicationDate).toBe(originalDate);
 
     // Designer attempts updatePublicationDetails
