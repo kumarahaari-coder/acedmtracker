@@ -1,4 +1,4 @@
-import { db } from "../db";
+import { db, runTransaction } from "../db";
 import {
   contentGroups,
   contentItems,
@@ -139,7 +139,7 @@ export async function createContentGroupAction(params: {
 
   // Run in single atomic transaction
   try {
-    const result = await db.transaction(async (tx) => {
+    const result = await runTransaction(async (tx) => {
       // 1. Insert Group
       const [group] = await tx
         .insert(contentGroups)
@@ -304,7 +304,7 @@ export async function submitVersionAction(params: {
   const now = new Date();
 
   // Freeze version and advance contentItem stage in transaction
-  const result = await db.transaction(async (tx) => {
+  const result = await runTransaction(async (tx) => {
     const [frozen] = await tx
       .update(submissionVersions)
       .set({
@@ -343,7 +343,7 @@ export async function createNewVersionDraftAction(params: {
   const resolvedItemId = await resolveContentItemId(contentItemId);
   if (!resolvedItemId) return { success: false, error: "Content item not found." };
 
-  return db.transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     // 1. Lock parent ContentItem row for update
     const [item] = await tx
       .select()

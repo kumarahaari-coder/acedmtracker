@@ -1,5 +1,5 @@
 -- ============================================================================
--- AceCore Phase B — Milestone 2 Production Migration (Additive)
+-- AceCore Phase B — Milestone 2 Production Migration (Additive & Hardened)
 -- Content: ContentGroups, ContentItems, SubmissionVersions, CreativeAssets, SubmissionAssets
 -- Target Runtime: PostgreSQL 16+ (Neon Serverless) with RLS & app_user Role
 -- ============================================================================
@@ -130,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_submission_assets_version ON submission_assets(su
 CREATE INDEX IF NOT EXISTS idx_submission_assets_asset ON submission_assets(creative_asset_id);
 
 -- ============================================================================
--- Triggers: Enforce Submitted Version Immutability
+-- Triggers: Enforce Submitted Version & Asset Attachment Immutability
 -- ============================================================================
 CREATE OR REPLACE FUNCTION trg_prevent_submitted_version_mutation()
 RETURNS TRIGGER AS $$
@@ -157,6 +157,38 @@ CREATE TRIGGER check_submitted_version_immutable
 BEFORE UPDATE ON submission_versions
 FOR EACH ROW
 EXECUTE FUNCTION trg_prevent_submitted_version_mutation();
+
+-- Trigger: Prevent mutating or deleting assets attached to submitted versions
+CREATE OR REPLACE FUNCTION trg_prevent_submitted_submission_assets_mutation()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_is_draft BOOLEAN;
+BEGIN
+  -- For UPDATE or DELETE, check OLD record's submission version
+  IF TG_OP = 'DELETE' OR TG_OP = 'UPDATE' THEN
+    SELECT is_draft INTO v_is_draft FROM submission_versions WHERE id = OLD.submission_version_id;
+    IF v_is_draft = false THEN
+      RAISE EXCEPTION 'Immutable Submission: Cannot modify or delete assets attached to a submitted version.';
+    END IF;
+  END IF;
+
+  -- For INSERT, check NEW record's submission version
+  IF TG_OP = 'INSERT' THEN
+    SELECT is_draft INTO v_is_draft FROM submission_versions WHERE id = NEW.submission_version_id;
+    IF v_is_draft = false THEN
+      RAISE EXCEPTION 'Immutable Submission: Cannot attach assets to an already submitted version.';
+    END IF;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS check_submission_assets_immutable ON submission_assets;
+CREATE TRIGGER check_submission_assets_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON submission_assets
+FOR EACH ROW
+EXECUTE FUNCTION trg_prevent_submitted_submission_assets_mutation();
 
 -- ============================================================================
 -- Row-Level Security (RLS) Policies (Milestone 2 Tables)

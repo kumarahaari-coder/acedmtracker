@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { creativeAssets, submissionAssets, submissionVersions, contentItems, projects } from "../db/schema";
+import { creativeAssets, submissionAssets, submissionVersions, contentItems, projects, projectMemberships } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveProjectId } from "../compat/resolver";
@@ -173,19 +173,23 @@ export async function getAuthorizedAssetDownloadUrlAction(params: {
       return { success: false, error: "Unauthorized: You do not have access to this project's assets." };
     }
   } else {
-    // Client user: Evaluate full client eligibility chain
+    // Client user: Evaluate full client eligibility chain:
+    // Asset -> SubmissionAsset -> SubmissionVersion (is_draft = false) -> ContentItem (client_visible = true) -> ProjectMembership (active client membership on this project)
     const clientEligible = await db
       .select({ id: submissionAssets.id })
       .from(submissionAssets)
       .innerJoin(submissionVersions, eq(submissionAssets.submissionVersionId, submissionVersions.id))
       .innerJoin(contentItems, eq(submissionVersions.contentItemId, contentItems.id))
+      .innerJoin(projectMemberships, eq(contentItems.projectId, projectMemberships.projectId))
       .where(
         and(
           eq(submissionAssets.creativeAssetId, asset.id),
           eq(submissionVersions.isDraft, false),
           eq(contentItems.clientVisible, true),
           eq(contentItems.status, "active"),
-          eq(contentItems.projectId, asset.projectId)
+          eq(contentItems.projectId, asset.projectId),
+          eq(projectMemberships.userId, actor.id),
+          eq(projectMemberships.status, "active")
         )
       )
       .limit(1);
