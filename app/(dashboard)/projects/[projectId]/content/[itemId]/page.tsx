@@ -1050,75 +1050,78 @@ export default function ContentItemWorkspacePage() {
         <div className="lg:col-span-5 bg-[#ffffff] p-8 space-y-6 overflow-y-auto max-h-[calc(100vh-7.5rem)]">
           {/* Creative Media Preview */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Creative Asset</h2>
-                <span className="text-[12px] text-[#86868b]">
-                  {currentVersion.creativeAssets.length} file(s) attached
+                <h2 className="text-[15px] font-semibold text-[#1d1d1f] tracking-tight">Creative Asset</h2>
+                <span className="rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#86868b]">
+                  {currentVersion.creativeAssets.length} file{currentVersion.creativeAssets.length === 1 ? "" : "s"}
                 </span>
               </div>
 
-              {/* Upload & Link Buttons */}
-              <div className="flex items-center gap-2">
-                <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-3.5 py-1 text-[12px] font-medium shadow-sm transition">
-                  <Upload className="h-3.5 w-3.5" />
-                  <span>{currentVersion.creativeAssets.length > 0 ? "Replace Creative" : "+ Upload Creative / PDF"}</span>
-                  <input
-                    type="file"
-                    accept="image/*,video/*,application/pdf,.pdf"
-                    onChange={handleCreativeFileUpload}
-                    className="hidden"
-                  />
-                </label>
-                <button
-                  onClick={() => setIsDriveModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3 py-1 text-[12px] font-medium transition"
-                  title="Attach Cloud / Drive Link"
-                >
-                  <LinkIcon className="h-3.5 w-3.5 text-[#6e6e73]" /> Link Drive
-                </button>
-              </div>
+              {/* Top Action Buttons (shown when asset exists) */}
+              {currentVersion.creativeAssets.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <label className="cursor-pointer inline-flex items-center gap-1 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3 py-1 text-[12px] font-medium transition active:scale-[0.98]">
+                    <Upload className="h-3 w-3 text-[#0071e3]" />
+                    <span>Replace</span>
+                    <input
+                      type="file"
+                      accept="image/*,video/*,application/pdf,.pdf"
+                      onChange={handleCreativeFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <button
+                    onClick={() => setIsDriveModalOpen(true)}
+                    className="inline-flex items-center gap-1 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3 py-1 text-[12px] font-medium transition active:scale-[0.98]"
+                    title="Attach Cloud / Drive Link"
+                  >
+                    <LinkIcon className="h-3 w-3 text-[#6e6e73]" />
+                    <span>Drive Link</span>
+                  </button>
+                </div>
+              )}
             </div>
 
-            <div className="rounded-2xl border border-black/[0.08] bg-[#f5f5f7] p-2 overflow-hidden shadow-sm">
+            <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-3 shadow-xs">
               {currentVersion.creativeAssets.length > 0 ? (
                 <div className="space-y-2">
                   {currentVersion.creativeAssets[0].mimeType === "application/pdf" ||
                   currentVersion.creativeAssets[0].filename?.toLowerCase().endsWith(".pdf") ? (
                     /* PDF Document Preview Card */
-                    <div className="rounded-xl bg-white p-6 border border-black/[0.06] text-center space-y-3">
-                      <div className="mx-auto h-16 w-16 rounded-2xl bg-[#ffefef] text-[#d70015] flex items-center justify-center font-bold text-[18px] border border-[#ffd5d0]">
+                    <div className="rounded-xl bg-white p-6 border border-black/[0.04] text-center space-y-3 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+                      <div className="mx-auto h-14 w-14 rounded-2xl bg-[#ffefef] text-[#d70015] flex items-center justify-center font-bold text-[16px] border border-[#ffd5d0]">
                         PDF
                       </div>
                       <div>
-                        <div className="font-bold text-[15px] text-[#1d1d1f]">
+                        <div className="font-semibold text-[14px] text-[#1d1d1f] truncate max-w-sm mx-auto">
                           {currentVersion.creativeAssets[0].filename}
                         </div>
                         <div className="text-[12px] text-[#86868b] mt-0.5">
                           {(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB • Carousel Document
                         </div>
                       </div>
-                      <div className="flex items-center justify-center gap-3 pt-2">
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                         <a
                           href={currentVersion.creativeAssets[0].previewUrl}
                           download={currentVersion.creativeAssets[0].filename}
-                          className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-2 text-[12px] font-medium shadow-sm transition"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-3.5 py-1.5 text-[12px] font-medium shadow-xs transition active:scale-[0.98]"
                         >
-                          Download Original PDF
+                          <Download className="h-3.5 w-3.5" /> Download PDF
                         </a>
                         <a
                           href={currentVersion.creativeAssets[0].previewUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-4 py-2 text-[12px] font-medium transition"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3.5 py-1.5 text-[12px] font-medium transition active:scale-[0.98]"
                         >
-                          Preview Fullscreen
+                          <ExternalLink className="h-3.5 w-3.5 text-[#6e6e73]" /> Preview Fullscreen
                         </a>
                       </div>
                     </div>
                   ) : (
                     /* Standard Image / Video Preview */
-                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06] relative group">
+                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.04] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
                       <SafeImage
                         src={currentVersion.creativeAssets[0].previewUrl}
                         alt={currentVersion.creativeAssets[0].filename || "Creative Asset"}
@@ -1128,8 +1131,8 @@ export default function ContentItemWorkspacePage() {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between px-2 py-1 text-[12px] text-[#6e6e73]">
-                    <span className="font-medium truncate max-w-xs">
+                  <div className="flex items-center justify-between px-1.5 pt-1 text-[12px] text-[#6e6e73]">
+                    <span className="font-medium truncate max-w-[200px]">
                       {currentVersion.creativeAssets[0].filename}
                     </span>
                     <div className="flex items-center gap-3">
@@ -1147,20 +1150,21 @@ export default function ContentItemWorkspacePage() {
                   </div>
                 </div>
               ) : (
-                /* Empty State Upload Dropzone */
-                <div className="p-8 text-center space-y-3 bg-white/70 rounded-xl border border-dashed border-black/[0.12]">
-                  <div className="mx-auto h-12 w-12 rounded-2xl bg-[#f2f2f7] flex items-center justify-center text-[#0071e3]">
-                    <Upload className="h-6 w-6" />
+                /* Apple-style Empty Dropzone Card */
+                <div className="py-9 px-6 text-center space-y-3.5 bg-white rounded-xl border border-black/[0.04] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+                  <div className="mx-auto h-11 w-11 rounded-2xl bg-[#0071e3]/[0.08] text-[#0071e3] flex items-center justify-center border border-[#0071e3]/10">
+                    <Upload className="h-5 w-5" />
                   </div>
-                  <div>
-                    <div className="font-semibold text-[15px] text-[#1d1d1f]">No Creative Attached</div>
-                    <div className="text-[12px] text-[#86868b] mt-0.5 max-w-sm mx-auto">
+                  <div className="space-y-1">
+                    <h3 className="font-semibold text-[14px] text-[#1d1d1f]">No Creative Attached</h3>
+                    <p className="text-[12px] text-[#86868b] max-w-xs mx-auto leading-normal">
                       Upload images (PNG, JPG), video reels (MP4, MOV), or multi-page PDF documents for Carousels.
-                    </div>
+                    </p>
                   </div>
-                  <div className="flex items-center justify-center gap-3 pt-2">
-                    <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-2 text-[13px] font-semibold shadow-sm transition">
-                      <Upload className="h-4 w-4" /> Choose File to Upload
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-1.5 text-[12.5px] font-medium shadow-xs transition active:scale-[0.98]">
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>Choose File to Upload</span>
                       <input
                         type="file"
                         accept="image/*,video/*,application/pdf,.pdf"
@@ -1170,9 +1174,10 @@ export default function ContentItemWorkspacePage() {
                     </label>
                     <button
                       onClick={() => setIsDriveModalOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-white border border-black/[0.12] hover:bg-[#f5f5f7] text-[#1d1d1f] px-4 py-2 text-[13px] font-medium transition"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3.5 py-1.5 text-[12.5px] font-medium transition active:scale-[0.98]"
                     >
-                      <LinkIcon className="h-4 w-4 text-[#6e6e73]" /> Attach Drive Link
+                      <LinkIcon className="h-3.5 w-3.5 text-[#6e6e73]" />
+                      <span>Attach Drive Link</span>
                     </button>
                   </div>
                 </div>
