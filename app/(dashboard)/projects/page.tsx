@@ -18,10 +18,11 @@ import {
   Plus,
   Sparkles,
   Table as TableIcon,
+  Target,
   Users,
   X,
 } from "lucide-react";
-import { Project, ContentPlatform, ContentType } from "@/lib/types";
+import { Project, ContentPlatform, ContentType, ProjectEngagementModel, ProjectObjectiveConfig } from "@/lib/types";
 
 export default function ProjectsPortfolioPage() {
   const router = useRouter();
@@ -38,10 +39,24 @@ export default function ProjectsPortfolioPage() {
   const [newClientBrand, setNewClientBrand] = useState("");
   const [newScope, setNewScope] = useState("");
   const [newTimezone, setNewTimezone] = useState("Asia/Kolkata");
+  const [engagementModel, setEngagementModel] = useState<ProjectEngagementModel>("deliverable_based");
+
+  // Deliverable quotas
   const [targetPosts, setTargetPosts] = useState(12);
   const [targetCarousels, setTargetCarousels] = useState(6);
   const [targetReels, setTargetReels] = useState(8);
   const [targetTrialReels, setTargetTrialReels] = useState(2);
+
+  // Objective config
+  const [objectiveName, setObjectiveName] = useState("Primary Growth Objective");
+  const [objectiveMetric, setObjectiveMetric] = useState("Qualified Leads");
+  const [objectiveTarget, setObjectiveTarget] = useState(500);
+  const [objectiveUnit, setObjectiveUnit] = useState("leads");
+  const [objectiveTargetDate, setObjectiveTargetDate] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 3);
+    return d.toISOString().split("T")[0];
+  });
 
   const filteredProjects = state.projects.filter((p) => {
     if (filterStatus === "all") return true;
@@ -66,6 +81,18 @@ export default function ProjectsPortfolioPage() {
       .substring(0, 2)
       .toUpperCase();
 
+    const objectiveConfigData: ProjectObjectiveConfig | undefined =
+      engagementModel === "objective_based"
+        ? {
+            objectiveName: objectiveName.trim(),
+            metricName: objectiveMetric.trim(),
+            targetValue: Number(objectiveTarget),
+            currentValue: 0,
+            unit: objectiveUnit.trim(),
+            targetDate: objectiveTargetDate,
+          }
+        : undefined;
+
     const created = createProject({
       name: newProjectName,
       clientBrand: newClientBrand,
@@ -73,6 +100,8 @@ export default function ProjectsPortfolioPage() {
       scope: newScope || "Comprehensive marketing operations & social content delivery.",
       timezone: newTimezone,
       status: "active",
+      engagementModel,
+      objectiveConfig: objectiveConfigData,
       targetRequirements: {
         posts: Number(targetPosts),
         carousels: Number(targetCarousels),
@@ -91,7 +120,7 @@ export default function ProjectsPortfolioPage() {
   };
 
   return (
-    <div className="flex-1 bg-[#f5f5f7] min-h-screen py-10 px-6 sm:px-10">
+    <div className="flex-1 bg-[#f5f5f7] min-h-screen py-10 px-6 sm:px-10 animate-in fade-in">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Apple-style Page Title Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-2">
@@ -100,7 +129,7 @@ export default function ProjectsPortfolioPage() {
               Projects Portfolio
             </h1>
             <p className="text-[16px] text-[#6e6e73] font-normal">
-              Manage client brands, track quarterly target progress, and review marketing deliverables.
+              Manage client brands, track engagement model performance, and review marketing deliverables.
             </p>
           </div>
 
@@ -125,14 +154,39 @@ export default function ProjectsPortfolioPage() {
               </button>
             </div>
 
-            {/* Creation Wizard Button */}
+            {/* Filter Status Selector */}
+            <div className="flex items-center bg-[#ffffff] border border-black/[0.08] rounded-full p-1 shadow-sm text-[13px]">
+              <button
+                onClick={() => setFilterStatus("active")}
+                className={`px-3.5 py-1 rounded-full font-medium transition ${
+                  filterStatus === "active" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
+                }`}
+              >
+                Active
+              </button>
+              <button
+                onClick={() => setFilterStatus("archived")}
+                className={`px-3.5 py-1 rounded-full font-medium transition ${
+                  filterStatus === "archived" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
+                }`}
+              >
+                Archived
+              </button>
+              <button
+                onClick={() => setFilterStatus("all")}
+                className={`px-3.5 py-1 rounded-full font-medium transition ${
+                  filterStatus === "all" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
+                }`}
+              >
+                All
+              </button>
+            </div>
+
+            {/* Create Project Button */}
             {canCreateProjects && (
               <button
-                onClick={() => {
-                  setWizardStep(1);
-                  setIsWizardOpen(true);
-                }}
-                className="flex items-center gap-2 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-5 py-2 text-[14px] font-medium text-white shadow-sm transition"
+                onClick={() => setIsWizardOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-5 py-2 text-[14px] font-medium text-white shadow-sm transition"
               >
                 <Plus className="h-4 w-4" /> New Project
               </button>
@@ -140,38 +194,13 @@ export default function ProjectsPortfolioPage() {
           </div>
         </div>
 
-        {/* Portfolio Status Filter */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setFilterStatus("active")}
-            className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition ${
-              filterStatus === "active"
-                ? "bg-[#ffffff] text-[#1d1d1f] shadow-sm border border-black/[0.08]"
-                : "text-[#6e6e73] hover:text-[#1d1d1f]"
-            }`}
-          >
-            Active Projects ({state.projects.filter((p) => p.status === "active").length})
-          </button>
-          <button
-            onClick={() => setFilterStatus("archived")}
-            className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition ${
-              filterStatus === "archived"
-                ? "bg-[#ffffff] text-[#1d1d1f] shadow-sm border border-black/[0.08]"
-                : "text-[#6e6e73] hover:text-[#1d1d1f]"
-            }`}
-          >
-            Archived Projects ({state.projects.filter((p) => p.status === "archived").length})
-          </button>
-        </div>
-
-        {/* Projects Cards Layout */}
+        {/* Portfolio Content: Cards vs Table */}
         {viewLayout === "cards" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredProjects.map((project) => {
               const projectItems = state.contentItems.filter((i) => i.projectId === project.id);
-              const publishedCount = projectItems.filter((i) => i.stage === "published").length;
-              const inReviewCount = projectItems.filter((i) => i.stage === "in_review" || i.stage === "submitted").length;
-              const changesReqCount = projectItems.filter((i) => i.stage === "changes_requested").length;
+              const publishedItems = projectItems.filter((i) => i.stage === "published");
+              const inReviewItems = projectItems.filter((i) => i.stage === "in_review" || i.stage === "submitted");
 
               const totalTarget =
                 project.targetRequirements.posts +
@@ -179,72 +208,91 @@ export default function ProjectsPortfolioPage() {
                 project.targetRequirements.reels +
                 project.targetRequirements.trialReels;
 
-              const completionPct = totalTarget > 0 ? Math.min(100, Math.round((publishedCount / totalTarget) * 100)) : 0;
+              const isObjective = project.engagementModel === "objective_based";
+              const objective = project.objectiveConfig;
+
+              const completionPct = isObjective && objective && objective.targetValue > 0
+                ? Math.min(100, Math.round((objective.currentValue / objective.targetValue) * 100))
+                : totalTarget > 0
+                ? Math.min(100, Math.round((publishedItems.length / totalTarget) * 100))
+                : 0;
 
               return (
                 <div
                   key={project.id}
-                  className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col justify-between hover:shadow-[0_4px_16px_rgba(0,0,0,0.08)] transition space-y-6"
+                  className="bg-[#ffffff] border border-black/[0.08] rounded-[22px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-lg transition-all duration-200 flex flex-col justify-between space-y-6"
                 >
                   <div className="space-y-4">
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#f5f5f7] text-[#1d1d1f] font-bold text-[14px]">
-                          {project.avatar}
-                        </div>
-                        <div>
-                          <h2 className="text-[18px] font-semibold text-[#1d1d1f] tracking-tight line-clamp-1">
-                            {project.name}
-                          </h2>
-                          <p className="text-[13px] text-[#6e6e73] font-normal">{project.clientBrand}</p>
-                        </div>
-                      </div>
-
-                      {project.status === "archived" && (
-                        <span className="status-draft rounded-full px-2.5 py-0.5 text-[11px] font-medium">
-                          Archived
-                        </span>
-                      )}
+                    {/* Brand Badge & Timezone */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] font-semibold text-[#0066cc] uppercase tracking-wider">
+                        {project.clientBrand}
+                      </span>
+                      <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[11px] font-mono text-[#6e6e73]">
+                        {project.timezone}
+                      </span>
                     </div>
 
-                    <p className="text-[14px] text-[#6e6e73] line-clamp-2 leading-relaxed font-normal">
-                      {project.scope}
-                    </p>
+                    {/* Project Title & Scope */}
+                    <div>
+                      <h2 className="text-[20px] font-bold text-[#1d1d1f] tracking-tight">
+                        {project.name}
+                      </h2>
+                      <p className="text-[13px] text-[#6e6e73] line-clamp-2 mt-1">
+                        {project.scope}
+                      </p>
+                    </div>
 
-                    {/* Progress Bar */}
-                    <div className="space-y-2 pt-2">
-                      <div className="flex justify-between text-[13px]">
-                        <span className="font-medium text-[#1d1d1f]">Target Deliverables</span>
+                    {/* Engagement Model Badge */}
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                          isObjective
+                            ? "bg-[#1d1d1f] text-white"
+                            : "bg-[#eaf4ff] text-[#0071e3] border border-[#d0e5ff]"
+                        }`}
+                      >
+                        {isObjective ? <Target className="h-3 w-3" /> : <Layers className="h-3 w-3" />}
+                        {isObjective ? "Objective-Based" : "Deliverable-Based"}
+                      </span>
+                    </div>
+
+                    {/* Progress Bar & KPI */}
+                    <div className="space-y-2 pt-2 border-t border-black/[0.06]">
+                      <div className="flex items-center justify-between text-[13px]">
+                        <span className="text-[#6e6e73]">
+                          {isObjective ? "Objective Target Progress" : "Quarterly Deliverables"}
+                        </span>
                         <span className="font-semibold text-[#1d1d1f]">
-                          {publishedCount} / {totalTarget} ({completionPct}%)
+                          {isObjective && objective
+                            ? `${objective.currentValue} / ${objective.targetValue} ${objective.unit || ""}`
+                            : `${publishedItems.length} / ${totalTarget}`}
                         </span>
                       </div>
                       <div className="h-2 w-full rounded-full bg-[#f2f2f7] overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-[#0071e3] transition-all duration-300"
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            isObjective ? "bg-[#34c759]" : "bg-[#0071e3]"
+                          }`}
                           style={{ width: `${completionPct}%` }}
                         />
                       </div>
                     </div>
 
-                    {/* Operational Status Pills */}
-                    <div className="flex items-center gap-2 pt-1">
-                      {inReviewCount > 0 && (
-                        <span className="status-review rounded-full px-2.5 py-0.5 text-[12px] font-medium">
-                          {inReviewCount} in review
+                    {/* Operational Stats */}
+                    <div className="grid grid-cols-2 gap-3 pt-2 text-[12px]">
+                      <div className="p-2.5 rounded-xl bg-[#fbfbfd] border border-black/[0.04]">
+                        <span className="text-[#86868b] block">Total Deliverables</span>
+                        <span className="font-bold text-[#1d1d1f] text-[15px]">
+                          {projectItems.length}
                         </span>
-                      )}
-                      {changesReqCount > 0 && (
-                        <span className="status-changes rounded-full px-2.5 py-0.5 text-[12px] font-medium">
-                          {changesReqCount} changes req
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-[#fbfbfd] border border-black/[0.04]">
+                        <span className="text-[#86868b] block">In Review Queue</span>
+                        <span className="font-bold text-[#9a6700] text-[15px]">
+                          {inReviewItems.length}
                         </span>
-                      )}
-                      {inReviewCount === 0 && changesReqCount === 0 && (
-                        <span className="status-approved rounded-full px-2.5 py-0.5 text-[12px] font-medium">
-                          On track
-                        </span>
-                      )}
+                      </div>
                     </div>
                   </div>
 
@@ -283,7 +331,8 @@ export default function ProjectsPortfolioPage() {
               <table className="w-full text-left text-[13px] text-[#1d1d1f]">
                 <thead className="bg-[#f5f5f7] text-[#6e6e73] text-[12px] font-semibold border-b border-black/[0.08]">
                   <tr>
-                    <th className="p-4 pl-6">Project & Brand</th>
+                    <th className="p-4 pl-6">Project &amp; Brand</th>
+                    <th className="p-4">Model</th>
                     <th className="p-4">Timezone</th>
                     <th className="p-4">Target Progress</th>
                     <th className="p-4">Active Deliverables</th>
@@ -306,10 +355,17 @@ export default function ProjectsPortfolioPage() {
                           <div className="font-semibold text-[#1d1d1f]">{project.name}</div>
                           <div className="text-[12px] text-[#86868b]">{project.clientBrand}</div>
                         </td>
+                        <td className="p-4">
+                          <span className="inline-flex rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium capitalize">
+                            {project.engagementModel?.replace("_", "-") || "Deliverable-Based"}
+                          </span>
+                        </td>
                         <td className="p-4 text-[#6e6e73] font-mono text-[12px]">{project.timezone}</td>
                         <td className="p-4">
                           <span className="font-medium">
-                            {publishedCount} / {totalTarget} published
+                            {project.engagementModel === "objective_based" && project.objectiveConfig
+                              ? `${project.objectiveConfig.currentValue} / ${project.objectiveConfig.targetValue} ${project.objectiveConfig.unit || ""}`
+                              : `${publishedCount} / ${totalTarget} published`}
                           </span>
                         </td>
                         <td className="p-4 text-[#6e6e73]">{projectItems.length} total items</td>
@@ -356,7 +412,7 @@ export default function ProjectsPortfolioPage() {
                   <label className="block text-[#1d1d1f] font-medium mb-1.5">Project Name *</label>
                   <input
                     type="text"
-                    placeholder="e.g. Apple Health 2026 Brand Campaign"
+                    placeholder="e.g. Swarnika Farms 2026 Brand Campaign"
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
                     className="w-full rounded-xl border border-black/[0.12] bg-[#ffffff] p-3 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
@@ -367,7 +423,7 @@ export default function ProjectsPortfolioPage() {
                   <label className="block text-[#1d1d1f] font-medium mb-1.5">Client Brand Name *</label>
                   <input
                     type="text"
-                    placeholder="e.g. Apple Health"
+                    placeholder="e.g. Swarnika Farms"
                     value={newClientBrand}
                     onChange={(e) => setNewClientBrand(e.target.value)}
                     className="w-full rounded-xl border border-black/[0.12] bg-[#ffffff] p-3 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
@@ -375,7 +431,7 @@ export default function ProjectsPortfolioPage() {
                 </div>
 
                 <div>
-                  <label className="block text-[#1d1d1f] font-medium mb-1.5">Scope & Strategic Goals</label>
+                  <label className="block text-[#1d1d1f] font-medium mb-1.5">Scope &amp; Strategic Goals</label>
                   <textarea
                     rows={3}
                     placeholder="Describe content delivery objectives and platforms..."
@@ -387,7 +443,7 @@ export default function ProjectsPortfolioPage() {
               </div>
             )}
 
-            {/* Step 2: Timezone & Operating Hours */}
+            {/* Step 2: Timezone & Engagement Model */}
             {wizardStep === 2 && (
               <div className="space-y-4 text-[14px]">
                 <div>
@@ -403,54 +459,124 @@ export default function ProjectsPortfolioPage() {
                     <option value="Asia/Dubai">Asia/Dubai (GST)</option>
                   </select>
                 </div>
-                <p className="text-[13px] text-[#6e6e73]">
-                  All calendar deadlines, reminder notifications, and analytics timestamps will align with this timezone.
-                </p>
+
+                <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1.5">Engagement Model *</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEngagementModel("deliverable_based")}
+                      className={`p-3.5 rounded-xl border text-left transition ${
+                        engagementModel === "deliverable_based"
+                          ? "bg-[#eaf4ff] border-[#0071e3] text-[#0071e3]"
+                          : "bg-white border-black/[0.12] text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      <div className="font-bold text-[14px]">Deliverable-Based</div>
+                      <div className="text-[12px] opacity-80 mt-0.5">Fixed volume of posts, reels, and carousels</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEngagementModel("objective_based")}
+                      className={`p-3.5 rounded-xl border text-left transition ${
+                        engagementModel === "objective_based"
+                          ? "bg-[#eaf4ff] border-[#0071e3] text-[#0071e3]"
+                          : "bg-white border-black/[0.12] text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      <div className="font-bold text-[14px]">Objective-Based</div>
+                      <div className="text-[12px] opacity-80 mt-0.5">Tied to business goals (Leads, Revenue, App Installs)</div>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
-            {/* Step 3: Target Deliverables */}
+            {/* Step 3: Quotas or Objective Details */}
             {wizardStep === 3 && (
               <div className="space-y-4 text-[14px]">
-                <p className="text-[#6e6e73]">Define target quotas for the quarter:</p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[#1d1d1f] font-medium mb-1">Single Posts</label>
-                    <input
-                      type="number"
-                      value={targetPosts}
-                      onChange={(e) => setTargetPosts(Number(e.target.value))}
-                      className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[#1d1d1f] font-medium mb-1">Carousels</label>
-                    <input
-                      type="number"
-                      value={targetCarousels}
-                      onChange={(e) => setTargetCarousels(Number(e.target.value))}
-                      className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[#1d1d1f] font-medium mb-1">Reels (Standard)</label>
-                    <input
-                      type="number"
-                      value={targetReels}
-                      onChange={(e) => setTargetReels(Number(e.target.value))}
-                      className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[#1d1d1f] font-medium mb-1">Trial Reels</label>
-                    <input
-                      type="number"
-                      value={targetTrialReels}
-                      onChange={(e) => setTargetTrialReels(Number(e.target.value))}
-                      className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
-                    />
-                  </div>
-                </div>
+                {engagementModel === "deliverable_based" ? (
+                  <>
+                    <p className="text-[#6e6e73]">Define target quotas for the contract period:</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[#1d1d1f] font-medium mb-1">Single Posts</label>
+                        <input
+                          type="number"
+                          value={targetPosts}
+                          onChange={(e) => setTargetPosts(Number(e.target.value))}
+                          className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[#1d1d1f] font-medium mb-1">Carousels</label>
+                        <input
+                          type="number"
+                          value={targetCarousels}
+                          onChange={(e) => setTargetCarousels(Number(e.target.value))}
+                          className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[#1d1d1f] font-medium mb-1">Reels (Standard)</label>
+                        <input
+                          type="number"
+                          value={targetReels}
+                          onChange={(e) => setTargetReels(Number(e.target.value))}
+                          className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[#1d1d1f] font-medium mb-1">Trial Reels</label>
+                        <input
+                          type="number"
+                          value={targetTrialReels}
+                          onChange={(e) => setTargetTrialReels(Number(e.target.value))}
+                          className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[#6e6e73]">Configure business objective metrics:</p>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[#1d1d1f] font-medium mb-1">Objective Name *</label>
+                        <input
+                          type="text"
+                          value={objectiveName}
+                          onChange={(e) => setObjectiveName(e.target.value)}
+                          placeholder="e.g. Generate 500 Qualified Leads"
+                          className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[#1d1d1f] font-medium mb-1">Metric Target</label>
+                          <input
+                            type="number"
+                            value={objectiveTarget}
+                            onChange={(e) => setObjectiveTarget(Number(e.target.value))}
+                            className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[#1d1d1f] font-medium mb-1">Unit / Label</label>
+                          <input
+                            type="text"
+                            value={objectiveUnit}
+                            onChange={(e) => setObjectiveUnit(e.target.value)}
+                            placeholder="leads, registrations, INR"
+                            className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -463,7 +589,7 @@ export default function ProjectsPortfolioPage() {
                   <div>5. Approved (3-Component Matrix) → 6. Scheduled → 7. Published</div>
                 </div>
                 <p className="text-[12px] text-[#86868b]">
-                  Enforces independent Founder & Consultant gating for Copy, Creative, and Posting Date.
+                  Enforces independent Founder &amp; Consultant gating for Copy, Creative, and Posting Date.
                 </p>
               </div>
             )}
@@ -474,8 +600,13 @@ export default function ProjectsPortfolioPage() {
                 <div className="rounded-xl bg-[#f5f5f7] p-4 space-y-2 text-[13px]">
                   <div><strong>Project:</strong> {newProjectName}</div>
                   <div><strong>Client Brand:</strong> {newClientBrand}</div>
+                  <div><strong>Model:</strong> {engagementModel === "objective_based" ? "Objective-Based" : "Deliverable-Based"}</div>
                   <div><strong>Timezone:</strong> {newTimezone}</div>
-                  <div><strong>Target:</strong> {targetPosts + targetCarousels + targetReels + targetTrialReels} deliverables</div>
+                  {engagementModel === "deliverable_based" ? (
+                    <div><strong>Target:</strong> {targetPosts + targetCarousels + targetReels + targetTrialReels} deliverables</div>
+                  ) : (
+                    <div><strong>Objective:</strong> {objectiveName} ({objectiveTarget} {objectiveUnit})</div>
+                  )}
                 </div>
               </div>
             )}
@@ -503,7 +634,7 @@ export default function ProjectsPortfolioPage() {
                   onClick={handleFinishWizard}
                   className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-6 py-2 text-[14px] font-medium text-white shadow-sm transition"
                 >
-                  Create & Launch Project
+                  Create &amp; Launch Project
                 </button>
               )}
             </div>

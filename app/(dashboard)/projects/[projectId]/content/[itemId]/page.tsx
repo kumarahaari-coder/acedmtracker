@@ -651,9 +651,13 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             {/* Accept assignment action for assignee */}
-            {activeAssignment?.status === "assigned" && activeAssignment.assigneeUserId === activeUserId && (
+            {((activeAssignment?.status === "assigned" && (activeAssignment.assigneeUserId === activeUserId || !activeAssignment.assigneeUserId)) ||
+              (!activeAssignment && (item.accountableOwnerId === activeUserId || item.collaboratorIds.includes(activeUserId)))) && (
               <button
-                onClick={() => acceptContentAssignment(activeAssignment.id, activeUserId)}
+                onClick={() => {
+                  const targetAsgnId = activeAssignment?.id || ("asgn_" + Math.random().toString(36).substr(2, 9));
+                  acceptContentAssignment(targetAsgnId, activeUserId);
+                }}
                 className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] py-2 text-[12px] font-medium text-white shadow-sm transition"
               >
                 <CheckCircle2 className="h-3.5 w-3.5" /> Accept Deliverable Assignment
@@ -661,13 +665,15 @@ export default function ContentItemWorkspacePage() {
             )}
 
             {/* Start Work action for accepted assignee */}
-            {activeAssignment?.status === "accepted" && activeAssignment.assigneeUserId === activeUserId && !currentActiveSession && (
+            {((activeAssignment?.status === "accepted" || (!activeAssignment && item.accountableOwnerId === activeUserId)) &&
+              (activeAssignment?.assigneeUserId === activeUserId || item.accountableOwnerId === activeUserId) &&
+              !currentActiveSession) && (
               <button
                 onClick={() => {
                   const res = startWorkSession({
                     projectId,
                     contentItemId: item.id,
-                    assignmentId: activeAssignment.id,
+                    assignmentId: activeAssignment?.id || "",
                     userId: activeUserId,
                   });
                   if (!res.success && res.error) {
@@ -998,14 +1004,51 @@ export default function ContentItemWorkspacePage() {
             <div className="rounded-2xl border border-black/[0.08] bg-[#f5f5f7] p-2 overflow-hidden shadow-sm">
               {currentVersion.creativeAssets.length > 0 ? (
                 <div className="space-y-2">
-                  <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06]">
-                    <SafeImage
-                      src={currentVersion.creativeAssets[0].previewUrl}
-                      alt={currentVersion.creativeAssets[0].filename || "Creative Asset"}
-                      fallbackTitle={currentVersion.creativeAssets[0].filename || "Creative Asset"}
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
+                  {currentVersion.creativeAssets[0].mimeType === "application/pdf" ||
+                  currentVersion.creativeAssets[0].filename?.toLowerCase().endsWith(".pdf") ? (
+                    /* PDF Document Preview Card */
+                    <div className="rounded-xl bg-white p-6 border border-black/[0.06] text-center space-y-3">
+                      <div className="mx-auto h-16 w-16 rounded-2xl bg-[#ffefef] text-[#d70015] flex items-center justify-center font-bold text-[18px] border border-[#ffd5d0]">
+                        PDF
+                      </div>
+                      <div>
+                        <div className="font-bold text-[15px] text-[#1d1d1f]">
+                          {currentVersion.creativeAssets[0].filename}
+                        </div>
+                        <div className="text-[12px] text-[#86868b] mt-0.5">
+                          {(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB • Carousel Document
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-center gap-3 pt-2">
+                        <a
+                          href={currentVersion.creativeAssets[0].previewUrl}
+                          download={currentVersion.creativeAssets[0].filename}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-2 text-[12px] font-medium shadow-sm transition"
+                        >
+                          Download Original PDF
+                        </a>
+                        <a
+                          href={currentVersion.creativeAssets[0].previewUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-4 py-2 text-[12px] font-medium transition"
+                        >
+                          Preview Fullscreen
+                        </a>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Standard Image / Video Preview */
+                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06]">
+                      <SafeImage
+                        src={currentVersion.creativeAssets[0].previewUrl}
+                        alt={currentVersion.creativeAssets[0].filename || "Creative Asset"}
+                        fallbackTitle={currentVersion.creativeAssets[0].filename || "Creative Asset"}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between px-2 py-1 text-[12px] text-[#6e6e73]">
                     <span className="font-medium truncate max-w-xs">
                       {currentVersion.creativeAssets[0].filename}

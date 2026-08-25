@@ -14,15 +14,24 @@ import {
   X,
   Layers,
   Sparkles,
+  Lock,
 } from "lucide-react";
-import { ContentItem, ContentPlatform, ContentType, DeadlineKind } from "@/lib/types";
+import { ContentItem, ContentPlatform, ContentType, DeadlineKind, ScopeClassification } from "@/lib/types";
 import { formatDate, getCurrentISTDate } from "@/lib/formatters";
 
 export default function CalendarPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "proj_acme";
-  const { state, updateDeadline, createContentItem, updatePublicationDetails } = useAppState();
+  const {
+    state,
+    updateDeadline,
+    createContentItem,
+    createContentGroupWithItems,
+    updatePublicationDetails,
+  } = useAppState();
   const { activeRole, activeUserId } = useRole();
+
+  const isManagement = activeRole === "founder" || activeRole === "consultant" || activeRole === "admin";
 
   const [viewMode, setViewMode] = useState<"month" | "week">("month");
   const [dateLayer, setDateLayer] = useState<DeadlineKind>("scheduled_publication");
@@ -31,7 +40,6 @@ export default function CalendarPage() {
   const [todayIST, setTodayIST] = useState(() => getCurrentISTDate());
 
   useEffect(() => {
-    // Refresh today marker whenever component mounts or window gains focus
     setTodayIST(getCurrentISTDate());
     const onFocus = () => setTodayIST(getCurrentISTDate());
     window.addEventListener("focus", onFocus);
@@ -48,18 +56,19 @@ export default function CalendarPage() {
   const [newDateVal, setNewDateVal] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
 
-  // Quick Create Modal
+  // Multi-Platform Quick Create Modal
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
   const [quickTitle, setQuickTitle] = useState("");
-  const [quickPlatform, setQuickPlatform] = useState<ContentPlatform>("Instagram");
+  const [quickPlatforms, setQuickPlatforms] = useState<ContentPlatform[]>(["Instagram"]);
   const [quickType, setQuickType] = useState<ContentType>("carousel");
+  const [quickScope, setQuickScope] = useState<ScopeClassification>("contracted");
   const [quickDate, setQuickDate] = useState(() => todayIST.dateString);
   const [quickAssigneeId, setQuickAssigneeId] = useState("u_designer1");
 
   const project = state.projects.find((p) => p.id === projectId);
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
   const projectMembers = state.projectMemberships
-    .filter((m) => m.projectId === projectId)
+    .filter((m) => m.projectId === projectId && m.status === "active")
     .map((m) => {
       const user = state.users.find((u) => u.id === m.userId);
       return {
@@ -83,7 +92,6 @@ export default function CalendarPage() {
     if (dateLayer === "approval_target") return item.deadlines.approvalTarget;
     if (dateLayer === "actual_publication") return item.publishedAt;
     if (dateLayer === "scheduled_publication") {
-      // Historical Resolution Rule: Published items display historically at publishedAt; unpublished items at scheduledPublicationDate
       if (item.stage === "published" && item.publishedAt) {
         return item.publishedAt;
       }
@@ -142,9 +150,24 @@ export default function CalendarPage() {
     setCurrentDate(new Date(t.year, t.month, t.day));
   };
 
+  const handleItemClick = (item: ContentItem, dateStr: string) => {
+    if (!isManagement) {
+      // Designers can view item details in workspace but cannot reschedule
+      return;
+    }
+    setSelectedItemForReschedule(item);
+    setNewDateVal(dateStr);
+  };
+
   const handleRescheduleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedItemForReschedule || !newDateVal) return;
+
+    if (!isManagement) {
+      alert("Unauthorized: Designers cannot modify publishing or scheduled dates.");
+      setSelectedItemForReschedule(null);
+      return;
+    }
 
     if (dateLayer === "actual_publication") {
       updatePublicationDetails({
@@ -167,26 +190,56 @@ export default function CalendarPage() {
     setRescheduleReason("");
   };
 
+  const handleTogglePlatform = (p: ContentPlatform) => {
+    setQuickPlatforms((prev) =>
+      prev.includes(p) ? (prev.length > 1 ? prev.filter((x) => x !== p) : prev) : [...prev, p]
+    );
+  };
+
   const handleQuickCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickTitle.trim()) return;
+    if (!quickTitle.trim() || quickPlatforms.length === 0) return;
 
-    createContentItem({
-      projectId,
-      title: quickTitle.trim(),
-      platform: quickPlatform,
-      contentType: quickType,
-      stage: "draft",
-      accountableOwnerId: quickAssigneeId,
-      collaboratorIds: [],
-      deadlines: {
-        submissionDeadline: quickDate,
-        scheduledPublicationDate: quickDate,
-      },
-    });
+    if (!isManagement) {
+      alert("Unauthorized: Only management can create or schedule deliverables.");
+      return;
+    }
+
+    if (quickPlatforms.length > 1) {
+      // Multi-Platform: 1 ContentGroup + N platform-specific ContentItems + N ContentAssignments
+      createContentGroupWithItems({
+        projectId,
+        title: quickTitle.trim(),
+        actorUserId: activeUserId,
+        platforms: quickPlatforms.map((p) => ({
+          platform: p,
+          contentType: quickType,
+          accountableOwnerId: quickAssigneeId,
+          submissionDeadline: quickDate,
+          scheduledPublicationDate: quickDate,
+        })),
+      });
+    } else {
+      // Single Platform
+      createContentItem({
+        projectId,
+        title: quickTitle.trim(),
+        platform: quickPlatforms[0],
+        contentType: quickType,
+        stage: "draft",
+        accountableOwnerId: quickAssigneeId,
+        collaboratorIds: [],
+        deadlines: {
+          submissionDeadline: quickDate,
+          scheduledPublicationDate: quickDate,
+        },
+        scopeClassification: quickScope,
+      });
+    }
 
     setIsQuickCreateOpen(false);
     setQuickTitle("");
+    setQuickPlatforms(["Instagram"]);
   };
 
   return (
@@ -206,14 +259,21 @@ export default function CalendarPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsQuickCreateOpen(true)}
-            className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-2 text-[13px] font-medium text-white shadow-sm transition"
-          >
-            <Plus className="h-4 w-4" /> Quick Schedule Item
-          </button>
-        </div>
+        {/* Quick Schedule button: Available to Founder, Consultant, Admin */}
+        {isManagement ? (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsQuickCreateOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-2 text-[13px] font-medium text-white shadow-sm transition"
+            >
+              <Plus className="h-4 w-4" /> Quick Schedule Item
+            </button>
+          </div>
+        ) : (
+          <span className="text-[12px] text-[#86868b] bg-[#f2f2f7] px-3 py-1.5 rounded-full font-medium flex items-center gap-1.5">
+            <Lock className="h-3.5 w-3.5" /> Designer Schedule View (Read-Only)
+          </span>
+        )}
       </div>
 
       {/* Toolbar: Navigation, Today, View Mode, and Layer Selectors */}
@@ -301,7 +361,7 @@ export default function CalendarPage() {
             " — Published items dynamically resolve to their actual live date (publishedAt), while pending items stay at scheduledPublicationDate."}
         </span>
         <span className="text-[11px] text-[#86868b] font-medium">
-          Org Timezone: Asia/Kolkata
+          Org Timezone: Asia/Kolkata (IST)
         </span>
       </div>
 
@@ -331,7 +391,6 @@ export default function CalendarPage() {
                 return d.startsWith(dateStr);
               });
 
-              // Strict runtime IST Today match
               const isToday =
                 dayNum === todayIST.day &&
                 month === todayIST.month &&
@@ -365,17 +424,21 @@ export default function CalendarPage() {
                     {dayItems.map((item) => (
                       <div
                         key={item.id}
-                        onClick={() => {
-                          setSelectedItemForReschedule(item);
-                          setNewDateVal(dateStr);
-                        }}
-                        className="group cursor-pointer rounded-lg border border-black/[0.08] bg-[#ffffff] hover:border-[#0071e3] p-1.5 text-[11px] transition shadow-xs space-y-0.5"
+                        onClick={() => handleItemClick(item, dateStr)}
+                        className={`group rounded-lg border border-black/[0.08] bg-[#ffffff] p-1.5 text-[11px] transition shadow-xs space-y-0.5 ${
+                          isManagement ? "cursor-pointer hover:border-[#0071e3]" : "cursor-default"
+                        }`}
                       >
                         <div className="font-semibold text-[#1d1d1f] truncate flex items-center justify-between">
                           <span className="truncate">{item.title}</span>
-                          {item.contentType === "trial_reel" && (
-                            <span className="rounded bg-[#f2f2f7] text-[9px] px-1 text-[#0066cc] font-bold shrink-0">
-                              Trial
+                          {item.scopeClassification === "goodwill" && (
+                            <span className="rounded bg-[#eaf6ed] text-[9px] px-1 text-[#1f6f32] font-bold shrink-0">
+                              Goodwill
+                            </span>
+                          )}
+                          {item.scopeClassification === "additional_billable" && (
+                            <span className="rounded bg-[#f0f7ff] text-[9px] px-1 text-[#0071e3] font-bold shrink-0">
+                              Extra
                             </span>
                           )}
                         </div>
@@ -437,11 +500,10 @@ export default function CalendarPage() {
                     dayItems.map((item) => (
                       <div
                         key={item.id}
-                        onClick={() => {
-                          setSelectedItemForReschedule(item);
-                          setNewDateVal(dStr);
-                        }}
-                        className="cursor-pointer rounded-xl border border-black/[0.08] bg-[#ffffff] p-2.5 hover:border-[#0071e3] transition space-y-1 shadow-xs"
+                        onClick={() => handleItemClick(item, dStr)}
+                        className={`rounded-xl border border-black/[0.08] bg-[#ffffff] p-2.5 transition space-y-1 shadow-xs ${
+                          isManagement ? "cursor-pointer hover:border-[#0071e3]" : "cursor-default"
+                        }`}
                       >
                         <div className="flex items-center justify-between text-[10px] text-[#86868b]">
                           <span className="rounded bg-[#f2f2f7] px-1.5 py-0.5 text-[#1d1d1f] font-medium">
@@ -462,8 +524,8 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* Reschedule Confirmation Modal */}
-      {selectedItemForReschedule && (
+      {/* Reschedule Confirmation Modal (Management only) */}
+      {selectedItemForReschedule && isManagement && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
@@ -541,12 +603,15 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* Quick Create Modal */}
-      {isQuickCreateOpen && (
+      {/* Multi-Platform Quick Create Modal (Management only) */}
+      {isQuickCreateOpen && isManagement && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+          <div className="w-full max-w-lg rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
-              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Quick Schedule Item</h3>
+              <div>
+                <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Quick Schedule Multi-Platform Work</h3>
+                <p className="text-[12px] text-[#86868b]">Creates linked deliverables with authoritative assignments</p>
+              </div>
               <button
                 onClick={() => setIsQuickCreateOpen(false)}
                 className="rounded-full p-1 text-[#86868b] hover:text-[#1d1d1f]"
@@ -558,37 +623,46 @@ export default function CalendarPage() {
             <form onSubmit={handleQuickCreateSubmit} className="space-y-3.5">
               <div>
                 <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                  Item Title *
+                  Campaign / Concept Title *
                 </label>
                 <input
                   type="text"
                   value={quickTitle}
                   onChange={(e) => setQuickTitle(e.target.value)}
-                  placeholder="e.g. August Reel: Customer Testimonial"
+                  placeholder="e.g. Founder Story: Building Patient Trust"
                   className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3.5 py-2 text-[14px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
                   required
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                    Platform
-                  </label>
-                  <select
-                    value={quickPlatform}
-                    onChange={(e) => setQuickPlatform(e.target.value as ContentPlatform)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
-                  >
-                    <option value="Instagram">Instagram</option>
-                    <option value="Facebook">Facebook</option>
-                    <option value="LinkedIn">LinkedIn</option>
-                    <option value="YouTube">YouTube</option>
-                    <option value="X">X (Twitter)</option>
-                    <option value="Email">Email</option>
-                  </select>
+              {/* Multi-Platform Selector */}
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1.5">
+                  Target Platforms (Multi-Select) *
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["Instagram", "Facebook", "LinkedIn", "YouTube", "X", "Email"] as ContentPlatform[]).map((plat) => {
+                    const isSelected = quickPlatforms.includes(plat);
+                    return (
+                      <button
+                        type="button"
+                        key={plat}
+                        onClick={() => handleTogglePlatform(plat)}
+                        className={`p-2 rounded-xl text-[12px] font-semibold transition border flex items-center justify-between ${
+                          isSelected
+                            ? "bg-[#eaf4ff] text-[#0071e3] border-[#0071e3]"
+                            : "bg-[#fbfbfd] text-[#6e6e73] border-black/[0.08] hover:bg-[#f5f5f7]"
+                        }`}
+                      >
+                        <span>{plat}</span>
+                        {isSelected && <span>✓</span>}
+                      </button>
+                    );
+                  })}
                 </div>
+              </div>
 
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
                     Content Type
@@ -599,16 +673,31 @@ export default function CalendarPage() {
                     className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
                   >
                     <option value="post">Standard Post</option>
-                    <option value="carousel">Carousel</option>
+                    <option value="carousel">Carousel (PDF/Slides)</option>
                     <option value="reel">Reel / Short</option>
                     <option value="trial_reel">Trial Reel</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                    Scope Classification
+                  </label>
+                  <select
+                    value={quickScope}
+                    onChange={(e) => setQuickScope(e.target.value as ScopeClassification)}
+                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
+                  >
+                    <option value="contracted">Contracted (Agreed Scope)</option>
+                    <option value="goodwill">Goodwill (Value-Add Extra)</option>
+                    <option value="additional_billable">Additional Billable</option>
                   </select>
                 </div>
               </div>
 
               <div>
                 <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                  Scheduled Date
+                  Scheduled Date &amp; Deadline
                 </label>
                 <input
                   type="date"
@@ -648,7 +737,7 @@ export default function CalendarPage() {
                   type="submit"
                   className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
                 >
-                  Schedule Item
+                  Schedule {quickPlatforms.length} Deliverables
                 </button>
               </div>
             </form>

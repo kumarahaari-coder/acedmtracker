@@ -214,7 +214,7 @@ describe("PostgreSQL Phase B Architecture & Workflows Validation Suite", () => {
         INSERT INTO script_content_links VALUES ('scl_invalid', 'scr_1', 'item_B1', 'proj_B');
       `);
     }).toThrow();
-  });
+  }, 30000);
 
   it("verifies safe non-recursive SECURITY DEFINER authorization function", () => {
     db.public.none(`

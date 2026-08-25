@@ -55,9 +55,7 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
   const handleProjectSwitch = (newProjectId: string) => {
     setActiveProjectId(newProjectId);
     setIsProjectDropdownOpen(false);
-    if (pathname.startsWith("/projects/")) {
-      router.push(`/projects/${newProjectId}`);
-    }
+    router.push(`/projects/${newProjectId}`);
   };
 
   const roles: { role: UserRole; label: string; desc: string }[] = [

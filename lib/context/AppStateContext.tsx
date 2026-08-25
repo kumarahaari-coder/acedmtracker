@@ -36,6 +36,7 @@ import {
   ContentType,
   AttendanceRecord,
   AttendanceCorrection,
+  ProjectObjectiveConfig,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
 import { getInitialDeterministicState } from "../mockData";
@@ -48,6 +49,11 @@ interface AppStateContextType {
   resetAllData: () => void;
   // Project & Campaign Actions
   createProject: (project: Omit<Project, "id" | "createdAt">) => Project;
+  updateProjectObjective: (params: {
+    projectId: string;
+    updates: Partial<ProjectObjectiveConfig>;
+    actorUserId: string;
+  }) => { success: boolean; error?: string };
   archiveProject: (projectId: string, reason?: string) => void;
   restoreProject: (projectId: string) => void;
   createCampaign: (campaign: Omit<Campaign, "id">) => Campaign;
@@ -369,6 +375,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const newProject: Project = {
       ...projectData,
       id: newId,
+      engagementModel: projectData.engagementModel || "deliverable_based",
       createdAt: new Date().toISOString(),
     };
     const audit = createAuditEntry(newId, "u_founder", "create_project", "project", newId, `Created project '${newProject.name}'`);
@@ -378,6 +385,50 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       auditRecords: [audit, ...prev.auditRecords],
     }));
     return newProject;
+  };
+
+  const updateProjectObjective = (params: {
+    projectId: string;
+    updates: Partial<ProjectObjectiveConfig>;
+    actorUserId: string;
+  }): { success: boolean; error?: string } => {
+    const proj = state.projects.find((p) => p.id === params.projectId);
+    if (!proj) return { success: false, error: "Project not found" };
+
+    const updatedObjective: ProjectObjectiveConfig = {
+      objectiveName: params.updates.objectiveName || proj.objectiveConfig?.objectiveName || "Primary Campaign Goal",
+      metricName: params.updates.metricName || proj.objectiveConfig?.metricName || "Metric Target",
+      targetValue: params.updates.targetValue !== undefined ? params.updates.targetValue : (proj.objectiveConfig?.targetValue || 100),
+      currentValue: params.updates.currentValue !== undefined ? params.updates.currentValue : (proj.objectiveConfig?.currentValue || 0),
+      startDate: params.updates.startDate || proj.objectiveConfig?.startDate,
+      targetDate: params.updates.targetDate || proj.objectiveConfig?.targetDate,
+      unit: params.updates.unit || proj.objectiveConfig?.unit,
+      notes: params.updates.notes || proj.objectiveConfig?.notes,
+    };
+
+    const audit = createAuditEntry(
+      params.projectId,
+      params.actorUserId,
+      "update_project_objective",
+      "project",
+      params.projectId,
+      `Updated objective progress: ${updatedObjective.currentValue} / ${updatedObjective.targetValue} (${updatedObjective.metricName})`
+    );
+
+    setState((prev) => ({
+      ...prev,
+      projects: prev.projects.map((p) =>
+        p.id === params.projectId
+          ? {
+              ...p,
+              objectiveConfig: updatedObjective,
+            }
+          : p
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    return { success: true };
   };
 
   const archiveProject = (projectId: string, reason?: string) => {
@@ -452,6 +503,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       id: newId,
       currentVersionNumber: 1,
       activeDraftVersionId: v1Id,
+      scopeClassification: itemData.scopeClassification || "contracted",
     };
 
     const audit = createAuditEntry(
@@ -474,9 +526,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date().toISOString(),
     };
 
+    // Authoritative ContentAssignment creation
+    const assignment: ContentAssignment = {
+      id: "asgn_" + Math.random().toString(36).substr(2, 9),
+      projectId: itemData.projectId,
+      contentItemId: newId,
+      assigneeUserId: itemData.accountableOwnerId,
+      assignmentRole: "designer",
+      status: "assigned",
+      assignedByUserId: itemData.accountableOwnerId,
+      assignedAt: new Date().toISOString(),
+      initialDueAt: itemData.deadlines.submissionDeadline || new Date().toISOString(),
+      currentDueAt: itemData.deadlines.submissionDeadline || new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
     setState((prev) => ({
       ...prev,
       contentItems: [...prev.contentItems, newItem],
+      contentAssignments: [...prev.contentAssignments, assignment],
       submissionVersions: [...prev.submissionVersions, v1],
       deadlineRecords: [...prev.deadlineRecords, deadlineRec],
       auditRecords: [audit, ...prev.auditRecords],
@@ -1099,7 +1168,34 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
 
     // 3. Validate Assignment
-    const assignment = state.contentAssignments.find((a) => a.id === params.assignmentId);
+    let assignment = state.contentAssignments.find((a) => a.id === params.assignmentId);
+    if (!assignment) {
+      assignment = state.contentAssignments.find(
+        (a) => a.contentItemId === params.contentItemId && a.assigneeUserId === params.userId && a.status !== "reassigned"
+      );
+    }
+
+    const item = state.contentItems.find((i) => i.id === params.contentItemId);
+    const now = new Date().toISOString();
+
+    if (!assignment && item && (item.accountableOwnerId === params.userId || item.collaboratorIds.includes(params.userId))) {
+      const generatedAsgnId = params.assignmentId || ("asgn_" + Math.random().toString(36).substr(2, 9));
+      assignment = {
+        id: generatedAsgnId,
+        projectId: params.projectId,
+        contentItemId: params.contentItemId,
+        assigneeUserId: params.userId,
+        assignmentRole: "designer",
+        status: "in_progress",
+        assignedByUserId: params.userId,
+        assignedAt: now,
+        initialDueAt: item.deadlines.submissionDeadline || now,
+        currentDueAt: item.deadlines.submissionDeadline || now,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
     if (!assignment) {
       return { success: false, error: "Assignment not found." };
     }
@@ -1110,12 +1206,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return { success: false, error: "Cannot start timer on a reassigned historical task." };
     }
 
-    const now = new Date().toISOString();
+    const effectiveAssignmentId = assignment.id;
     const newSession: WorkSession = {
       id: "ws_" + Math.random().toString(36).substr(2, 9),
       projectId: params.projectId,
       contentItemId: params.contentItemId,
-      assignmentId: params.assignmentId,
+      assignmentId: effectiveAssignmentId,
       userId: params.userId,
       startedAt: now,
       accumulatedSeconds: 0,
@@ -1136,21 +1232,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       `Started work session timer for deliverable`
     );
 
-    setState((prev) => ({
-      ...prev,
-      workSessions: [...prev.workSessions, newSession],
-      contentAssignments: prev.contentAssignments.map((a) =>
-        a.id === params.assignmentId
-          ? {
-              ...a,
-              status: a.status === "assigned" || a.status === "accepted" ? "in_progress" : a.status,
-              startedAt: a.startedAt || now,
-              updatedAt: now,
-            }
-          : a
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
+    setState((prev) => {
+      const existingAsgn = prev.contentAssignments.find((a) => a.id === effectiveAssignmentId);
+      const updatedAssignments = existingAsgn
+        ? prev.contentAssignments.map((a) =>
+            a.id === effectiveAssignmentId
+              ? {
+                  ...a,
+                  status: a.status === "assigned" || a.status === "accepted" ? "in_progress" : a.status,
+                  startedAt: a.startedAt || now,
+                  updatedAt: now,
+                }
+              : a
+          )
+        : [...prev.contentAssignments, assignment!];
+
+      return {
+        ...prev,
+        workSessions: [...prev.workSessions, newSession],
+        contentAssignments: updatedAssignments,
+        auditRecords: [audit, ...prev.auditRecords],
+      };
+    });
 
     return { success: true, session: newSession };
   };
@@ -1889,6 +1992,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     reason: string;
     actorUserId: string;
   }): { success: boolean; error?: string } => {
+    const actor = state.users.find((u) => u.id === params.actorUserId);
+    if (actor && (actor.role === "designer" || actor.role === "client")) {
+      return { success: false, error: "Unauthorized: Designers and Clients cannot modify publication details." };
+    }
+
     const item = state.contentItems.find((i) => i.id === params.contentItemId);
     if (!item) return { success: false, error: "Content item not found" };
     if (!params.reason.trim()) {
@@ -2156,6 +2264,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     changedByUserId: string;
     reason: string;
   }) => {
+    const actor = state.users.find((u) => u.id === params.changedByUserId);
+    if (actor && actor.role === "designer" && params.kind === "scheduled_publication") {
+      console.warn("Unauthorized: Designers cannot modify scheduled publication dates.");
+      return;
+    }
+
     setState((prev) => {
       const item = prev.contentItems.find((i) => i.id === params.contentItemId);
       if (!item) return prev;
@@ -2207,6 +2321,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     allowDownload: boolean;
     expiresInDays?: number;
   }): ExternalReviewLink => {
+    const actor = state.users.find((u) => u.id === params.createdByUserId);
+    if (actor && (actor.role === "designer" || actor.role === "client")) {
+      throw new Error("Unauthorized: Designers and Clients cannot generate external review links.");
+    }
+
     const days = params.expiresInDays || 14;
     const expires = new Date(Date.now() + days * 86400000).toISOString();
     const token = "guest_token_" + Math.random().toString(36).substr(2, 12);
@@ -2995,6 +3114,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         dismissRecoveryNotice,
         resetAllData,
         createProject,
+        updateProjectObjective,
         archiveProject,
         restoreProject,
         createCampaign,

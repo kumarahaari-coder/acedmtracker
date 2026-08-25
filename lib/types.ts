@@ -33,6 +33,19 @@ export interface TargetRequirements {
   trialReels: number;
 }
 
+export type ProjectEngagementModel = 'deliverable_based' | 'objective_based';
+
+export interface ProjectObjectiveConfig {
+  objectiveName: string;
+  metricName: string; // e.g. "Qualified Leads", "Attributed Revenue (INR)", "Registrations"
+  targetValue: number;
+  currentValue: number;
+  startDate?: string;
+  targetDate?: string;
+  unit?: string;
+  notes?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -41,6 +54,8 @@ export interface Project {
   scope: string;
   timezone: string; // e.g. 'Asia/Kolkata' (IST)
   status: 'active' | 'archived' | 'retention';
+  engagementModel?: ProjectEngagementModel; // 'deliverable_based' (default) or 'objective_based'
+  objectiveConfig?: ProjectObjectiveConfig;
   targetRequirements: TargetRequirements;
   workflowStages: string[];
   clientAnalyticsConfig?: {
@@ -105,6 +120,8 @@ export interface ContentGroup {
   updatedAt: string;
 }
 
+export type ScopeClassification = 'contracted' | 'goodwill' | 'additional_billable';
+
 export interface ContentItem {
   id: string;
   projectId: string;
@@ -125,6 +142,7 @@ export interface ContentItem {
   liveUrl?: string; // Canonical external live URL
   publishedByUserId?: string;
   clientVisible?: boolean; // True when authorized for Client Portal rendering
+  scopeClassification?: ScopeClassification; // 'contracted' (default), 'goodwill', or 'additional_billable'
   // Note: Derived commercial metrics are computed from AnalyticsSnapshot[]
 }
 
