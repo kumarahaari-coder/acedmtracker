@@ -8,16 +8,12 @@ import { useRole } from "@/lib/context/RoleContext";
 import {
   Calendar,
   ChevronDown,
-  ExternalLink,
   FolderKanban,
   LayoutDashboard,
   LineChart,
   Lock,
-  LogOut,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
-import { UserRole } from "@/lib/types";
 
 export default function ClientPortalLayout({
   children,
@@ -29,7 +25,7 @@ export default function ClientPortalLayout({
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
   const { state } = useAppState();
-  const { activeRole, activeUserId, setActiveRole, setActiveUserId, setActiveProjectId } = useRole();
+  const { activeRole, activeUserId } = useRole();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
 
@@ -42,7 +38,8 @@ export default function ClientPortalLayout({
     );
   });
 
-  const activeProject = state.projects.find((p) => p.id === projectId) || accessibleProjects[0] || state.projects[0];
+  const activeProject =
+    state.projects.find((p) => p.id === projectId) || accessibleProjects[0] || state.projects[0];
 
   const navItems = [
     { label: "Overview", href: `/portal/${activeProject?.id || ""}`, icon: LayoutDashboard },
@@ -53,50 +50,49 @@ export default function ClientPortalLayout({
 
   return (
     <div className="min-h-screen bg-[#f5f5f7] text-[#1d1d1f] flex flex-col font-sans antialiased selection:bg-[#0071e3] selection:text-white">
-      {/* Demo Role Switcher Strip */}
+      {/* Role Notice Strip (Internal Managers only have Agency link; Clients do NOT see internal links) */}
       <div className="flex items-center justify-between bg-[#ffffff] border-b border-black/[0.06] px-6 py-1.5 text-[12px] text-[#6e6e73]">
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center rounded-full bg-[#eaf6ed] text-[#1f6f32] px-2 py-0.5 text-[11px] font-semibold">
-            Client Portal Experience
+            Client Portal
           </span>
           <span className="hidden sm:inline">
-            Authenticated view for {activeProject?.clientBrand || "Client Brand"}. Internal agency operations and audit ledgers are isolated.
+            Workspace for {activeProject?.clientBrand || activeProject?.name || "Client"}.
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Link
-            href="/"
-            className="text-[12px] font-medium text-[#0066cc] hover:underline flex items-center gap-1"
-          >
-            ← Agency Workspace
-          </Link>
-        </div>
+        {(activeRole === "founder" || activeRole === "admin" || activeRole === "consultant") && (
+          <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              className="text-[12px] font-medium text-[#0066cc] hover:underline flex items-center gap-1"
+            >
+              ← Agency Workspace
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Main Apple-style Client Header (60px) */}
       <header className="sticky top-0 z-40 w-full bg-white/90 backdrop-blur-md border-b border-black/[0.08] shadow-sm">
         <div className="flex h-16 items-center justify-between px-6 max-w-7xl mx-auto w-full">
-          {/* Left: Brand Identity & Project Switcher */}
+          {/* Left: Brand Identity & Dedicated Workspace */}
           <div className="flex items-center gap-6">
-            <Link
-              href={`/portal/${activeProject?.id || ""}`}
-              className="flex items-center gap-3 hover:opacity-80 transition"
-            >
+            <div className="flex items-center gap-3">
               <div className="h-9 w-9 rounded-xl bg-[#1d1d1f] text-white flex items-center justify-center font-bold text-[14px] shadow-sm">
                 {activeProject?.avatar || "A"}
               </div>
               <div>
                 <span className="font-bold text-[16px] text-[#1d1d1f] tracking-tight block">
-                  {activeProject?.clientBrand || "Client Brand"}
+                  {activeProject?.clientBrand || activeProject?.name || "Client Portal"}
                 </span>
                 <span className="text-[11px] text-[#86868b] block -mt-0.5">
                   Client Portal • Ace Assured
                 </span>
               </div>
-            </Link>
+            </div>
 
-            {/* Project Switcher for Multi-Project Clients */}
+            {/* Project Switcher: Rendered ONLY if Client has multiple accessible projects */}
             {accessibleProjects.length > 1 && (
               <div className="relative">
                 <button
@@ -133,7 +129,7 @@ export default function ClientPortalLayout({
             )}
           </div>
 
-          {/* Center/Right: Navigation Tabs */}
+          {/* Center/Right: Client Navigation Tabs */}
           <nav className="hidden md:flex items-center gap-1 bg-[#f5f5f7] p-1 rounded-full border border-black/[0.04]">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -159,7 +155,7 @@ export default function ClientPortalLayout({
             })}
           </nav>
 
-          {/* Right: Active Mode Indicator */}
+          {/* Right: Security Badge */}
           <div className="flex items-center gap-3">
             <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-[#f5f5f7] border border-black/[0.06] px-3 py-1 text-[12px] font-medium text-[#1d1d1f]">
               <ShieldCheck className="h-3.5 w-3.5 text-[#34c759]" /> Verified Portal
