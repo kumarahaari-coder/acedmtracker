@@ -40,6 +40,8 @@ import {
   Sparkles,
   Square,
   Timer,
+  Trash2,
+  Upload,
   User,
   Users,
   X,
@@ -210,6 +212,9 @@ export default function ContentItemWorkspacePage() {
   const [allowDownload, setAllowDownload] = useState(false);
   const [generatedLinkUrl, setGeneratedLinkUrl] = useState("");
 
+  const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
+  const [driveUrlInput, setDriveUrlInput] = useState("");
+
   // Designer Response Draft state
   const [designerResponses, setDesignerResponses] = useState<Record<string, string>>({});
 
@@ -378,6 +383,55 @@ export default function ContentItemWorkspacePage() {
     });
     const url = `${window.location.origin}/guest/review/${link.demoToken}`;
     setGeneratedLinkUrl(url);
+  };
+
+  const handleCreativeFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = (event.target?.result as string) || "";
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const newAsset = {
+        assetId: "ast_" + Math.random().toString(36).substr(2, 9),
+        filename: file.name,
+        previewUrl: dataUrl,
+        fileSizeBytes: file.size,
+        mimeType: file.type || (isPdf ? "application/pdf" : "image/jpeg"),
+        contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
+      };
+
+      updateDraftVersion(currentVersion.id, {
+        creativeAssets: [newAsset, ...(currentVersion.creativeAssets || [])],
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveAsset = (assetId: string) => {
+    updateDraftVersion(currentVersion.id, {
+      creativeAssets: (currentVersion.creativeAssets || []).filter((a) => a.assetId !== assetId),
+    });
+  };
+
+  const handleAddDriveLink = () => {
+    if (!driveUrlInput.trim()) return;
+    const newAsset = {
+      assetId: "ast_" + Math.random().toString(36).substr(2, 9),
+      filename: "External Cloud Asset Package",
+      previewUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+      fileSizeBytes: 20 * 1024 * 1024,
+      mimeType: "application/octet-stream",
+      contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
+      isDriveLink: true,
+      driveUrl: driveUrlInput.trim(),
+    };
+    updateDraftVersion(currentVersion.id, {
+      creativeAssets: [newAsset, ...(currentVersion.creativeAssets || [])],
+    });
+    setDriveUrlInput("");
+    setIsDriveModalOpen(false);
   };
 
   const handlePostComment = () => {
@@ -997,10 +1051,33 @@ export default function ContentItemWorkspacePage() {
           {/* Creative Media Preview */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Creative Asset</h2>
-              <span className="text-[12px] text-[#86868b]">
-                {currentVersion.creativeAssets.length} file(s) attached
-              </span>
+              <div className="flex items-center gap-2">
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Creative Asset</h2>
+                <span className="text-[12px] text-[#86868b]">
+                  {currentVersion.creativeAssets.length} file(s) attached
+                </span>
+              </div>
+
+              {/* Upload & Link Buttons */}
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-3.5 py-1 text-[12px] font-medium shadow-sm transition">
+                  <Upload className="h-3.5 w-3.5" />
+                  <span>{currentVersion.creativeAssets.length > 0 ? "Replace Creative" : "+ Upload Creative / PDF"}</span>
+                  <input
+                    type="file"
+                    accept="image/*,video/*,application/pdf,.pdf"
+                    onChange={handleCreativeFileUpload}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  onClick={() => setIsDriveModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-[#f2f2f7] hover:bg-[#e8e8ed] text-[#1d1d1f] px-3 py-1 text-[12px] font-medium transition"
+                  title="Attach Cloud / Drive Link"
+                >
+                  <LinkIcon className="h-3.5 w-3.5 text-[#6e6e73]" /> Link Drive
+                </button>
+              </div>
             </div>
 
             <div className="rounded-2xl border border-black/[0.08] bg-[#f5f5f7] p-2 overflow-hidden shadow-sm">
@@ -1041,7 +1118,7 @@ export default function ContentItemWorkspacePage() {
                     </div>
                   ) : (
                     /* Standard Image / Video Preview */
-                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06]">
+                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06] relative group">
                       <SafeImage
                         src={currentVersion.creativeAssets[0].previewUrl}
                         alt={currentVersion.creativeAssets[0].filename || "Creative Asset"}
@@ -1055,14 +1132,49 @@ export default function ContentItemWorkspacePage() {
                     <span className="font-medium truncate max-w-xs">
                       {currentVersion.creativeAssets[0].filename}
                     </span>
-                    <span>
-                      {(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span>
+                        {(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                      </span>
+                      <button
+                        onClick={() => handleRemoveAsset(currentVersion.creativeAssets[0].assetId)}
+                        className="text-[#d70015] hover:text-[#ff3b30] flex items-center gap-1 font-medium transition"
+                        title="Remove creative asset"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <div className="p-8 text-center text-[13px] text-[#86868b]">
-                  No creative file uploaded for this version.
+                /* Empty State Upload Dropzone */
+                <div className="p-8 text-center space-y-3 bg-white/70 rounded-xl border border-dashed border-black/[0.12]">
+                  <div className="mx-auto h-12 w-12 rounded-2xl bg-[#f2f2f7] flex items-center justify-center text-[#0071e3]">
+                    <Upload className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <div className="font-semibold text-[15px] text-[#1d1d1f]">No Creative Attached</div>
+                    <div className="text-[12px] text-[#86868b] mt-0.5 max-w-sm mx-auto">
+                      Upload images (PNG, JPG), video reels (MP4, MOV), or multi-page PDF documents for Carousels.
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-2 text-[13px] font-semibold shadow-sm transition">
+                      <Upload className="h-4 w-4" /> Choose File to Upload
+                      <input
+                        type="file"
+                        accept="image/*,video/*,application/pdf,.pdf"
+                        onChange={handleCreativeFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      onClick={() => setIsDriveModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-white border border-black/[0.12] hover:bg-[#f5f5f7] text-[#1d1d1f] px-4 py-2 text-[13px] font-medium transition"
+                    >
+                      <LinkIcon className="h-4 w-4 text-[#6e6e73]" /> Attach Drive Link
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1463,6 +1575,53 @@ export default function ContentItemWorkspacePage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Attach Drive / Cloud Asset Modal */}
+      {isDriveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Attach Cloud / Drive Asset Link</h3>
+              <button onClick={() => setIsDriveModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-[13px] text-[#6e6e73]">
+              <p>
+                Link external high-resolution footage, Premiere/AfterEffects packages, or Google Drive asset folders.
+              </p>
+
+              <div>
+                <label className="block font-semibold text-[#1d1d1f] mb-1">Google Drive or Cloud URL *</label>
+                <input
+                  type="url"
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  value={driveUrlInput}
+                  onChange={(e) => setDriveUrlInput(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#f5f5f7] p-2.5 text-[13px] text-[#1d1d1f] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setIsDriveModalOpen(false)}
+                  className="rounded-full px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddDriveLink}
+                  disabled={!driveUrlInput.trim()}
+                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] disabled:opacity-50 px-5 py-2 text-[13px] font-medium text-white shadow-sm transition"
+                >
+                  Attach Asset
+                </button>
+              </div>
             </div>
           </div>
         </div>

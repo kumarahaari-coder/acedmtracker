@@ -12,6 +12,7 @@ import {
   Layers,
   Plus,
   Sparkles,
+  Upload,
   X,
   FileCheck2,
   Clock,
@@ -39,6 +40,29 @@ export default function ApprovalsQueuePage() {
   const [newDate, setNewDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [newAssigneeId, setNewAssigneeId] = useState("u_designer1");
   const [newCaption, setNewCaption] = useState("");
+  const [newAssetFile, setNewAssetFile] = useState<{
+    filename: string;
+    previewUrl: string;
+    fileSizeBytes: number;
+    mimeType: string;
+  } | null>(null);
+
+  const handleModalFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = (event.target?.result as string) || "";
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      setNewAssetFile({
+        filename: file.name,
+        previewUrl: dataUrl,
+        fileSizeBytes: file.size,
+        mimeType: file.type || (isPdf ? "application/pdf" : "image/jpeg"),
+      });
+    };
+    reader.readAsDataURL(file);
+  };
 
   const project = state.projects.find((p) => p.id === projectId);
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
@@ -80,6 +104,31 @@ export default function ApprovalsQueuePage() {
       cta: "Learn more",
     };
 
+    const initialAssets = newAssetFile
+      ? [
+          {
+            assetId: "ast_" + Math.random().toString(36).substr(2, 9),
+            filename: newAssetFile.filename,
+            previewUrl: newAssetFile.previewUrl,
+            fileSizeBytes: newAssetFile.fileSizeBytes,
+            mimeType: newAssetFile.mimeType,
+            contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
+          },
+        ]
+      : [
+          {
+            assetId: "ast_" + Math.random().toString(36).substr(2, 9),
+            filename: `${newTitle.trim()} - Main Creative Asset`,
+            previewUrl:
+              newType === "carousel"
+                ? "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80"
+                : "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=800&auto=format&fit=crop&q=80",
+            fileSizeBytes: 2400000,
+            mimeType: newType === "carousel" ? "application/pdf" : "image/jpeg",
+            contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
+          },
+        ];
+
     const created = createContentItem(
       {
         projectId,
@@ -95,7 +144,8 @@ export default function ApprovalsQueuePage() {
         },
         scopeClassification: "contracted",
       },
-      initialCopy
+      initialCopy,
+      initialAssets
     );
 
     if (created.activeDraftVersionId) {
@@ -105,6 +155,7 @@ export default function ApprovalsQueuePage() {
     setIsAddModalOpen(false);
     setNewTitle("");
     setNewCaption("");
+    setNewAssetFile(null);
     setStatusFilter("pending");
   };
 
@@ -367,6 +418,31 @@ export default function ApprovalsQueuePage() {
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Attach Creative Asset (PNG, JPG, MP4, or PDF)
+                </label>
+                <div className="flex items-center gap-3">
+                  <label className="cursor-pointer inline-flex items-center gap-2 rounded-xl border border-black/[0.12] bg-[#fbfbfd] hover:bg-[#f5f5f7] px-4 py-2 text-[13px] font-medium text-[#1d1d1f] transition">
+                    <Upload className="h-4 w-4 text-[#0071e3]" />
+                    <span>{newAssetFile ? "Change Creative File" : "Choose File to Upload"}</span>
+                    <input
+                      type="file"
+                      accept="image/*,video/*,application/pdf,.pdf"
+                      onChange={handleModalFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  {newAssetFile ? (
+                    <span className="text-[12px] text-[#1f6f32] font-semibold truncate max-w-xs">
+                      ✓ {newAssetFile.filename} ({(newAssetFile.fileSizeBytes / (1024 * 1024)).toFixed(2)} MB)
+                    </span>
+                  ) : (
+                    <span className="text-[12px] text-[#86868b]">Optional initial creative</span>
+                  )}
                 </div>
               </div>
 
