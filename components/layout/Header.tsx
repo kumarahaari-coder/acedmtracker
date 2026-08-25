@@ -17,6 +17,7 @@ import {
   Users,
 } from "lucide-react";
 import { UserRole } from "@/lib/types";
+import { productConfig, organizationConfig } from "@/lib/config/branding";
 import { GlobalSearchModal } from "./GlobalSearchModal";
 
 interface HeaderProps {
@@ -73,11 +74,11 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
         {/* Apple-style Quiet Demo Mode Information Strip */}
         <div className="flex items-center justify-between bg-[#fbfbfd] px-6 py-1.5 text-[12px] text-[#6e6e73] border-b border-black/[0.06]">
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#1d1d1f]">
-              Prototype Demo
+            <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-semibold text-[#1d1d1f]">
+              {productConfig.name}
             </span>
             <span className="hidden sm:inline">
-              Interactive Phase A prototype using synthetic sample data and browser storage.
+              {organizationConfig.name} Workspace • Interactive Phase A prototype using synthetic sample data.
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -97,16 +98,17 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
           {/* Left: Brand & My Work / Project Switcher */}
           <div className="flex items-center gap-5">
             <Link href="/" className="flex items-center gap-2.5 text-[#1d1d1f] hover:opacity-80 transition group">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white border border-black/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-0.5 overflow-hidden">
-                <img
-                  src="/ace-assured-logo.png"
-                  alt="Ace Assured"
-                  className="h-full w-full object-contain"
-                />
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1d1d1f] text-white font-bold text-[13px] shadow-sm tracking-tighter">
+                AC
               </div>
-              <span className="font-semibold text-[15px] tracking-tight">
-                Ace Assured
-              </span>
+              <div className="flex flex-col">
+                <span className="font-bold text-[15px] tracking-tight text-[#1d1d1f] leading-none">
+                  {productConfig.wordmarkPrefix}<span className="text-[#0071e3] font-semibold">{productConfig.wordmarkSuffix}</span>
+                </span>
+                <span className="text-[10px] text-[#86868b] font-medium leading-tight mt-0.5">
+                  {organizationConfig.name}
+                </span>
+              </div>
             </Link>
 
             <div className="h-4 w-[1px] bg-black/[0.12] hidden sm:block" />

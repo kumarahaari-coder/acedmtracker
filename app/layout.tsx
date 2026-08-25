@@ -3,9 +3,11 @@ import React from "react";
 import { AppStateProvider } from "@/lib/context/AppStateContext";
 import { RoleProvider } from "@/lib/context/RoleContext";
 
+import { productConfig, organizationConfig } from "@/lib/config/branding";
+
 export const metadata = {
-  title: "Ace Assured — Marketing Operations Dashboard",
-  description: "Marketing Operations Dashboard for Ace Assured",
+  title: `${productConfig.name} — ${productConfig.description}`,
+  description: `${productConfig.name} Operations Platform for ${organizationConfig.name}`,
 };
 
 export default function RootLayout({

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { SafeImage } from "@/components/ui/SafeImage";
 import { formatDate, formatTime } from "@/lib/formatters";
+import { productConfig, organizationConfig } from "@/lib/config/branding";
 
 export default function GuestReviewPage() {
   const params = useParams();
@@ -36,7 +37,7 @@ export default function GuestReviewPage() {
           </div>
           <h2 className="text-[20px] font-semibold text-[#1d1d1f]">Review Link Invalid or Expired</h2>
           <p className="text-[14px] text-[#6e6e73] leading-relaxed">
-            This external preview link has either expired, been revoked, or does not exist. Please contact your Ace Assured representative.
+            This external preview link has either expired, been revoked, or does not exist. Please contact your {organizationConfig.name} representative.
           </p>
         </div>
       </div>
@@ -85,7 +86,7 @@ export default function GuestReviewPage() {
           </div>
           <div>
             <div className="text-[15px] font-semibold text-[#1d1d1f]">{project?.clientBrand}</div>
-            <div className="text-[11px] text-[#86868b]">Review Portal • Powered by Ace Assured</div>
+            <div className="text-[11px] text-[#86868b]">Review Portal • {productConfig.poweredBy}</div>
           </div>
         </div>
 

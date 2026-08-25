@@ -14,6 +14,7 @@ import {
   Lock,
   ShieldCheck,
 } from "lucide-react";
+import { productConfig, organizationConfig } from "@/lib/config/branding";
 
 export default function ClientPortalLayout({
   children,
@@ -87,7 +88,7 @@ export default function ClientPortalLayout({
                   {activeProject?.clientBrand || activeProject?.name || "Client Portal"}
                 </span>
                 <span className="text-[11px] text-[#86868b] block -mt-0.5">
-                  Client Portal • Ace Assured
+                  Client Portal • {organizationConfig.managedBy}
                 </span>
               </div>
             </div>
@@ -195,7 +196,7 @@ export default function ClientPortalLayout({
       <footer className="border-t border-black/[0.06] bg-white py-6 text-center text-[12px] text-[#86868b]">
         <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
           <span>
-            {activeProject?.clientBrand || "Client"} Marketing Portal • Powered by <strong>Ace Assured Marketing Operations</strong>
+            {activeProject?.clientBrand || "Client"} Marketing Portal • {productConfig.poweredBy}
           </span>
           <span className="text-[11px]">
             Operating Timezone: {activeProject?.timezone || "Asia/Kolkata (IST)"}

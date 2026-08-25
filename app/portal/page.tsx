@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import { ArrowRight, FolderKanban, Lock, ShieldCheck } from "lucide-react";
+import { organizationConfig } from "@/lib/config/branding";
 
 export default function PortalIndexPage() {
   const { state } = useAppState();
@@ -37,7 +38,7 @@ export default function PortalIndexPage() {
           </div>
           <h2 className="text-[20px] font-bold text-[#1d1d1f]">No Active Portal Access</h2>
           <p className="text-[14px] text-[#6e6e73] leading-relaxed">
-            Your authenticated client account currently has no active workspace project memberships. Please contact your Ace Assured representative to activate your portal.
+            Your authenticated client account currently has no active workspace project memberships. Please contact your {organizationConfig.name} representative to activate your portal.
           </p>
           <Link
             href="/"

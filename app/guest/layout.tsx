@@ -1,8 +1,9 @@
 import React from "react";
+import { productConfig, organizationConfig } from "@/lib/config/branding";
 
 export const metadata = {
-  title: "Ace Assured — Client Review Portal",
-  description: "Secure isolated content review portal",
+  title: `Client Review Portal — ${productConfig.name}`,
+  description: `Secure isolated content review portal managed by ${organizationConfig.name}`,
 };
 
 export default function GuestLayout({ children }: { children: React.ReactNode }) {
