@@ -7,7 +7,7 @@ export interface User {
   avatar: string;
   role: UserRole;
   jobTitle?: string;
-  status: 'active' | 'inactive';
+  status: 'active' | 'inactive' | 'deleted';
   workingHoursPerDay?: number;
   dateJoined: string;
   createdByUserId?: string;

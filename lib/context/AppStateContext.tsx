@@ -237,6 +237,11 @@ interface AppStateContextType {
     actorUserId: string,
     reason?: string
   ) => { success: boolean; error?: string };
+  permanentlyDeleteTeamMember: (
+    userId: string,
+    actorUserId: string,
+    reason?: string
+  ) => { success: boolean; error?: string };
   addProjectMember: (params: {
     projectId: string;
     userId: string;
@@ -2563,6 +2568,75 @@ export function AppStateProvider({
     return { success: true };
   };
 
+  const permanentlyDeleteTeamMember = (
+    userId: string,
+    actorUserId: string,
+    reason?: string
+  ): { success: boolean; error?: string } => {
+    const user = state.users.find((u) => u.id === userId);
+    if (!user) return { success: false, error: "Team member not found." };
+
+    const actor = state.users.find((u) => u.id === actorUserId);
+    if (actor && actor.role !== "founder" && actor.role !== "admin") {
+      return {
+        success: false,
+        error: "Unauthorized: Only Founders and Admins can permanently delete team members.",
+      };
+    }
+
+    if (actorUserId === userId) {
+      return {
+        success: false,
+        error: "You cannot delete your own active account while logged in.",
+      };
+    }
+
+    if (user.role === "founder") {
+      const activeFounders = state.users.filter(
+        (u) => u.role === "founder" && u.status !== "deleted" && u.id !== userId
+      );
+      if (activeFounders.length === 0) {
+        return {
+          success: false,
+          error: "Cannot delete the last active Founder of the organization.",
+        };
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    const audit = createAuditEntry(
+      "proj_internal",
+      actorUserId,
+      "permanent_delete_user",
+      "user",
+      userId,
+      `Permanently deleted user '${user.name}' (${user.email}). Account tombstoned and historical references anonymized.`,
+      reason
+    );
+
+    setState((prev) => ({
+      ...prev,
+      users: prev.users.filter((u) => u.id !== userId),
+      projectMemberships: prev.projectMemberships.map((m) =>
+        m.userId === userId ? { ...m, status: "inactive", removedAt: now } : m
+      ),
+      auditRecords: [audit, ...prev.auditRecords],
+    }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/team").then(({ permanentlyDeleteTeamMemberAction }) => {
+        permanentlyDeleteTeamMemberAction({
+          userId,
+          actorUserId,
+          reason,
+        }).catch((err) => console.error("[AppStateContext] Permanent deletion error:", err));
+      });
+    }
+
+    return { success: true };
+  };
+
   const addProjectMember = (params: {
     projectId: string;
     userId: string;
@@ -3258,6 +3332,7 @@ export function AppStateProvider({
         createTeamMember,
         updateTeamMember,
         updateTeamMemberStatus,
+        permanentlyDeleteTeamMember,
         addProjectMember,
         removeProjectMember,
         generateExternalReviewLink,

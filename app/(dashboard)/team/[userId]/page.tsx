@@ -35,6 +35,7 @@ export default function TeamMemberProfilePage() {
     state,
     updateTeamMember,
     updateTeamMemberStatus,
+    permanentlyDeleteTeamMember,
     addProjectMember,
     removeProjectMember,
     adjustAttendance,
@@ -48,6 +49,13 @@ export default function TeamMemberProfilePage() {
   const [editRole, setEditRole] = useState<UserRole>("designer");
   const [editJobTitle, setEditJobTitle] = useState("");
   const [editHours, setEditHours] = useState(8);
+
+  // Permanent Delete Modal
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
+  const [deleteReason, setDeleteReason] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Add to Project modal
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
@@ -487,6 +495,33 @@ export default function TeamMemberProfilePage() {
               )}
             </div>
           </div>
+
+          {/* Danger Zone: Permanent Account Deletion (Founder / Admin only) */}
+          {(activeRole === "founder" || activeRole === "admin") && activeUserId !== user.id && (
+            <div className="bg-[#fff5f5] border border-[#ffd5d0] rounded-2xl p-5 shadow-[0_2px_8px_rgba(217,45,32,0.04)] space-y-3">
+              <div className="flex items-center gap-2 text-[#b42318]">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <h2 className="text-[14px] font-bold tracking-tight">Danger Zone</h2>
+              </div>
+              <p className="text-[12px] text-[#6e6e73] leading-relaxed">
+                Permanent deletion removes this person’s AceCore account and access. Historical project activity will be retained in anonymized form to preserve project, approval, timer, and audit integrity.
+              </p>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteConfirmationText("");
+                    setDeleteReason("");
+                    setDeleteError(null);
+                    setIsDeleteModalOpen(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#d92d20] hover:bg-[#b42318] px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition"
+                >
+                  <Trash2 className="h-4 w-4" /> Delete Permanently
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -777,6 +812,119 @@ export default function TeamMemberProfilePage() {
                   className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
                 >
                   Save Audited Correction
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Deletion Modal */}
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-lg rounded-3xl border border-[#ffd5d0] bg-white p-6 sm:p-7 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3 text-[#b42318]">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5" />
+                <h3 className="text-[17px] font-bold text-[#1d1d1f]">Delete Team Member Permanently</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="text-[#86868b] hover:text-[#1d1d1f]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-[#fff5f5] border border-[#ffd5d0] rounded-2xl p-4 text-[13px] text-[#55160c] leading-relaxed">
+              Permanent deletion removes this person’s AceCore account and access. Historical project activity may be retained in anonymized form to preserve project, approval, timer and audit integrity. This action cannot be undone.
+            </div>
+
+            {deleteError && (
+              <div className="p-3 bg-[#fff0ee] border border-[#ffd5d0] rounded-xl text-[#b42318] text-[12px] font-medium flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (deleteConfirmationText !== "DELETE") {
+                  setDeleteError("You must type DELETE to confirm.");
+                  return;
+                }
+
+                setIsDeleting(true);
+                setDeleteError(null);
+
+                try {
+                  const { permanentlyDeleteTeamMemberAction } = await import("@/lib/actions/team");
+                  const serverRes = await permanentlyDeleteTeamMemberAction({
+                    userId: user.id,
+                    actorUserId: activeUserId,
+                    reason: deleteReason.trim() || undefined,
+                  });
+
+                  if (!serverRes.success) {
+                    setDeleteError(serverRes.error || "Failed to permanently delete team member.");
+                    setIsDeleting(false);
+                    return;
+                  }
+
+                  permanentlyDeleteTeamMember(user.id, activeUserId, deleteReason.trim() || undefined);
+                  setIsDeleteModalOpen(false);
+                  router.replace("/team");
+                } catch (err: any) {
+                  setDeleteError(err.message || "An unexpected error occurred during deletion.");
+                  setIsDeleting(false);
+                }
+              }}
+              className="space-y-4 text-[13px]"
+            >
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1.5">
+                  To confirm, please type <span className="font-bold text-[#b42318]">DELETE</span> below: *
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmationText}
+                  onChange={(e) => setDeleteConfirmationText(e.target.value)}
+                  placeholder="DELETE"
+                  required
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-[#1d1d1f] mb-1.5">
+                  Reason for Deletion (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Employee offboarding or account deletion request..."
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  disabled={isDeleting}
+                  className="rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-5 py-2 text-[13px] font-medium text-[#1d1d1f] transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={deleteConfirmationText !== "DELETE" || isDeleting}
+                  className="rounded-full bg-[#d92d20] hover:bg-[#b42318] px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isDeleting ? "Deleting..." : "Permanently Delete Member"}
                 </button>
               </div>
             </form>

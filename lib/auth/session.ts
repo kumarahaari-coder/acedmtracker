@@ -8,7 +8,7 @@ export interface AuthoritativeUser {
   email: string;
   fullName: string;
   organizationRole: OrganizationRole;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "deleted";
 }
 
 export interface ClientProjectDTO {

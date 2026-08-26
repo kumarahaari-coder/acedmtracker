@@ -49,8 +49,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const aceUser = existingUser[0];
 
-        if (aceUser.status === "inactive") {
-          console.warn(`[Auth.js] Sign-in rejected: Inactive account ${normalizedEmail}`);
+        if (aceUser.status === "inactive" || aceUser.status === "deleted") {
+          console.warn(`[Auth.js] Sign-in rejected: ${aceUser.status} account ${normalizedEmail}`);
           return false;
         }
 

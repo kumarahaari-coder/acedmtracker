@@ -64,7 +64,7 @@ export interface DesignerPerformanceSummary {
   avatar: string;
   role: UserRole;
   jobTitle?: string;
-  userStatus: "active" | "inactive";
+  userStatus: "active" | "inactive" | "deleted";
 
   // Output
   completedDeliverablesCount: number;
@@ -98,7 +98,7 @@ export interface DesignerWorkloadSummary {
   name: string;
   avatar: string;
   role: UserRole;
-  userStatus: "active" | "inactive";
+  userStatus: "active" | "inactive" | "deleted";
 
   // Workload
   activeAssignmentsCount: number;

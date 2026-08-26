@@ -5,7 +5,7 @@ import { authUsers } from "./auth";
 export const OrganizationRoleEnum = ["founder", "admin", "consultant", "designer", "client"] as const;
 export type OrganizationRole = (typeof OrganizationRoleEnum)[number];
 
-export const UserStatusEnum = ["active", "inactive"] as const;
+export const UserStatusEnum = ["active", "inactive", "deleted"] as const;
 export type UserStatus = (typeof UserStatusEnum)[number];
 
 export const users = pgTable(
@@ -25,6 +25,9 @@ export const users = pgTable(
     avatarUrl: text("avatar_url"),
     organizationRole: text("organization_role", { enum: OrganizationRoleEnum }).notNull().default("designer"),
     status: text("status", { enum: UserStatusEnum }).notNull().default("active"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedByUserId: uuid("deleted_by_user_id"),
+    deletionReason: text("deletion_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

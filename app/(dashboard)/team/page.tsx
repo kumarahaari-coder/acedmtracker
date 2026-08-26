@@ -70,8 +70,8 @@ export default function GlobalTeamPage() {
     day: "2-digit",
   }).format(new Date());
 
-  // Internal agency members (exclude client contacts)
-  const internalUsers = state.users.filter((u) => u.role !== "client");
+  // Internal agency members (exclude client contacts and permanently deleted accounts)
+  const internalUsers = state.users.filter((u) => u.role !== "client" && u.status !== "deleted");
 
   // Filtered employees
   const filteredUsers = internalUsers.filter((u) => {
