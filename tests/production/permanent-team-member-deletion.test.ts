@@ -4,6 +4,7 @@ dotenv.config({ path: ".env.production.local" });
 
 import { createTeamMemberAction, permanentlyDeleteTeamMemberAction } from "@/lib/actions/team";
 import { createProjectAction, addProjectMemberAction } from "@/lib/actions/projects";
+import { getAuthoritativeUser } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import { users, contentAssignments, workSessions, projects, contentItems } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -220,5 +221,42 @@ describe("Permanent Team Member Deletion Architecture & Safeguards", () => {
     const [savedSession] = await db.select().from(workSessions).where(eq(workSessions.userId, targetUserId)).limit(1);
     expect(savedSession).toBeDefined();
     expect(savedSession.accumulatedSeconds).toBe(3600);
+  });
+
+  it("immediately denies access on next protected request if user is deleted while session is active", async () => {
+    // 1. Create active designer with simulated auth linkage
+    const targetEmail = `active_session_${Date.now()}@aceassured.com`;
+    const memberRes = await createTeamMemberAction({
+      fullName: "Logged In User",
+      email: targetEmail,
+      role: "designer",
+    });
+    const targetUserId = memberRes.user!.id;
+
+    // 2. Simulate active session: user resolves as active
+    const activeAuthUser = await getAuthoritativeUser(targetUserId);
+    expect(activeAuthUser).not.toBeNull();
+    expect(activeAuthUser?.status).toBe("active");
+
+    // 3. Founder permanently deletes user in PostgreSQL
+    const deleteRes = await permanentlyDeleteTeamMemberAction({
+      userId: targetUserId,
+      actorUserId: founderUserId,
+      reason: "Revoked credentials",
+    });
+    expect(deleteRes.success).toBe(true);
+
+    // 4. On next protected request (navigation / state refresh / server action):
+    // Authoritative check must return null and deny access immediately
+    const postDeletionUser = await getAuthoritativeUser(targetUserId);
+    expect(postDeletionUser).toBeNull();
+
+    // 5. Subsequent attempts to perform any protected action must be rejected immediately
+    const actionAttempt = await permanentlyDeleteTeamMemberAction({
+      userId: consultantUserId,
+      actorUserId: targetUserId,
+    });
+    expect(actionAttempt.success).toBe(false);
+    expect(actionAttempt.error).toContain("Unauthorized: Could not resolve authenticated actor");
   });
 });

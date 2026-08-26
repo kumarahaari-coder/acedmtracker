@@ -3,6 +3,7 @@
 import { db } from "../db";
 import {
   users,
+  authUsers,
   projectMemberships,
   contentAssignments,
   workSessions,
@@ -308,6 +309,10 @@ export async function permanentlyDeleteTeamMemberAction(params: {
 
       await db.delete(users).where(eq(users.id, targetUser.id));
 
+      if (targetUser.authUserId) {
+        await db.delete(authUsers).where(eq(authUsers.id, targetUser.authUserId));
+      }
+
       await invalidateWorkspaceEntities({
         orgId: targetUser.orgId,
         userId: targetUser.id,
@@ -343,6 +348,10 @@ export async function permanentlyDeleteTeamMemberAction(params: {
           updatedAt: sql`NOW()`,
         })
         .where(eq(users.id, targetUser.id));
+
+      if (targetUser.authUserId) {
+        await db.delete(authUsers).where(eq(authUsers.id, targetUser.authUserId));
+      }
 
       await invalidateWorkspaceEntities({
         orgId: targetUser.orgId,

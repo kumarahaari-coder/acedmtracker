@@ -52,7 +52,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
           .from(users)
           .where(eq(users.normalizedEmail, session.user.email.toLowerCase().trim()))
           .limit(1);
-        if (dbUser) {
+        if (dbUser && dbUser.status === "active") {
           authoritativeUser = dbUser;
           orgId = dbUser.orgId;
         }
