@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { UserRole, User, ProjectMembership } from "@/lib/types";
 import { formatDate } from "@/lib/formatters";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 const ALL_AVAILABLE_METRICS = [
   { key: "reach", label: "Organic Reach", desc: "Total unique accounts reached" },
@@ -129,31 +130,51 @@ export default function ProjectSettingsPage() {
       !allProjectMemberships.some((m) => m.userId === u.id && m.status === "active")
   );
 
-  const handleAddProjectMemberSubmit = (e: React.FormEvent) => {
+  // Submission loading states
+  const [isMemberSubmitting, setIsMemberSubmitting] = useState(false);
+  const [isClientSubmitting, setIsClientSubmitting] = useState(false);
+
+  const handleAddProjectMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUserId) {
       alert("Please select a team member to add.");
       return;
     }
 
-    const res = addProjectMember({
-      projectId,
-      userId: selectedUserId,
-      membershipRole: selectedRole,
-      actorUserId,
-    });
+    setIsMemberSubmitting(true);
+    try {
+      const { addProjectMemberAction } = await import("@/lib/actions/projects");
+      const serverRes = await addProjectMemberAction({
+        projectId,
+        userId: selectedUserId,
+        membershipRole: selectedRole,
+        actorUserId,
+      });
 
-    if (res.success) {
+      if (!serverRes.success) {
+        alert(serverRes.error || "Failed to add member to database.");
+        return;
+      }
+
+      addProjectMember({
+        projectId,
+        userId: selectedUserId,
+        membershipRole: selectedRole,
+        actorUserId,
+      });
+
       setIsAddMemberModalOpen(false);
       setSelectedUserId("");
       const addedUser = state.users.find((u) => u.id === selectedUserId);
       showToast(`Added ${addedUser?.name || "member"} to project.`);
-    } else {
-      alert(res.error || "Failed to add member.");
+    } catch (err: any) {
+      alert(err.message || "Failed to add project member.");
+    } finally {
+      setIsMemberSubmitting(false);
     }
   };
 
-  const handleAddClientSubmit = (e: React.FormEvent) => {
+  const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setClientModalError(null);
 
@@ -162,7 +183,8 @@ export default function ProjectSettingsPage() {
       return;
     }
 
-    const res = addClientToProject({
+    // 1. Synchronous validation against active state
+    const localRes = addClientToProject({
       name: clientName.trim(),
       email: clientEmail.trim(),
       jobTitle: clientJobTitle.trim() || undefined,
@@ -171,7 +193,23 @@ export default function ProjectSettingsPage() {
       actorUserId,
     });
 
-    if (res.success) {
+    if (!localRes.success) {
+      setClientModalError(localRes.error || "Failed to add client access.");
+      return;
+    }
+
+    setIsClientSubmitting(true);
+    try {
+      const { addClientToProjectAction } = await import("@/lib/actions/clients");
+      await addClientToProjectAction({
+        name: clientName.trim(),
+        email: clientEmail.trim(),
+        jobTitle: clientJobTitle.trim() || undefined,
+        phone: clientPhone.trim() || undefined,
+        projectId,
+        actorUserId,
+      });
+
       setIsAddClientModalOpen(false);
       setClientName("");
       setClientEmail("");
@@ -179,8 +217,10 @@ export default function ProjectSettingsPage() {
       setClientPhone("");
       setClientModalError(null);
       showToast(`Granted Client Portal access to ${clientName.trim()}.`);
-    } else {
-      setClientModalError(res.error || "Failed to add client access.");
+    } catch (err: any) {
+      console.warn("[Settings] Non-fatal server action sync:", err);
+    } finally {
+      setIsClientSubmitting(false);
     }
   };
 
@@ -306,9 +346,7 @@ export default function ProjectSettingsPage() {
                   className="flex items-center justify-between p-3.5 rounded-xl border border-black/[0.06] bg-[#fbfbfd] text-[13px]"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[13px] border border-black/[0.06]">
-                      {user?.avatar || "U"}
-                    </div>
+                    <UserAvatar avatar={user?.avatar} name={userName} className="h-9 w-9 text-[13px]" />
                     <div>
                       <div className="font-semibold text-[#1d1d1f] flex items-center gap-2">
                         <Link href={`/team/${membership.userId}`} className="hover:text-[#0066cc] hover:underline">
@@ -390,15 +428,16 @@ export default function ProjectSettingsPage() {
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div
-                      className={`h-10 w-10 rounded-full font-bold flex items-center justify-center text-[14px] border shrink-0 ${
+                    <UserAvatar
+                      avatar={user?.avatar}
+                      name={userName}
+                      className="h-10 w-10 text-[14px]"
+                      fallbackClassName={
                         isActive
                           ? "bg-[#eaf6ed] text-[#1f6f32] border-[#ceead6]"
                           : "bg-[#f2f2f7] text-[#86868b] border-black/[0.08]"
-                      }`}
-                    >
-                      {user?.avatar || "C"}
-                    </div>
+                      }
+                    />
                     <div>
                       <div className="font-semibold text-[#1d1d1f] flex items-center gap-2">
                         <button
@@ -774,9 +813,12 @@ export default function ProjectSettingsPage() {
             </div>
 
             <div className="flex items-center gap-4 p-4 bg-[#fbfbfd] rounded-2xl border border-black/[0.06]">
-              <div className="h-12 w-12 rounded-full bg-[#eaf6ed] text-[#1f6f32] font-bold flex items-center justify-center text-[18px] border border-[#ceead6] shrink-0">
-                {inspectClientUser.avatar || "C"}
-              </div>
+              <UserAvatar
+                avatar={inspectClientUser.avatar}
+                name={inspectClientUser.name}
+                className="h-12 w-12 text-[18px]"
+                fallbackClassName="bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
+              />
               <div>
                 <h3 className="font-bold text-[16px] text-[#1d1d1f]">{inspectClientUser.name}</h3>
                 <p className="text-[13px] text-[#6e6e73]">{inspectClientUser.email}</p>

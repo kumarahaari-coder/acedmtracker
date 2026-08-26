@@ -1,3 +1,5 @@
+"use server";
+
 import { db, runTransaction } from "../db";
 import { attendanceRecords, attendanceCorrections, users } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";

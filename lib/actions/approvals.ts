@@ -1,3 +1,5 @@
+"use server";
+
 import { db, runTransaction } from "../db";
 import { approvalDecisions, founderOverrides, submissionVersions, contentItems, projects } from "../db/schema";
 import { eq, and, sql, desc } from "drizzle-orm";

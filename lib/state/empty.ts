@@ -1,0 +1,31 @@
+import { AppState } from "../types";
+
+export function getEmptyAppState(): AppState {
+  return {
+    projects: [],
+    projectMemberships: [],
+    users: [],
+    contentItems: [],
+    submissionVersions: [],
+    contentAssignments: [],
+    workSessions: [],
+    attendanceRecords: [],
+    comments: [],
+    annotations: [],
+    changeRequests: [],
+    approvalDecisions: [],
+    founderOverrides: [],
+    notifications: [],
+    campaigns: [],
+    contentFamilies: [],
+    contentGroups: [],
+    deadlineRecords: [],
+    publicationRecords: [],
+    externalReviewLinks: [],
+    importBatches: [],
+    scripts: [],
+    assets: [],
+    analyticsSnapshots: [],
+    auditRecords: [],
+  };
+}

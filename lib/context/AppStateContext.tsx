@@ -39,6 +39,7 @@ import {
   ProjectObjectiveConfig,
 } from "../types";
 import { loadStoredState, saveStoredState, resetStoredState } from "../migrations";
+import { getEmptyAppState } from "../state/empty";
 import { getInitialDeterministicState } from "../mockData";
 import { computeVersionFingerprints, computeCopyFingerprint, computeCreativeFingerprint, computePostingDateFingerprint } from "../fingerprints";
 
@@ -47,6 +48,7 @@ interface AppStateContextType {
   recoveryNotice: string | null;
   dismissRecoveryNotice: () => void;
   resetAllData: () => void;
+  hydrateServerState: (serverState: AppState) => void;
   // Project & Campaign Actions
   createProject: (project: Omit<Project, "id" | "createdAt">) => Project;
   updateProjectObjective: (params: {
@@ -216,6 +218,7 @@ interface AppStateContextType {
   }) => void;
   // Team Management & Memberships (Phase 1)
   createTeamMember: (data: {
+    id?: string;
     name: string;
     email: string;
     role: UserRole;
@@ -308,34 +311,39 @@ interface AppStateContextType {
 
 const AppStateContext = createContext<AppStateContextType | undefined>(undefined);
 
-export function AppStateProvider({ children }: { children: React.ReactNode }) {
-  // CRITICAL: Initialize state with getInitialDeterministicState() on both server and client initial render!
-  const [state, setState] = useState<AppState>(getInitialDeterministicState);
+export function AppStateProvider({
+  children,
+  initialState,
+}: {
+  children: React.ReactNode;
+  initialState?: AppState;
+}) {
+  const [state, setState] = useState<AppState>(() => {
+    if (initialState) return initialState;
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      return getInitialDeterministicState();
+    }
+    return getEmptyAppState();
+  });
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
-  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
-    // Load stored browser state only after hydration completes
-    const loaded = loadStoredState();
-    setState(loaded.state);
-    if (loaded.recoveredFromCorrupted) {
-      setRecoveryNotice(loaded.error || "Restored fresh deterministic sample data.");
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      const loaded = loadStoredState();
+      if (loaded && loaded.state) {
+        setState(loaded.state);
+      }
     }
-    setIsHydrated(true);
   }, []);
 
-  // Save to localStorage on state changes once hydrated
-  useEffect(() => {
-    if (isHydrated) {
-      saveStoredState(state);
-    }
-  }, [state, isHydrated]);
+  const hydrateServerState = (serverState: AppState) => {
+    setState(serverState);
+  };
 
   const dismissRecoveryNotice = () => setRecoveryNotice(null);
 
   const resetAllData = () => {
-    const fresh = resetStoredState();
-    setState(fresh);
+    setState(getEmptyAppState());
     setRecoveryNotice(null);
   };
 
@@ -384,6 +392,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       projects: [...prev.projects, newProject],
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/projects").then(({ createProjectAction }) => {
+        createProjectAction({
+          legacyId: newId,
+          name: projectData.name,
+          clientBrand: projectData.clientBrand,
+          scope: projectData.scope,
+          engagementModel: projectData.engagementModel,
+        }).catch((err) => console.error("Failed to sync project to database:", err));
+      });
+    }
+
     return newProject;
   };
 
@@ -440,6 +461,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       ),
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/projects").then(({ archiveProjectAction }) => {
+        archiveProjectAction({
+          projectId,
+        }).catch((err) => console.error("Failed to sync project archive to database:", err));
+      });
+    }
   };
 
   const restoreProject = (projectId: string) => {
@@ -550,6 +579,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       deadlineRecords: [...prev.deadlineRecords, deadlineRec],
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/content").then(({ createContentItemAction }) => {
+        createContentItemAction({
+          actorUserId: itemData.accountableOwnerId || "u_founder",
+          projectId: itemData.projectId,
+          title: itemData.title,
+          platform: itemData.platform,
+          contentType: itemData.contentType,
+          scopeClassification: itemData.scopeClassification,
+          scheduledPublicationDate: itemData.deadlines?.scheduledPublicationDate,
+          submissionDeadline: itemData.deadlines?.submissionDeadline,
+        }).catch((err) => console.error("Failed to sync content item to database:", err));
+      });
+    }
 
     return newItem;
   };
@@ -2384,6 +2428,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // --- TEAM MANAGEMENT & MEMBERSHIPS (Phase 1) ---
   const createTeamMember = (data: {
+    id?: string;
     name: string;
     email: string;
     role: UserRole;
@@ -2399,7 +2444,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
 
     const newUser: User = {
-      id: "u_" + Math.random().toString(36).substr(2, 9),
+      id: data.id || "u_" + Math.random().toString(36).substr(2, 9),
       name: data.name.trim(),
       email: data.email.trim().toLowerCase(),
       avatar: data.name.trim().split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "U",
@@ -2427,6 +2472,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       users: [...prev.users, newUser],
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/team").then(({ createTeamMemberAction }) => {
+        createTeamMemberAction({
+          fullName: data.name,
+          email: data.email,
+          role: data.role as any,
+          actorUserId: data.actorUserId,
+        }).catch((err) => console.error("Failed to sync team member to database:", err));
+      });
+    }
 
     return { success: true, user: newUser };
   };
@@ -2565,6 +2621,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       auditRecords: [audit, ...prev.auditRecords],
     }));
 
+    if (typeof window !== "undefined") {
+      import("../actions/projects").then(({ addProjectMemberAction }) => {
+        addProjectMemberAction({
+          projectId: params.projectId,
+          userId: params.userId,
+          membershipRole: params.membershipRole,
+          actorUserId: params.actorUserId,
+        }).catch((err) => console.error("Failed to sync project membership to database:", err));
+      });
+    }
+
     return { success: true, membership: updatedMembership };
   };
 
@@ -2596,6 +2663,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       ),
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/projects").then(({ removeProjectMemberAction }) => {
+        removeProjectMemberAction({
+          projectId: membership.projectId,
+          userId: membership.userId,
+          actorUserId,
+        }).catch((err) => console.error("Failed to sync project member removal to database:", err));
+      });
+    }
 
     return { success: true };
   };
@@ -2667,6 +2744,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       auditRecords: [audit, ...prev.auditRecords],
     }));
 
+    if (typeof window !== "undefined") {
+      import("../actions/attendance").then(({ checkInAction }) => {
+        checkInAction({ actorUserId: userId }).catch((err) => console.error("Failed to sync check-in to database:", err));
+      });
+    }
+
     return { success: true, record: newRecord };
   };
 
@@ -2703,6 +2786,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       attendanceRecords: prev.attendanceRecords.map((r) => (r.id === record.id ? updatedRecord : r)),
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/attendance").then(({ checkOutAction }) => {
+        checkOutAction({ actorUserId: userId }).catch((err) => console.error("Failed to sync check-out to database:", err));
+      });
+    }
 
     return { success: true, record: updatedRecord };
   };
@@ -2955,6 +3044,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       auditRecords: [audit, ...prev.auditRecords],
     }));
 
+    if (typeof window !== "undefined") {
+      import("../actions/clients").then(({ addClientToProjectAction }) => {
+        addClientToProjectAction({
+          name: cleanName,
+          email: cleanEmail,
+          jobTitle: params.jobTitle,
+          phone: params.phone,
+          projectId: params.projectId,
+          actorUserId: params.actorUserId,
+        }).catch((err) => console.error("[AppStateContext] Failed to sync client to database:", err));
+      });
+    }
+
     return { success: true, user: clientUser, membership };
   };
 
@@ -3113,6 +3215,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         recoveryNotice,
         dismissRecoveryNotice,
         resetAllData,
+        hydrateServerState,
         createProject,
         updateProjectObjective,
         archiveProject,

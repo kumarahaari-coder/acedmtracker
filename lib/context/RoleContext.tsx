@@ -25,8 +25,11 @@ interface RoleContextType extends RoleCapabilities {
   activeRole: UserRole;
   activeUserId: string;
   activeProjectId: string;
+  userEmail: string;
+  userName: string;
   setActiveRole: (role: UserRole) => void;
   setActiveUserId: (userId: string) => void;
+  setUserSession: (user: { id: string; role: UserRole; email: string; name: string }) => void;
   setActiveProjectId: (projectId: string) => void;
   // Legacy aliases for backwards compatibility
   canEdit: boolean;
@@ -132,16 +135,29 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
 
 export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [activeRole, setActiveRoleState] = useState<UserRole>("founder");
-  const [activeUserId, setActiveUserId] = useState<string>("u_founder");
+  const [activeUserId, setActiveUserIdState] = useState<string>("u_founder");
+  const [userEmail, setUserEmailState] = useState<string>("");
+  const [userName, setUserNameState] = useState<string>("");
   const [activeProjectId, setActiveProjectId] = useState<string>("proj_acme");
 
   const setActiveRole = (role: UserRole) => {
     setActiveRoleState(role);
-    if (role === "admin") setActiveUserId("u_admin");
-    else if (role === "founder") setActiveUserId("u_founder");
-    else if (role === "consultant") setActiveUserId("u_consultant");
-    else if (role === "designer") setActiveUserId("u_designer1");
-    else if (role === "client") setActiveUserId("u_client_acme");
+    if (role === "admin") setActiveUserIdState("u_admin");
+    else if (role === "founder") setActiveUserIdState("u_founder");
+    else if (role === "consultant") setActiveUserIdState("u_consultant");
+    else if (role === "designer") setActiveUserIdState("u_designer1");
+    else if (role === "client") setActiveUserIdState("u_client_acme");
+  };
+
+  const setActiveUserId = (userId: string) => {
+    setActiveUserIdState(userId);
+  };
+
+  const setUserSession = (user: { id: string; role: UserRole; email: string; name: string }) => {
+    setActiveUserIdState(user.id);
+    setActiveRoleState(user.role);
+    setUserEmailState(user.email);
+    setUserNameState(user.name);
   };
 
   const capabilities = getRoleCapabilities(activeRole);
@@ -152,8 +168,11 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
         activeRole,
         activeUserId,
         activeProjectId,
+        userEmail,
+        userName,
         setActiveRole,
         setActiveUserId,
+        setUserSession,
         setActiveProjectId,
         ...capabilities,
         canEdit: activeRole !== "client",

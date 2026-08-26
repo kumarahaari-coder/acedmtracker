@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { getDesignerPerformanceDetail, PerformanceFilters } from "@/lib/performance";
 import { formatDate, formatDateTime, formatDurationHuman } from "@/lib/formatters";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 export default function DesignerPerformanceDetailPage() {
   const params = useParams();
@@ -101,9 +102,12 @@ export default function DesignerPerformanceDetailPage() {
       {/* Designer Profile Header Banner */}
       <div className="bg-white border border-black/[0.08] rounded-3xl p-6 sm:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center gap-4">
-          <div className="h-16 w-16 rounded-3xl bg-[#1d1d1f] text-white flex items-center justify-center font-bold text-[22px] shadow-sm">
-            {user.avatar || "D"}
-          </div>
+          <UserAvatar
+            avatar={user.avatar}
+            name={user.name}
+            className="h-16 w-16 text-[22px] rounded-3xl"
+            fallbackClassName="bg-[#1d1d1f] text-white shadow-sm"
+          />
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-[24px] sm:text-[30px] font-bold text-[#1d1d1f] tracking-tight">

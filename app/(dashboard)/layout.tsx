@@ -5,17 +5,65 @@ import { useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import { Header } from "@/components/layout/Header";
-import { ResetDataModal } from "@/components/layout/ResetDataModal";
 import { NotificationDrawer } from "@/components/layout/NotificationDrawer";
-import { AlertCircle, ShieldCheck, X } from "lucide-react";
+import { AlertCircle, ShieldCheck, X, Loader2 } from "lucide-react";
+import { getAuthoritativeWorkspaceStateAction } from "@/lib/actions/workspace";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { state, recoveryNotice, dismissRecoveryNotice, resetAllData } = useAppState();
-  const { activeRole, activeUserId } = useRole();
+  const { state, recoveryNotice, dismissRecoveryNotice, hydrateServerState } = useAppState();
+  const { activeRole, activeUserId, setUserSession } = useRole();
   const router = useRouter();
 
-  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isNotifDrawerOpen, setIsNotifDrawerOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Hydrate and maintain authoritative workspace state
+  useEffect(() => {
+    let isMounted = true;
+    async function loadWorkspace() {
+      try {
+        const result = await getAuthoritativeWorkspaceStateAction();
+        if (isMounted && result.success) {
+          if (hydrateServerState) {
+            hydrateServerState(result.state);
+          }
+          if (result.user) {
+            setUserSession({
+              id: result.user.id,
+              role: (result.user.organizationRole as any) || "founder",
+              email: result.user.email,
+              name: result.user.fullName,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[DashboardLayout] Workspace sync notice:", err);
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadWorkspace();
+
+    // Revalidate when user returns to window/tab
+    const handleFocus = () => {
+      loadWorkspace();
+    };
+    window.addEventListener("focus", handleFocus);
+
+    // Lightweight secondary background sync (15s interval)
+    const interval = setInterval(() => {
+      loadWorkspace();
+    }, 15000);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Client Routing Protection: Clients must never enter internal dashboard workspace
   useEffect(() => {
@@ -73,20 +121,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* Internal Navigation Header */}
-      <Header
-        onOpenResetModal={() => setIsResetModalOpen(true)}
-        onOpenNotifDrawer={() => setIsNotifDrawerOpen(true)}
-      />
+      <Header onOpenNotifDrawer={() => setIsNotifDrawerOpen(true)} />
 
       {/* Internal View Content */}
       <main className="flex-1 flex flex-col">{children}</main>
 
       {/* Modals */}
-      <ResetDataModal
-        isOpen={isResetModalOpen}
-        onClose={() => setIsResetModalOpen(false)}
-        onConfirm={resetAllData}
-      />
       <NotificationDrawer
         isOpen={isNotifDrawerOpen}
         onClose={() => setIsNotifDrawerOpen(false)}

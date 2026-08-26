@@ -1,0 +1,65 @@
+"use server";
+
+export async function invalidateWorkspaceEntities(options: {
+  orgId?: string;
+  projectId?: string;
+  userId?: string;
+  paths?: string[];
+}) {
+  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+    return;
+  }
+
+  try {
+    const { revalidatePath, revalidateTag } = await import("next/cache");
+
+    if (options.orgId) {
+      try {
+        revalidateTag(`org:${options.orgId}:users`);
+      } catch (_) {}
+      try {
+        revalidateTag(`org:${options.orgId}:projects`);
+      } catch (_) {}
+    }
+    if (options.projectId) {
+      try {
+        revalidateTag(`project:${options.projectId}`);
+      } catch (_) {}
+      try {
+        revalidateTag(`project:${options.projectId}:members`);
+      } catch (_) {}
+      try {
+        revalidatePath(`/projects/${options.projectId}`);
+      } catch (_) {}
+      try {
+        revalidatePath(`/projects/${options.projectId}/settings`);
+      } catch (_) {}
+      try {
+        revalidatePath(`/portal/${options.projectId}`);
+      } catch (_) {}
+    }
+    if (options.userId) {
+      try {
+        revalidateTag(`user:${options.userId}:projects`);
+      } catch (_) {}
+      try {
+        revalidateTag(`user:${options.userId}:assignments`);
+      } catch (_) {}
+      try {
+        revalidatePath(`/team/${options.userId}`);
+      } catch (_) {}
+      try {
+        revalidatePath(`/performance/${options.userId}`);
+      } catch (_) {}
+    }
+
+    const standardPaths = options.paths || ["/", "/projects", "/team", "/performance", "/portal"];
+    for (const p of standardPaths) {
+      try {
+        revalidatePath(p);
+      } catch (_) {}
+    }
+  } catch (err) {
+    // Non-fatal cache invalidation notice
+  }
+}

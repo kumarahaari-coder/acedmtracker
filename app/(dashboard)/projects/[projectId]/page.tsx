@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate, formatDurationHuman } from "@/lib/formatters";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
 
 export default function ProjectOverviewPage() {
@@ -478,9 +479,12 @@ export default function ProjectOverviewPage() {
                       {/* Primary Designer */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="h-6 w-6 rounded-full bg-[#1d1d1f] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
-                            {primaryUser?.avatar || "U"}
-                          </div>
+                          <UserAvatar
+                            avatar={primaryUser?.avatar}
+                            name={primaryUser?.name}
+                            className="h-6 w-6 text-[10px]"
+                            fallbackClassName="bg-[#1d1d1f] text-white"
+                          />
                           <div>
                             <div className="font-medium text-[#1d1d1f]">
                               {primaryUser?.name || "Unassigned"}

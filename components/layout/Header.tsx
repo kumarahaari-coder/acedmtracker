@@ -10,29 +10,31 @@ import {
   Check,
   ChevronDown,
   FolderPlus,
-  RotateCcw,
   Search,
   Briefcase,
   LineChart,
   Users,
+  LogOut,
+  User,
+  Shield,
 } from "lucide-react";
-import { UserRole } from "@/lib/types";
 import { productConfig, organizationConfig } from "@/lib/config/branding";
 import { GlobalSearchModal } from "./GlobalSearchModal";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 interface HeaderProps {
-  onOpenResetModal: () => void;
+  onOpenResetModal?: () => void;
   onOpenNotifDrawer: () => void;
 }
 
-export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
-  const { activeRole, setActiveRole, activeProjectId, setActiveProjectId } = useRole();
+export function Header({ onOpenNotifDrawer }: HeaderProps) {
+  const { activeRole, activeProjectId, setActiveProjectId, userEmail, userName } = useRole();
   const { state } = useAppState();
   const pathname = usePathname();
   const router = useRouter();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
-  const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
   // Keyboard shortcut Cmd+K or Ctrl+K for search
@@ -58,50 +60,35 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
     router.push(`/projects/${newProjectId}`);
   };
 
-  const roles: { role: UserRole; label: string; desc: string }[] = [
-    { role: "founder", label: "Founder (Vikram Shah)", desc: "Full authority, final approvals & overrides" },
-    { role: "consultant", label: "Consultant (Priyah Sharma)", desc: "Creates briefs, reviews, manages analytics" },
-    { role: "designer", label: "Designer (Rohan Verma)", desc: "Uploads creative, responds to change requests" },
-    { role: "admin", label: "System Admin (Alex Mercer)", desc: "Org admin, project retention, system recovery" },
-    { role: "client", label: "Client (Dr. Ramesh Mehta)", desc: "Isolated client portal view" },
-  ];
+  const handleSignOut = async () => {
+    window.location.href = "/api/auth/signout";
+  };
+
+  const currentUser = state.users.find(
+    (u) => (userEmail && u.email.toLowerCase() === userEmail.toLowerCase()) || (userName && u.name === userName)
+  );
+  const displayName = userName || currentUser?.name || (userEmail ? userEmail.split("@")[0] : "Authorized User");
+  const avatarUrl = currentUser?.avatar;
 
   return (
     <>
-      <header className="sticky top-0 z-40 w-full bg-white/90 backdrop-blur-md border-b border-black/[0.08]">
-        {/* Apple-style Quiet Demo Mode Information Strip */}
-        <div className="flex items-center justify-between bg-[#fbfbfd] px-6 py-1.5 text-[12px] text-[#6e6e73] border-b border-black/[0.06]">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-semibold text-[#1d1d1f]">
-              {productConfig.name}
-            </span>
-            <span className="hidden sm:inline">
-              {organizationConfig.name} Workspace • Interactive Phase A prototype using synthetic sample data.
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onOpenResetModal}
-              className="flex items-center gap-1 text-[12px] font-medium text-[#0066cc] hover:text-[#0077ed] transition"
-              title="Reset sample state to initial deterministic baseline"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Reset Sample Data
-            </button>
-          </div>
-        </div>
-
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-md border-b border-black/[0.08] shadow-sm">
         {/* Apple-style Main Header Navigation (56px) */}
         <div className="flex h-14 items-center justify-between px-6 max-w-7xl mx-auto w-full">
           {/* Left: Brand & My Work / Project Switcher */}
           <div className="flex items-center gap-5">
             <Link href="/" className="flex items-center gap-2.5 text-[#1d1d1f] hover:opacity-80 transition group">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1d1d1f] text-white font-bold text-[13px] shadow-sm tracking-tighter">
-                AC
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white border border-black/[0.08] shadow-sm overflow-hidden p-0.5 shrink-0">
+                <img
+                  src="/ace-assured-logo.png"
+                  alt={organizationConfig.name}
+                  className="h-full w-full object-contain"
+                />
               </div>
               <div className="flex flex-col">
                 <span className="font-bold text-[15px] tracking-tight text-[#1d1d1f] leading-none">
-                  {productConfig.wordmarkPrefix}<span className="text-[#0071e3] font-semibold">{productConfig.wordmarkSuffix}</span>
+                  {productConfig.wordmarkPrefix}
+                  <span className="text-[#0071e3] font-semibold">{productConfig.wordmarkSuffix}</span>
                 </span>
                 <span className="text-[10px] text-[#86868b] font-medium leading-tight mt-0.5">
                   {organizationConfig.name}
@@ -124,7 +111,7 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
               <span>My Work</span>
             </Link>
 
-            {/* Global Team Link (Phase 2.1) */}
+            {/* Global Team Link */}
             {activeRole !== "client" && (
               <Link
                 href="/team"
@@ -139,7 +126,7 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
               </Link>
             )}
 
-            {/* Performance Dashboard Link (Phase 6) */}
+            {/* Performance Dashboard Link */}
             {(activeRole === "founder" || activeRole === "admin" || activeRole === "consultant") && (
               <Link
                 href="/performance"
@@ -154,14 +141,14 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
               </Link>
             )}
 
-            {/* Simple Apple Project Switcher */}
+            {/* Project Switcher */}
             <div className="relative">
               <button
                 onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
                 className="flex items-center gap-2 rounded-full border border-black/[0.12] bg-[#ffffff] hover:bg-[#f5f5f7] px-3.5 py-1 text-[13px] font-medium text-[#1d1d1f] transition"
               >
                 <span className="max-w-[160px] sm:max-w-[200px] truncate font-medium">
-                  {activeProject?.name || "Select Project"}
+                  {activeProject?.name || (state.projects.length === 0 ? "No Projects" : "Select Project")}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 text-[#86868b]" />
               </button>
@@ -172,42 +159,50 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
                     Workspace Projects
                   </div>
                   <div className="space-y-0.5 my-1">
-                    {state.projects
-                      .filter((p) => p.status === "active")
-                      .map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => handleProjectSwitch(p.id)}
-                          className={`w-full flex items-center justify-between rounded-xl px-3 py-2 text-left text-[13px] transition ${
-                            p.id === activeProject?.id
-                              ? "bg-[#f5f5f7] text-[#1d1d1f] font-semibold"
-                              : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-                          }`}
-                        >
-                          <div className="truncate">
-                            <div className="truncate font-medium">{p.name}</div>
-                            <div className="text-[11px] text-[#86868b]">{p.clientBrand}</div>
-                          </div>
-                          {p.id === activeProject?.id && <Check className="h-4 w-4 text-[#0071e3] shrink-0" />}
-                        </button>
-                      ))}
+                    {state.projects.length === 0 ? (
+                      <div className="px-3 py-3 text-[12px] text-[#86868b] text-center">
+                        No projects created yet.
+                      </div>
+                    ) : (
+                      state.projects
+                        .filter((p) => p.status === "active")
+                        .map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => handleProjectSwitch(p.id)}
+                            className={`w-full flex items-center justify-between rounded-xl px-3 py-2 text-left text-[13px] transition ${
+                              p.id === activeProject?.id
+                                ? "bg-[#f5f5f7] text-[#1d1d1f] font-semibold"
+                                : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                            }`}
+                          >
+                            <div className="truncate">
+                              <div className="truncate font-medium">{p.name}</div>
+                              <div className="text-[11px] text-[#86868b]">{p.clientBrand}</div>
+                            </div>
+                            {p.id === activeProject?.id && <Check className="h-4 w-4 text-[#0071e3] shrink-0" />}
+                          </button>
+                        ))
+                    )}
                   </div>
-                  <div className="border-t border-black/[0.06] pt-1.5 mt-1">
-                    <Link
-                      href="/projects"
-                      onClick={() => setIsProjectDropdownOpen(false)}
-                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-[13px] text-[#0066cc] hover:bg-[#f5f5f7] font-medium transition"
-                    >
-                      <FolderPlus className="h-3.5 w-3.5" />
-                      Manage All Projects
-                    </Link>
-                  </div>
+                  {(activeRole === "founder" || activeRole === "admin" || activeRole === "consultant") && (
+                    <div className="border-t border-black/[0.06] pt-1.5 mt-1">
+                      <Link
+                        href="/projects"
+                        onClick={() => setIsProjectDropdownOpen(false)}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-[13px] text-[#0066cc] hover:bg-[#f5f5f7] font-medium transition"
+                      >
+                        <FolderPlus className="h-3.5 w-3.5" />
+                        Manage All Projects
+                      </Link>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Right: Global Search, Role Simulation Selector & Notifications */}
+          {/* Right: Search, Notifications & Authenticated User Profile */}
           <div className="flex items-center gap-3">
             {/* Global Search Input */}
             <button
@@ -222,54 +217,6 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
               </kbd>
             </button>
 
-            {/* Restrained Role Simulation Selector */}
-            <div className="relative">
-              <button
-                onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
-                className="flex items-center gap-2 rounded-full border border-black/[0.12] bg-[#ffffff] hover:bg-[#f5f5f7] px-3.5 py-1 text-[13px] text-[#1d1d1f] transition"
-                title="Simulate different role perspectives"
-              >
-                <span className="text-[12px] text-[#86868b]">Role:</span>
-                <span className="font-medium capitalize">
-                  {activeRole.replace("_", " ")}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-[#86868b]" />
-              </button>
-
-              {isRoleDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-black/[0.08] bg-white p-2 shadow-xl z-50 animate-in fade-in">
-                  <div className="px-3 py-2">
-                    <div className="text-[13px] font-semibold text-[#1d1d1f]">Role Simulation</div>
-                    <p className="text-[11px] text-[#86868b] mt-0.5">
-                      Simulate role-based views and permissions.
-                    </p>
-                  </div>
-                  <div className="space-y-0.5 my-1">
-                    {roles.map((r) => (
-                      <button
-                        key={r.role}
-                        onClick={() => {
-                          setActiveRole(r.role);
-                          setIsRoleDropdownOpen(false);
-                        }}
-                        className={`w-full flex items-start justify-between rounded-xl p-2.5 text-left text-[13px] transition ${
-                          activeRole === r.role
-                            ? "bg-[#f5f5f7] text-[#1d1d1f] font-semibold"
-                            : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-                        }`}
-                      >
-                        <div>
-                          <div className="font-medium">{r.label}</div>
-                          <div className="text-[11px] text-[#86868b]">{r.desc}</div>
-                        </div>
-                        {activeRole === r.role && <Check className="h-4 w-4 text-[#0071e3] shrink-0 mt-0.5" />}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Notifications Button */}
             <button
               onClick={onOpenNotifDrawer}
@@ -281,6 +228,54 @@ export function Header({ onOpenResetModal, onOpenNotifDrawer }: HeaderProps) {
                 <span className="absolute top-0 right-0 flex h-2.5 w-2.5 rounded-full bg-[#0071e3]" />
               )}
             </button>
+
+            {/* Authenticated User Profile & Sign Out Menu */}
+            <div className="relative">
+              <button
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                className="flex items-center gap-2 rounded-full border border-black/[0.12] bg-[#ffffff] hover:bg-[#f5f5f7] pl-1.5 pr-3 py-1 text-[13px] text-[#1d1d1f] transition"
+                title="Account Settings"
+              >
+                <UserAvatar
+                  avatar={avatarUrl}
+                  name={displayName}
+                  className="h-6 w-6 text-[11px]"
+                  fallbackClassName="bg-[#1d1d1f] text-white"
+                />
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold text-[12px] leading-tight capitalize max-w-[120px] truncate">
+                    {displayName}
+                  </span>
+                  <span className="text-[10px] text-[#0071e3] font-semibold uppercase tracking-wider leading-none">
+                    {activeRole}
+                  </span>
+                </div>
+                <ChevronDown className="h-3 w-3 text-[#86868b]" />
+              </button>
+
+              {isUserMenuOpen && (
+                <div className="absolute right-0 mt-2 w-64 rounded-2xl border border-black/[0.08] bg-white p-2 shadow-xl z-50 animate-in fade-in">
+                  <div className="px-3 py-2 border-b border-black/[0.06]">
+                    <div className="text-[13px] font-bold text-[#1d1d1f] truncate">{displayName}</div>
+                    <div className="text-[11px] text-[#86868b] truncate">{userEmail}</div>
+                    <div className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-[#f0f7ff] px-2 py-0.5 text-[10px] font-semibold text-[#0071e3] border border-[#d0e5ff]">
+                      <Shield className="h-2.5 w-2.5" />
+                      <span className="capitalize">{activeRole}</span> • {organizationConfig.name}
+                    </div>
+                  </div>
+
+                  <div className="p-1">
+                    <button
+                      onClick={handleSignOut}
+                      className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-left text-[13px] text-[#d93025] hover:bg-[#fff5f5] font-medium transition"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>

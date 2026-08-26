@@ -1,3 +1,5 @@
+"use server";
+
 import { db, runTransaction } from "../db";
 import { contentAssignments, assignmentDeadlineHistory, contentItems, projects, projectMemberships } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";

@@ -181,7 +181,7 @@ export default function MyWorkDashboardPage() {
   const now = new Date();
   const urgentItems = accessibleItems.filter((i) => {
     if (i.stage === "published" || i.stage === "approved") return false;
-    const deadline = i.deadlines.resubmissionDeadline || i.deadlines.submissionDeadline;
+    const deadline = (i as any).deadlines?.resubmissionDeadline || (i as any).deadlines?.submissionDeadline;
     if (!deadline) return false;
     const dueTime = new Date(deadline).getTime();
     return dueTime < now.getTime() + 48 * 3600 * 1000;
@@ -596,7 +596,7 @@ export default function MyWorkDashboardPage() {
             ) : (
               urgentItems.map((item) => {
                 const proj = state.projects.find((p) => p.id === item.projectId);
-                const deadline = item.deadlines.resubmissionDeadline || item.deadlines.submissionDeadline;
+                const deadline = (item as any).deadlines?.resubmissionDeadline || (item as any).deadlines?.submissionDeadline;
                 return (
                   <Link
                     key={item.id}

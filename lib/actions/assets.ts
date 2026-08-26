@@ -1,3 +1,5 @@
+"use server";
+
 import { db } from "../db";
 import { creativeAssets, submissionAssets, submissionVersions, contentItems, projects, projectMemberships } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";

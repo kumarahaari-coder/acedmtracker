@@ -63,6 +63,7 @@ import {
 } from "@/lib/derived";
 import { formatDate, formatTime, formatDateTime } from "@/lib/formatters";
 import { SafeImage } from "@/components/ui/SafeImage";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 export default function ContentItemWorkspacePage() {
   const params = useParams();
@@ -693,9 +694,11 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[#fbfbfd] border border-black/[0.04]">
-              <div className="h-8 w-8 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[12px] border border-black/[0.06] shrink-0">
-                {assignedMember?.avatar || "U"}
-              </div>
+              <UserAvatar
+                avatar={assignedMember?.avatar}
+                name={assignedMember?.name}
+                className="h-8 w-8 text-[12px]"
+              />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-[#1d1d1f] text-[13px] truncate">
                   {assignedMember?.name || "Unassigned"}

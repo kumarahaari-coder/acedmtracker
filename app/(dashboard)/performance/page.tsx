@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { getOrganizationPerformance, PerformanceFilters } from "@/lib/performance";
 import { formatDurationHuman } from "@/lib/formatters";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 export default function PerformanceDashboardPage() {
   const { state } = useAppState();
@@ -335,9 +336,7 @@ export default function PerformanceDashboardPage() {
                     <tr key={sc.userId} className="hover:bg-[#fbfbfd] transition">
                       <td className="p-3.5 pl-4">
                         <div className="flex items-center gap-2.5">
-                          <div className="h-8 w-8 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[12px] border border-black/[0.06]">
-                            {sc.avatar || "D"}
-                          </div>
+                          <UserAvatar avatar={sc.avatar} name={sc.name} className="h-8 w-8 text-[12px]" />
                           <div>
                             <Link
                               href={`/performance/${sc.userId}`}
@@ -473,9 +472,7 @@ export default function PerformanceDashboardPage() {
                 {/* Designer Card Header */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-2xl bg-[#f2f2f7] text-[#1d1d1f] font-bold flex items-center justify-center text-[15px] border border-black/[0.06]">
-                      {w.avatar || "D"}
-                    </div>
+                    <UserAvatar avatar={w.avatar} name={w.name} className="h-11 w-11 text-[15px]" />
                     <div>
                       <Link
                         href={`/performance/${w.userId}`}

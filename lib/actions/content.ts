@@ -1,3 +1,5 @@
+"use server";
+
 import { db, runTransaction } from "../db";
 import {
   contentGroups,

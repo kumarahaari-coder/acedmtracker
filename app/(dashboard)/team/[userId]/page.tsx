@@ -220,8 +220,12 @@ export default function TeamMemberProfilePage() {
       {/* Main Profile Header Card */}
       <div className="bg-[#ffffff] border border-black/[0.08] rounded-3xl p-6 sm:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div className="flex items-center gap-5">
-          <div className="h-20 w-20 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-bold flex items-center justify-center text-[28px] border border-black/[0.08] shadow-sm shrink-0">
-            {user.avatar}
+          <div className="h-20 w-20 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-bold flex items-center justify-center text-[28px] border border-black/[0.08] shadow-sm shrink-0 overflow-hidden">
+            {user.avatar && user.avatar.startsWith("http") ? (
+              <img src={user.avatar} alt={user.name} className="h-full w-full object-cover" />
+            ) : (
+              user.avatar && user.avatar.length <= 3 ? user.avatar : user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "U"
+            )}
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-3">

@@ -15,6 +15,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { productConfig, organizationConfig } from "@/lib/config/branding";
+import { getAuthoritativeWorkspaceStateAction } from "@/lib/actions/workspace";
 
 export default function ClientPortalLayout({
   children,
@@ -25,10 +26,50 @@ export default function ClientPortalLayout({
   const router = useRouter();
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state } = useAppState();
-  const { activeRole, activeUserId } = useRole();
+  const { state, hydrateServerState } = useAppState();
+  const { activeRole, activeUserId, setUserSession } = useRole();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
+
+  // Authoritative sync on mount and on window focus
+  React.useEffect(() => {
+    let isMounted = true;
+    async function syncPortalState() {
+      try {
+        const result = await getAuthoritativeWorkspaceStateAction();
+        if (isMounted && result.success) {
+          if (hydrateServerState) {
+            hydrateServerState(result.state);
+          }
+          if (result.user) {
+            setUserSession({
+              id: result.user.id,
+              role: (result.user.organizationRole as any) || "client",
+              email: result.user.email,
+              name: result.user.fullName,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[ClientPortalLayout] Sync notice:", err);
+      }
+    }
+
+    syncPortalState();
+
+    const handleFocus = () => syncPortalState();
+    window.addEventListener("focus", handleFocus);
+
+    const interval = setInterval(() => {
+      syncPortalState();
+    }, 15000);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+    };
+  }, []);
 
   // User's accessible projects
   const accessibleProjects = state.projects.filter((p) => {

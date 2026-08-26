@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
+import { createTeamMemberAction } from "@/lib/actions/team";
 import {
   Users,
   Plus,
@@ -83,7 +84,9 @@ export default function GlobalTeamPage() {
     return matchesSearch && matchesRole && matchesStatus;
   });
 
-  const handleCreateEmployee = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateError(null);
 
@@ -92,25 +95,43 @@ export default function GlobalTeamPage() {
       return;
     }
 
-    const res = createTeamMember({
-      name: newName.trim(),
-      email: newEmail.trim(),
-      role: newRole,
-      jobTitle: newJobTitle.trim() || undefined,
-      workingHoursPerDay: newWorkingHours,
-      actorUserId: activeUserId,
-    });
+    setIsSubmitting(true);
+    try {
+      const serverRes = await createTeamMemberAction({
+        fullName: newName.trim(),
+        email: newEmail.trim(),
+        role: newRole as any,
+        actorUserId: activeUserId,
+      });
 
-    if (res.success && res.user) {
+      if (!serverRes.success || !serverRes.user) {
+        setCreateError(serverRes.error || "Failed to create team member in database.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Sync local context state with authoritative created user
+      const res = createTeamMember({
+        id: serverRes.user.id,
+        name: serverRes.user.fullName,
+        email: serverRes.user.email,
+        role: (serverRes.user.organizationRole as any) || newRole,
+        jobTitle: newJobTitle.trim() || undefined,
+        workingHoursPerDay: newWorkingHours,
+        actorUserId: activeUserId,
+      });
+
       setIsAddModalOpen(false);
       setNewName("");
       setNewEmail("");
       setNewRole("designer");
       setNewJobTitle("");
       setNewWorkingHours(8);
-      router.push(`/team/${res.user.id}`);
-    } else {
-      setCreateError(res.error || "Failed to create team member.");
+      router.push(`/team/${serverRes.user.id}`);
+    } catch (err: any) {
+      setCreateError(err.message || "Failed to create team member.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -175,8 +196,12 @@ export default function GlobalTeamPage() {
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="h-7 w-7 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[11px] shrink-0 border border-black/[0.06]">
-                        {user.avatar}
+                      <div className="h-7 w-7 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-semibold flex items-center justify-center text-[11px] shrink-0 border border-black/[0.06] overflow-hidden">
+                        {user.avatar && user.avatar.startsWith("http") ? (
+                          <img src={user.avatar} alt={user.name} className="h-full w-full object-cover" />
+                        ) : (
+                          user.avatar && user.avatar.length <= 3 ? user.avatar : user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "U"
+                        )}
                       </div>
                       <div className="truncate">
                         <Link
@@ -297,8 +322,12 @@ export default function GlobalTeamPage() {
               <div className="space-y-3">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-bold flex items-center justify-center text-[15px] border border-black/[0.06]">
-                      {user.avatar}
+                    <div className="h-11 w-11 rounded-full bg-[#f2f2f7] text-[#1d1d1f] font-bold flex items-center justify-center text-[15px] border border-black/[0.06] overflow-hidden shrink-0">
+                      {user.avatar && user.avatar.startsWith("http") ? (
+                        <img src={user.avatar} alt={user.name} className="h-full w-full object-cover" />
+                      ) : (
+                        user.avatar && user.avatar.length <= 3 ? user.avatar : user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "U"
+                      )}
                     </div>
                     <div>
                       <Link
@@ -479,9 +508,10 @@ export default function GlobalTeamPage() {
                 </button>
                 <button
                   type="submit"
-                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm hover:bg-[#0077ed]"
+                  disabled={isSubmitting}
+                  className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm hover:bg-[#0077ed] disabled:opacity-50"
                 >
-                  Create Team Member
+                  {isSubmitting ? "Creating..." : "Create Team Member"}
                 </button>
               </div>
             </form>
