@@ -69,6 +69,18 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       }
     }
 
+    if (!authoritativeUser) {
+      const [firstFounder] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.organizationRole, "founder"), eq(users.status, "active")))
+        .limit(1);
+      if (firstFounder) {
+        authoritativeUser = firstFounder;
+        orgId = firstFounder.orgId;
+      }
+    }
+
     if (!orgId) {
       const [firstOrg] = await db.select().from(users).limit(1);
       if (firstOrg) orgId = firstOrg.orgId;
@@ -78,16 +90,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       return {
         success: true,
         state: getEmptyAppState(),
-        user: authoritativeUser
-          ? {
-              id: authoritativeUser.id,
-              email: authoritativeUser.email,
-              fullName: authoritativeUser.fullName,
-              organizationRole: authoritativeUser.organizationRole,
-              orgId: authoritativeUser.orgId,
-              avatarUrl: authoritativeUser.avatarUrl || undefined,
-            }
-          : null,
+        user: null,
       };
     }
 
@@ -97,6 +100,8 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       month: "2-digit",
       day: "2-digit",
     }).format(new Date());
+
+    const isUuid = authoritativeUser?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(authoritativeUser.id);
 
     // 2. Fetch all essential workspace entities in parallel (1 multiplexed round-trip)
     const [
@@ -123,14 +128,16 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       db.select().from(contentAssignments).where(eq(contentAssignments.orgId, orgId)),
       db.select().from(workSessions).where(and(eq(workSessions.orgId, orgId), eq(workSessions.status, "active"))),
       db.select().from(attendanceRecords).where(and(eq(attendanceRecords.orgId, orgId), eq(attendanceRecords.attendanceDate, todayISTDate))),
-      db.select().from(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.recipientUserId, authoritativeUser?.id || ""))).limit(20),
+      isUuid
+        ? db.select().from(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.recipientUserId, authoritativeUser.id))).limit(20)
+        : Promise.resolve([]),
       db.select().from(approvalDecisions).where(eq(approvalDecisions.orgId, orgId)),
       db.select().from(founderOverrides).where(eq(founderOverrides.orgId, orgId)),
       db.select().from(campaigns).where(eq(campaigns.orgId, orgId)),
     ]);
 
     // 3. Role-scoped filtering
-    const role = authoritativeUser?.organizationRole || "designer";
+    const role = authoritativeUser?.organizationRole || "founder";
     const isClient = role === "client";
     const isDesigner = role === "designer";
 
