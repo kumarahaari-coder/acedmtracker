@@ -271,7 +271,7 @@ export async function getEligibleAssigneesWithCapacityAction(
       // Filter tasks assigned to this user in the period
       const memberAssignments = assignments.filter((a) => a.assigneeUserId === member.id);
       const itemIds = new Set(memberAssignments.map((a) => a.contentItemId));
-      const memberItems = items.filter((i) => {
+      const memberItems = items.filter((i: any) => {
         if (!itemIds.has(i.id) && i.accountOwnerId !== member.id) return false;
         const d = i.finalInternalDeadline || i.calculatedInternalDeadline || i.scheduledPublicationDate || i.createdAt;
         const dStr = d ? d.toISOString().split("T")[0] : "";

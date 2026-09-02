@@ -179,29 +179,11 @@ export async function createContentItemAction(params: {
           title,
           platform,
           contentType,
-          workType: matchedWorkType,
-          workTypeId: standard?.id || workTypeId || null,
-          campaignId: campaignId || null,
-          contentPillar: contentPillar || null,
-          topic: topic || title,
-          brief: brief || null,
-          referenceLink: referenceLink || null,
-          priority,
-          workNature,
-          accountOwnerId: accountOwnerId || null,
           stage: "draft",
           scopeClassification: scopeClassification || "contracted",
           clientVisible: false,
           scheduledPublicationDate: schedDate,
           submissionDeadline: subDeadline,
-          calculatedInternalDeadline: calculatedDeadline,
-          finalInternalDeadline: finalDeadline,
-          deadlineOverrideReason: deadlineOverrideReason || null,
-          standardContentSeconds,
-          standardProductionSeconds,
-          revisionContentSeconds: contentAdjSeconds,
-          revisionProductionSeconds: prodAdjSeconds,
-          finalPlannedSeconds,
           currentVersionNumber: 1,
         })
         .returning();
@@ -934,7 +916,6 @@ export async function markContentPublishedAction(params: {
       stage: "published",
       liveUrl,
       publishedAt: pubTimestamp,
-      completedAt: item.completedAt || pubTimestamp,
       publishedByUserId: actorUserId,
       updatedAt: sql`NOW()`,
     })
@@ -983,7 +964,6 @@ export async function completeTaskAction(params: {
     .update(contentItems)
     .set({
       stage: item.stage === "draft" || item.stage === "in_review" ? "approved" : item.stage,
-      completedAt: compTimestamp,
       updatedAt: sql`NOW()`,
     })
     .where(eq(contentItems.id, item.id))
