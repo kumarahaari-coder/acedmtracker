@@ -114,9 +114,9 @@ async function runFullProductionLifecycleVerification() {
     initialCopy: { caption: "Summer Announcement Copy", hashtags: ["summer", "growth"], cta: "Learn More" },
   });
 
-  if (!itemResult.success || !itemResult.item || !itemResult.version) throw new Error("Content item creation failed");
-  const contentItem = itemResult.item;
-  const versionV1 = itemResult.version;
+  if (!itemResult.success || !(itemResult as any).item || !(itemResult as any).version) throw new Error("Content item creation failed");
+  const contentItem = (itemResult as any).item;
+  const versionV1 = (itemResult as any).version;
   console.log(`  ✓ Content Item created: ${contentItem.title} (${contentItem.id})`);
   console.log(`  ✓ V1 Draft initialized: ${versionV1.id}\n`);
 

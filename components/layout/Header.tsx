@@ -23,7 +23,6 @@ import { GlobalSearchModal } from "./GlobalSearchModal";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 
 interface HeaderProps {
-  onOpenResetModal?: () => void;
   onOpenNotifDrawer: () => void;
 }
 

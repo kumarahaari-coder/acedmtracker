@@ -68,8 +68,8 @@ import { UserAvatar } from "@/components/ui/UserAvatar";
 export default function ContentItemWorkspacePage() {
   const params = useParams();
   const router = useRouter();
-  const projectId = (params?.projectId as string) || "proj_acme";
-  const itemId = (params?.itemId as string) || "item_acme_1";
+  const projectId = (params?.projectId as string) || "";
+  const itemId = (params?.itemId as string) || "";
 
   const {
     state,
@@ -305,8 +305,7 @@ export default function ContentItemWorkspacePage() {
   const handleLogChangeRequest = () => {
     if (!crText.trim()) return;
     const reviewerName =
-      state.users.find((u) => u.id === activeUserId)?.name ||
-      (activeRole === "founder" ? "Vikram Shah" : "Priyah Sharma");
+      state.users.find((u) => u.id === activeUserId)?.name || "Reviewer";
 
     createChangeRequest({
       projectId,

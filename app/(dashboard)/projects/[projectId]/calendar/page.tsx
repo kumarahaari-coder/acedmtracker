@@ -21,7 +21,7 @@ import { formatDate, getCurrentISTDate } from "@/lib/formatters";
 
 export default function CalendarPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const {
     state,
     updateDeadline,
@@ -63,7 +63,7 @@ export default function CalendarPage() {
   const [quickType, setQuickType] = useState<ContentType>("carousel");
   const [quickScope, setQuickScope] = useState<ScopeClassification>("contracted");
   const [quickDate, setQuickDate] = useState(() => todayIST.dateString);
-  const [quickAssigneeId, setQuickAssigneeId] = useState("u_designer1");
+  const [quickAssigneeId, setQuickAssigneeId] = useState("");
 
   const project = state.projects.find((p) => p.id === projectId);
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
@@ -87,17 +87,17 @@ export default function CalendarPage() {
   const month = currentDate.getMonth();
 
   const getItemLayerDate = (item: ContentItem): string | undefined => {
-    if (dateLayer === "submission") return item.deadlines.submissionDeadline;
-    if (dateLayer === "resubmission") return item.deadlines.resubmissionDeadline;
-    if (dateLayer === "approval_target") return item.deadlines.approvalTarget;
+    if (dateLayer === "submission") return item.deadlines?.submissionDeadline;
+    if (dateLayer === "resubmission") return item.deadlines?.resubmissionDeadline;
+    if (dateLayer === "approval_target") return item.deadlines?.approvalTarget;
     if (dateLayer === "actual_publication") return item.publishedAt;
     if (dateLayer === "scheduled_publication") {
       if (item.stage === "published" && item.publishedAt) {
         return item.publishedAt;
       }
-      return item.deadlines.scheduledPublicationDate;
+      return item.deadlines?.scheduledPublicationDate || (item as any).scheduledPublicationDate;
     }
-    return item.deadlines.scheduledPublicationDate;
+    return item.deadlines?.scheduledPublicationDate || (item as any).scheduledPublicationDate;
   };
 
   // Month grid
@@ -520,6 +520,54 @@ export default function CalendarPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Unscheduled Deliverables Section */}
+      {projectItems.filter((i) => !getItemLayerDate(i)).length > 0 && (
+        <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-[#86868b]" />
+              <h3 className="text-[14px] font-bold text-[#1d1d1f]">
+                Unscheduled Deliverables ({projectItems.filter((i) => !getItemLayerDate(i)).length})
+              </h3>
+            </div>
+            <span className="text-[11px] text-[#86868b]">
+              Items without a scheduled date for layer: {dateLayer.replace(/_/g, " ")}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {projectItems
+              .filter((i) => !getItemLayerDate(i))
+              .map((item) => (
+                <div
+                  key={item.id}
+                  onClick={() => handleItemClick(item, todayIST.dateString)}
+                  className={`p-3 rounded-xl border border-black/[0.08] bg-[#fbfbfd] hover:bg-white hover:border-[#0071e3] transition shadow-xs space-y-1.5 ${
+                    isManagement ? "cursor-pointer" : "cursor-default"
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] text-[#86868b]">
+                    <span className="rounded bg-[#f2f2f7] px-1.5 py-0.5 text-[#1d1d1f] font-medium">
+                      {item.platform}
+                    </span>
+                    <span className="capitalize font-semibold text-[#86868b]">
+                      {item.stage.replace(/_/g, " ")}
+                    </span>
+                  </div>
+                  <div className="font-semibold text-[#1d1d1f] truncate text-[12px]">
+                    {item.title}
+                  </div>
+                  {isManagement && (
+                    <div className="text-[10px] text-[#0071e3] font-medium flex items-center gap-1 pt-0.5">
+                      <Plus className="h-3 w-3" /> Schedule Date
+                    </div>
+                  )}
+                </div>
+              ))}
           </div>
         </div>
       )}

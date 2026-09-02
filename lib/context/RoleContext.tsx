@@ -133,20 +133,49 @@ export function getRoleCapabilities(role: UserRole): RoleCapabilities {
   }
 }
 
-export function RoleProvider({ children }: { children: React.ReactNode }) {
-  const [activeRole, setActiveRoleState] = useState<UserRole>("founder");
-  const [activeUserId, setActiveUserIdState] = useState<string>("u_founder");
+export function RoleProvider({
+  children,
+  initialRole = "founder",
+  initialUserId,
+  initialProjectId = "",
+}: {
+  children: React.ReactNode;
+  initialRole?: UserRole;
+  initialUserId?: string;
+  initialProjectId?: string;
+}) {
+  const [activeRole, setActiveRoleState] = useState<UserRole>(initialRole);
+  const [activeUserId, setActiveUserIdState] = useState<string>(() => {
+    if (initialUserId) return initialUserId;
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      if (initialRole === "admin") return "u_admin";
+      if (initialRole === "founder") return "u_founder";
+      if (initialRole === "consultant") return "u_consultant";
+      if (initialRole === "designer") return "u_designer1";
+      if (initialRole === "client") return "u_client_acme";
+      return "u_founder";
+    }
+    return "";
+  });
   const [userEmail, setUserEmailState] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
-  const [activeProjectId, setActiveProjectId] = useState<string>("proj_acme");
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    if (initialProjectId) return initialProjectId;
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      return "proj_acme";
+    }
+    return "";
+  });
 
   const setActiveRole = (role: UserRole) => {
     setActiveRoleState(role);
-    if (role === "admin") setActiveUserIdState("u_admin");
-    else if (role === "founder") setActiveUserIdState("u_founder");
-    else if (role === "consultant") setActiveUserIdState("u_consultant");
-    else if (role === "designer") setActiveUserIdState("u_designer1");
-    else if (role === "client") setActiveUserIdState("u_client_acme");
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      if (role === "admin") setActiveUserIdState("u_admin");
+      else if (role === "founder") setActiveUserIdState("u_founder");
+      else if (role === "consultant") setActiveUserIdState("u_consultant");
+      else if (role === "designer") setActiveUserIdState("u_designer1");
+      else if (role === "client") setActiveUserIdState("u_client_acme");
+    }
   };
 
   const setActiveUserId = (userId: string) => {

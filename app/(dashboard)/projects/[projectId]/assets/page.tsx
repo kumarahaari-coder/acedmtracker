@@ -17,9 +17,9 @@ import {
   X,
 } from "lucide-react";
 
-export default function AssetVaultPage() {
+export default function CreativeAssetsPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state, addAsset, deleteAsset } = useAppState();
   const { canUploadCreative, activeUserId } = useRole();
 

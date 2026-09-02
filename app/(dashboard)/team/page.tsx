@@ -438,7 +438,7 @@ export default function GlobalTeamPage() {
                 <label className="block font-medium text-[#1d1d1f] mb-1">Full Name *</label>
                 <input
                   type="text"
-                  placeholder="e.g. Vikram Sharma"
+                  placeholder="e.g. Alex Morgan"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
@@ -450,7 +450,7 @@ export default function GlobalTeamPage() {
                 <label className="block font-medium text-[#1d1d1f] mb-1">Work Email Address *</label>
                 <input
                   type="email"
-                  placeholder="e.g. vikram@aceassured.com"
+                  placeholder="e.g. alex@aceassured.com"
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
                   required

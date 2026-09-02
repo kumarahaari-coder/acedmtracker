@@ -34,7 +34,12 @@ export default function ClientPortalLayout({
   // Authoritative sync on mount and on window focus
   React.useEffect(() => {
     let isMounted = true;
+    let isSyncing = false;
+    let focusTimeout: any = null;
+
     async function syncPortalState() {
+      if (isSyncing || !isMounted) return;
+      isSyncing = true;
       try {
         const result = await getAuthoritativeWorkspaceStateAction();
         if (isMounted && result.success) {
@@ -52,21 +57,40 @@ export default function ClientPortalLayout({
         }
       } catch (err) {
         console.warn("[ClientPortalLayout] Sync notice:", err);
+      } finally {
+        isSyncing = false;
       }
     }
 
+    // Initial load
     syncPortalState();
 
-    const handleFocus = () => syncPortalState();
+    // Revalidate when user returns to window/tab (debounced and only if visible)
+    const handleFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      clearTimeout(focusTimeout);
+      focusTimeout = setTimeout(() => {
+        if (!isSyncing && isMounted) {
+          syncPortalState();
+        }
+      }, 1000);
+    };
     window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
 
+    // Lightweight secondary background sync (20s interval, only when tab is visible and idle)
     const interval = setInterval(() => {
-      syncPortalState();
-    }, 15000);
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (!isSyncing && isMounted) {
+        syncPortalState();
+      }
+    }, 20000);
 
     return () => {
       isMounted = false;
+      clearTimeout(focusTimeout);
       window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
       clearInterval(interval);
     };
   }, []);

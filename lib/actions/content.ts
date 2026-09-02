@@ -5,6 +5,9 @@ import {
   contentGroups,
   contentItems,
   submissionVersions,
+  contentAssignments,
+  assignmentDeadlineHistory,
+  auditRecords,
   projects,
   ContentPlatform,
   ContentType,
@@ -12,7 +15,8 @@ import {
 } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
-import { generateLegacyId, resolveProjectId, resolveContentItemId } from "../compat/resolver";
+import { generateLegacyId, resolveProjectId, resolveContentItemId, resolveUserId } from "../compat/resolver";
+import { invalidateWorkspaceEntities } from "./revalidation";
 
 // Helper for computing fingerprints
 function computeFingerprints(copy: { caption: string; hashtags: string[]; cta: string; destinationUrl?: string }, scheduledDate?: string) {
@@ -26,7 +30,7 @@ function computeFingerprints(copy: { caption: string; hashtags: string[]; cta: s
 }
 
 /**
- * 1. Create Standalone Content Item + V1 Draft
+ * 1. Create Standalone Content Item + V1 Draft + Assignment (Atomic Transaction)
  */
 export async function createContentItemAction(params: {
   actorUserId: string;
@@ -37,9 +41,21 @@ export async function createContentItemAction(params: {
   scopeClassification?: ScopeClassification;
   scheduledPublicationDate?: string;
   submissionDeadline?: string;
+  accountableOwnerId?: string;
   initialCopy?: { caption: string; hashtags: string[]; cta: string; destinationUrl?: string };
 }) {
-  const { actorUserId, projectId, title, platform, contentType, scopeClassification, scheduledPublicationDate, submissionDeadline, initialCopy } = params;
+  const {
+    actorUserId,
+    projectId,
+    title,
+    platform,
+    contentType,
+    scopeClassification,
+    scheduledPublicationDate,
+    submissionDeadline,
+    accountableOwnerId,
+    initialCopy,
+  } = params;
 
   const resolvedProjId = await resolveProjectId(projectId);
   if (!resolvedProjId) return { success: false, error: "Project not found." };
@@ -52,54 +68,116 @@ export async function createContentItemAction(params: {
   const actor = await getAuthoritativeUser(actorUserId);
   if (!actor) return { success: false, error: "Actor not found." };
 
+  let resolvedAssigneeId: string | undefined = undefined;
+  if (accountableOwnerId) {
+    resolvedAssigneeId = (await resolveUserId(accountableOwnerId)) || undefined;
+  }
+
   const legacyItemId = generateLegacyId("item");
   const legacyVerId = generateLegacyId("ver");
+  const legacyAsgnId = generateLegacyId("asgn");
 
   const copy = initialCopy || { caption: `Draft copy for ${title}`, hashtags: [], cta: "" };
   const fingerprints = computeFingerprints(copy, scheduledPublicationDate);
 
-  // Insert ContentItem
-  const [item] = await db
-    .insert(contentItems)
-    .values({
-      legacyId: legacyItemId,
-      projectId: resolvedProjId,
-      orgId: actor.orgId,
-      title,
-      platform,
-      contentType,
-      stage: "draft",
-      scopeClassification: scopeClassification || "contracted",
-      clientVisible: false,
-      scheduledPublicationDate: scheduledPublicationDate ? new Date(scheduledPublicationDate) : null,
-      submissionDeadline: submissionDeadline ? new Date(submissionDeadline) : null,
-      currentVersionNumber: 1,
-    })
-    .returning();
+  const schedDate = scheduledPublicationDate ? new Date(scheduledPublicationDate) : null;
+  const subDeadline = submissionDeadline ? new Date(submissionDeadline) : (schedDate || new Date());
 
-  // Insert V1 Draft
-  const [version] = await db
-    .insert(submissionVersions)
-    .values({
-      legacyId: legacyVerId,
-      contentItemId: item.id,
-      projectId: resolvedProjId,
-      orgId: actor.orgId,
-      versionNumber: 1,
-      isDraft: true,
-      caption: copy.caption,
-      hashtags: copy.hashtags,
-      cta: copy.cta,
-      destinationUrl: copy.destinationUrl,
-      scheduledDate: scheduledPublicationDate ? new Date(scheduledPublicationDate) : null,
-      copyFingerprint: fingerprints.copyFingerprint,
-      creativeFingerprint: fingerprints.creativeFingerprint,
-      postingDateFingerprint: fingerprints.postingDateFingerprint,
-      createdByUserId: actor.id,
-    })
-    .returning();
+  try {
+    const result = await runTransaction(async (tx) => {
+      // 1. Insert ContentItem
+      const [item] = await tx
+        .insert(contentItems)
+        .values({
+          legacyId: legacyItemId,
+          projectId: resolvedProjId,
+          orgId: actor.orgId,
+          title,
+          platform,
+          contentType,
+          stage: "draft",
+          scopeClassification: scopeClassification || "contracted",
+          clientVisible: false,
+          scheduledPublicationDate: schedDate,
+          submissionDeadline: subDeadline,
+          currentVersionNumber: 1,
+        })
+        .returning();
 
-  return { success: true, item, version };
+      // 2. Insert V1 Draft
+      const [version] = await tx
+        .insert(submissionVersions)
+        .values({
+          legacyId: legacyVerId,
+          contentItemId: item.id,
+          projectId: resolvedProjId,
+          orgId: actor.orgId,
+          versionNumber: 1,
+          isDraft: true,
+          caption: copy.caption,
+          hashtags: copy.hashtags,
+          cta: copy.cta,
+          destinationUrl: copy.destinationUrl,
+          scheduledDate: schedDate,
+          copyFingerprint: fingerprints.copyFingerprint,
+          creativeFingerprint: fingerprints.creativeFingerprint,
+          postingDateFingerprint: fingerprints.postingDateFingerprint,
+          createdByUserId: actor.id,
+        })
+        .returning();
+
+      // 3. Insert ContentAssignment if assignee specified
+      let assignment = null;
+      if (resolvedAssigneeId) {
+        const [asgn] = await tx
+          .insert(contentAssignments)
+          .values({
+            legacyId: legacyAsgnId,
+            projectId: resolvedProjId,
+            orgId: actor.orgId,
+            contentItemId: item.id,
+            assigneeUserId: resolvedAssigneeId,
+            assignmentRole: "designer",
+            status: "assigned",
+            assignedByUserId: actor.id,
+            initialDueAt: subDeadline,
+            currentDueAt: subDeadline,
+          })
+          .returning();
+        assignment = asgn;
+      }
+
+      // 4. Audit Log
+      await tx
+        .insert(auditRecords)
+        .values({
+          projectId: resolvedProjId,
+          orgId: actor.orgId,
+          actorUserId: actor.id,
+          actorName: actor.fullName,
+          actorRole: actor.organizationRole,
+          action: "create_content_item",
+          entityType: "content_item",
+          entityId: item.id,
+          summary: `Created content item '${title}' (${platform} • ${contentType})`,
+          reason: "Created in workspace",
+        });
+
+      return { item, version, assignment };
+    });
+
+    // Invalidate caches across the project
+    await invalidateWorkspaceEntities({
+      projectId: resolvedProjId,
+      userId: resolvedAssigneeId || actorUserId,
+      orgId: actor.orgId,
+    });
+
+    return { success: true, ...result };
+  } catch (err: any) {
+    console.error("Failed to create content item transactionally:", err);
+    return { success: false, error: err.message || "Failed to create content item." };
+  }
 }
 
 /**
@@ -116,6 +194,8 @@ export async function createContentGroupAction(params: {
     contentType: ContentType;
     scheduledPublicationDate?: string;
     submissionDeadline?: string;
+    accountableOwnerId?: string;
+    scopeClassification?: ScopeClassification;
   }>;
   sharedInitialCopy?: { caption: string; hashtags: string[]; cta: string; destinationUrl?: string };
 }) {
@@ -158,12 +238,17 @@ export async function createContentGroupAction(params: {
 
       const createdItems = [];
       const createdVersions = [];
+      const createdAssignments = [];
 
       // 2. Insert child items and V1 drafts
       for (const p of platforms) {
         const legacyItemId = generateLegacyId("item");
         const legacyVerId = generateLegacyId("ver");
+        const legacyAsgnId = generateLegacyId("asgn");
         const fingerprints = computeFingerprints(copy, p.scheduledPublicationDate);
+
+        const schedDate = p.scheduledPublicationDate ? new Date(p.scheduledPublicationDate) : null;
+        const subDeadline = p.submissionDeadline ? new Date(p.submissionDeadline) : (schedDate || new Date());
 
         const [item] = await tx
           .insert(contentItems)
@@ -176,10 +261,10 @@ export async function createContentGroupAction(params: {
             platform: p.platform,
             contentType: p.contentType,
             stage: "draft",
-            scopeClassification: "contracted",
+            scopeClassification: p.scopeClassification || "contracted",
             clientVisible: false,
-            scheduledPublicationDate: p.scheduledPublicationDate ? new Date(p.scheduledPublicationDate) : null,
-            submissionDeadline: p.submissionDeadline ? new Date(p.submissionDeadline) : null,
+            scheduledPublicationDate: schedDate,
+            submissionDeadline: subDeadline,
             currentVersionNumber: 1,
           })
           .returning();
@@ -197,7 +282,7 @@ export async function createContentGroupAction(params: {
             hashtags: copy.hashtags,
             cta: copy.cta,
             destinationUrl: copy.destinationUrl,
-            scheduledDate: p.scheduledPublicationDate ? new Date(p.scheduledPublicationDate) : null,
+            scheduledDate: schedDate,
             copyFingerprint: fingerprints.copyFingerprint,
             creativeFingerprint: fingerprints.creativeFingerprint,
             postingDateFingerprint: fingerprints.postingDateFingerprint,
@@ -207,13 +292,59 @@ export async function createContentGroupAction(params: {
 
         createdItems.push(item);
         createdVersions.push(version);
+
+        if (p.accountableOwnerId) {
+          const resolvedAssigneeId = await resolveUserId(p.accountableOwnerId);
+          if (resolvedAssigneeId) {
+            const [asgn] = await tx
+              .insert(contentAssignments)
+              .values({
+                legacyId: legacyAsgnId,
+                projectId: resolvedProjId,
+                orgId: actor.orgId,
+                contentItemId: item.id,
+                assigneeUserId: resolvedAssigneeId,
+                assignmentRole: "designer",
+                status: "assigned",
+                assignedByUserId: actor.id,
+                initialDueAt: subDeadline,
+                currentDueAt: subDeadline,
+              })
+              .returning();
+            createdAssignments.push(asgn);
+          }
+        }
       }
 
-      return { group, items: createdItems, versions: createdVersions };
+      // Audit Log
+      await tx
+        .insert(auditRecords)
+        .values({
+          projectId: resolvedProjId,
+          orgId: actor.orgId,
+          actorUserId: actor.id,
+          actorName: actor.fullName,
+          actorRole: actor.organizationRole,
+          action: "create_content_group",
+          entityType: "content_group",
+          entityId: group.id,
+          summary: `Created multi-platform content group '${title}' across ${platforms.map((p) => p.platform).join(", ")}`,
+          reason: "Created in workspace",
+        });
+
+      return { group, items: createdItems, versions: createdVersions, assignments: createdAssignments };
+    });
+
+    // Invalidate caches across the project
+    await invalidateWorkspaceEntities({
+      projectId: resolvedProjId,
+      userId: actorUserId,
+      orgId: actor.orgId,
     });
 
     return { success: true, ...result };
   } catch (err: any) {
+    console.error("Failed to create content group transactionally:", err);
     return { success: false, error: err.message || "Failed to create content group transactionally." };
   }
 }
@@ -277,6 +408,12 @@ export async function saveDraftVersionAction(params: {
     .where(eq(submissionVersions.id, version.id))
     .returning();
 
+  await invalidateWorkspaceEntities({
+    projectId: version.projectId,
+    userId: actorUserId,
+    orgId: version.orgId,
+  });
+
   return { success: true, version: updated };
 }
 
@@ -329,6 +466,12 @@ export async function submitVersionAction(params: {
     return { version: frozen, item };
   });
 
+  await invalidateWorkspaceEntities({
+    projectId: version.projectId,
+    userId: actorUserId,
+    orgId: version.orgId,
+  });
+
   return { success: true, ...result };
 }
 
@@ -345,7 +488,7 @@ export async function createNewVersionDraftAction(params: {
   const resolvedItemId = await resolveContentItemId(contentItemId);
   if (!resolvedItemId) return { success: false, error: "Content item not found." };
 
-  return runTransaction(async (tx) => {
+  const result = await runTransaction(async (tx) => {
     // 1. Lock parent ContentItem row for update
     const [item] = await tx
       .select()
@@ -432,8 +575,18 @@ export async function createNewVersionDraftAction(params: {
       })
       .where(eq(contentItems.id, item.id));
 
-    return { success: true, version: newVersion };
+    return { success: true, version: newVersion, item };
   });
+
+  if (result.success && (result as any).item) {
+    await invalidateWorkspaceEntities({
+      projectId: (result as any).item.projectId,
+      userId: actorUserId,
+      orgId: (result as any).item.orgId,
+    });
+  }
+
+  return result;
 }
 
 /**
@@ -463,21 +616,140 @@ export async function updatePublishingScheduleAction(params: {
     return { success: false, error: "Unauthorized: Designers cannot modify scheduled publication dates." };
   }
 
+  const schedDate = scheduledPublicationDate ? new Date(scheduledPublicationDate) : null;
+  const subDeadline = submissionDeadline !== undefined ? (submissionDeadline ? new Date(submissionDeadline) : null) : item.submissionDeadline;
+
   const [updated] = await db
     .update(contentItems)
     .set({
-      scheduledPublicationDate: scheduledPublicationDate ? new Date(scheduledPublicationDate) : null,
-      submissionDeadline: submissionDeadline !== undefined ? (submissionDeadline ? new Date(submissionDeadline) : null) : item.submissionDeadline,
+      scheduledPublicationDate: schedDate,
+      submissionDeadline: subDeadline,
       updatedAt: sql`NOW()`,
     })
     .where(eq(contentItems.id, item.id))
     .returning();
 
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+  });
+
   return { success: true, item: updated };
 }
 
 /**
- * 7. Set Client Visibility (Restricted: Founder, Admin, Consultant)
+ * 7. Update Deadline / Reschedule Action (Supports multiple deadline layers)
+ */
+export async function updateDeadlineAction(params: {
+  actorUserId: string;
+  contentItemId: string;
+  kind: "scheduled_publication" | "submission" | "resubmission" | "approval_target" | "actual_publication";
+  newDueAt: string;
+  reason?: string;
+}) {
+  const { actorUserId, contentItemId, kind, newDueAt, reason } = params;
+
+  const resolvedItemId = await resolveContentItemId(contentItemId);
+  if (!resolvedItemId) return { success: false, error: "Content item not found." };
+
+  const [item] = await db
+    .select()
+    .from(contentItems)
+    .where(eq(contentItems.id, resolvedItemId))
+    .limit(1);
+
+  if (!item) return { success: false, error: "Content item not found." };
+
+  const access = await requireProjectAccess(actorUserId, item.projectId);
+  if (!access.allowed || access.role === "client" || access.role === "designer" || access.role === "video_editor") {
+    return { success: false, error: "Unauthorized: Only management can modify milestone deadlines." };
+  }
+
+  const targetDate = new Date(newDueAt);
+  const updates: Record<string, any> = { updatedAt: sql`NOW()` };
+
+  if (kind === "scheduled_publication") {
+    updates.scheduledPublicationDate = targetDate;
+  } else if (kind === "submission") {
+    updates.submissionDeadline = targetDate;
+  } else if (kind === "resubmission") {
+    updates.resubmissionDeadline = targetDate;
+  } else if (kind === "approval_target") {
+    updates.approvalTarget = targetDate;
+  } else if (kind === "actual_publication") {
+    updates.publishedAt = targetDate;
+    updates.stage = "published";
+  }
+
+  const [updatedItem] = await db
+    .update(contentItems)
+    .set(updates)
+    .where(eq(contentItems.id, item.id))
+    .returning();
+
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+  });
+
+  return { success: true, item: updatedItem };
+}
+
+/**
+ * 8. Update Publication Details Action (Actual live date + live URL)
+ */
+export async function updatePublicationDetailsAction(params: {
+  actorUserId: string;
+  contentItemId: string;
+  publishedAt: string;
+  liveUrl?: string;
+  reason?: string;
+}) {
+  const { actorUserId, contentItemId, publishedAt, liveUrl, reason } = params;
+
+  const resolvedItemId = await resolveContentItemId(contentItemId);
+  if (!resolvedItemId) return { success: false, error: "Content item not found." };
+
+  const [item] = await db
+    .select()
+    .from(contentItems)
+    .where(eq(contentItems.id, resolvedItemId))
+    .limit(1);
+
+  if (!item) return { success: false, error: "Content item not found." };
+
+  const access = await requireProjectAccess(actorUserId, item.projectId);
+  if (!access.allowed || access.role === "client" || access.role === "designer" || access.role === "video_editor") {
+    return { success: false, error: "Unauthorized: Only management can update actual publication details." };
+  }
+
+  const pubDate = new Date(publishedAt);
+  const updates: Record<string, any> = {
+    publishedAt: pubDate,
+    stage: "published",
+    updatedAt: sql`NOW()`,
+  };
+  if (liveUrl) updates.liveUrl = liveUrl;
+
+  const [updated] = await db
+    .update(contentItems)
+    .set(updates)
+    .where(eq(contentItems.id, item.id))
+    .returning();
+
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+  });
+
+  return { success: true, item: updated };
+}
+
+/**
+ * 9. Set Client Visibility (Restricted: Founder, Admin, Consultant)
  */
 export async function setClientVisibilityAction(params: {
   actorUserId: string;
@@ -511,11 +783,17 @@ export async function setClientVisibilityAction(params: {
     .where(eq(contentItems.id, item.id))
     .returning();
 
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+  });
+
   return { success: true, item: updated };
 }
 
 /**
- * 8. Mark Content Published (Restricted: Founder, Admin, Consultant with strict https:// URL validation)
+ * 10. Mark Content Published (Restricted: Founder, Admin, Consultant with strict https:// URL validation)
  */
 export async function markContentPublishedAction(params: {
   actorUserId: string;
@@ -559,6 +837,12 @@ export async function markContentPublishedAction(params: {
     })
     .where(eq(contentItems.id, item.id))
     .returning();
+
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+  });
 
   return { success: true, item: updated };
 }

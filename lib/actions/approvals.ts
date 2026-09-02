@@ -93,21 +93,21 @@ export async function recordApprovalDecisionAction(params: RecordApprovalDecisio
       );
 
     const hasRejectionOrConditions = activeDecisions.some(
-      (d) => d.decision === "changes_requested" || d.decision === "approved_with_conditions"
+      (d: any) => d.decision === "changes_requested" || d.decision === "approved_with_conditions"
     );
 
     // Dual-signoff check across copy, creative, and posting_date
     const copyApproved =
-      activeDecisions.some((d) => d.component === "copy" && d.reviewerRole === "founder" && d.decision === "approved") &&
-      activeDecisions.some((d) => d.component === "copy" && d.reviewerRole === "consultant" && d.decision === "approved");
+      activeDecisions.some((d: any) => d.component === "copy" && d.reviewerRole === "founder" && d.decision === "approved") &&
+      activeDecisions.some((d: any) => d.component === "copy" && d.reviewerRole === "consultant" && d.decision === "approved");
 
     const creativeApproved =
-      activeDecisions.some((d) => d.component === "creative" && d.reviewerRole === "founder" && d.decision === "approved") &&
-      activeDecisions.some((d) => d.component === "creative" && d.reviewerRole === "consultant" && d.decision === "approved");
+      activeDecisions.some((d: any) => d.component === "creative" && d.reviewerRole === "founder" && d.decision === "approved") &&
+      activeDecisions.some((d: any) => d.component === "creative" && d.reviewerRole === "consultant" && d.decision === "approved");
 
     const dateApproved =
-      activeDecisions.some((d) => d.component === "posting_date" && d.reviewerRole === "founder" && d.decision === "approved") &&
-      activeDecisions.some((d) => d.component === "posting_date" && d.reviewerRole === "consultant" && d.decision === "approved");
+      activeDecisions.some((d: any) => d.component === "posting_date" && d.reviewerRole === "founder" && d.decision === "approved") &&
+      activeDecisions.some((d: any) => d.component === "posting_date" && d.reviewerRole === "consultant" && d.decision === "approved");
 
     let nextStage = "in_review";
     if (hasRejectionOrConditions) {

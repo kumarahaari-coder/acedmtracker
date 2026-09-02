@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.production.local" });
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { assertNonProductionEnvironment } from "@/lib/guards/environment-safety";
 
 import { addClientToProjectAction, removeClientFromProjectAction } from "@/lib/actions/clients";
 import { createTeamMemberAction } from "@/lib/actions/team";
 import { createProjectAction, addProjectMemberAction, removeProjectMemberAction } from "@/lib/actions/projects";
 
 describe("Production Authoritative Synchronization & Provisioning Architecture", () => {
+  beforeAll(() => {
+    assertNonProductionEnvironment("Authoritative realtime sync test");
+  });
+
   const orgId = "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
 
   it("provisions a new Team Member in PostgreSQL with immediate login eligibility", async () => {

@@ -333,12 +333,8 @@ export function AppStateProvider({
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
-      const loaded = loadStoredState();
-      if (loaded && loaded.state) {
-        setState(loaded.state);
-      }
-    }
+    // Purge legacy storage keys if present in browser session
+    loadStoredState();
   }, []);
 
   const hydrateServerState = (serverState: AppState) => {
@@ -596,7 +592,45 @@ export function AppStateProvider({
           scopeClassification: itemData.scopeClassification,
           scheduledPublicationDate: itemData.deadlines?.scheduledPublicationDate,
           submissionDeadline: itemData.deadlines?.submissionDeadline,
-        }).catch((err) => console.error("Failed to sync content item to database:", err));
+          accountableOwnerId: itemData.accountableOwnerId,
+        })
+          .then((res: any) => {
+            if (res.success && res.item) {
+              setState((prev) => ({
+                ...prev,
+                contentItems: prev.contentItems.map((ci) =>
+                  ci.id === newId
+                    ? {
+                        ...ci,
+                        id: res.item.id,
+                        projectId: res.item.projectId,
+                        currentVersionNumber: res.item.currentVersionNumber,
+                        activeDraftVersionId: res.version?.id || ci.activeDraftVersionId,
+                      }
+                    : ci
+                ),
+                submissionVersions: prev.submissionVersions.map((sv) =>
+                  sv.id === v1Id
+                    ? {
+                        ...sv,
+                        id: res.version?.id || sv.id,
+                        contentItemId: res.item.id,
+                      }
+                    : sv
+                ),
+                contentAssignments: prev.contentAssignments.map((ca) =>
+                  ca.contentItemId === newId
+                    ? {
+                        ...ca,
+                        id: res.assignment?.id || ca.id,
+                        contentItemId: res.item.id,
+                      }
+                    : ca
+                ),
+              }));
+            }
+          })
+          .catch((err) => console.error("Failed to sync content item to database:", err));
       });
     }
 
@@ -744,6 +778,84 @@ export function AppStateProvider({
       submissionVersions: [...prev.submissionVersions, ...newVersions],
       auditRecords: [audit, ...prev.auditRecords],
     }));
+
+    if (typeof window !== "undefined") {
+      import("../actions/content").then(({ createContentGroupAction }) => {
+        createContentGroupAction({
+          actorUserId: params.actorUserId || "u_founder",
+          projectId: params.projectId,
+          title: params.title,
+          description: params.description,
+          conceptNotes: params.conceptNotes,
+          platforms: params.platforms.map((p) => ({
+            platform: p.platform,
+            contentType: p.contentType,
+            accountableOwnerId: p.accountableOwnerId,
+            submissionDeadline: p.submissionDeadline,
+            scheduledPublicationDate: p.scheduledPublicationDate,
+          })),
+          sharedInitialCopy: params.sharedInitialCopy,
+        })
+          .then((res: any) => {
+            if (res.success && res.group && res.items) {
+              setState((prev) => {
+                const remainingGroups = prev.contentGroups.filter((g) => g.id !== groupId);
+                const remainingItems = prev.contentItems.filter((ci) => !itemIds.includes(ci.id));
+                const remainingAssignments = prev.contentAssignments.filter(
+                  (ca) => !itemIds.includes(ca.contentItemId)
+                );
+
+                const authGroup: ContentGroup = {
+                  id: res.group.id,
+                  projectId: res.group.projectId,
+                  title: res.group.title,
+                  description: res.group.description || undefined,
+                  conceptNotes: res.group.conceptNotes || undefined,
+                  contentItemIds: res.items.map((i: any) => i.id),
+                  createdByUserId: res.group.createdByUserId,
+                  createdAt: res.group.createdAt ? new Date(res.group.createdAt).toISOString() : now,
+                  updatedAt: res.group.updatedAt ? new Date(res.group.updatedAt).toISOString() : now,
+                };
+
+                const authItems: ContentItem[] = res.items.map((i: any, idx: number) => {
+                  const ver = res.versions?.[idx];
+                  const asgn = res.assignments?.[idx];
+                  const p = params.platforms[idx];
+                  return {
+                    id: i.id,
+                    projectId: i.projectId,
+                    contentGroupId: res.group.id,
+                    title: i.title,
+                    platform: i.platform,
+                    contentType: i.contentType,
+                    stage: i.stage,
+                    scopeClassification: i.scopeClassification,
+                    currentVersionNumber: i.currentVersionNumber,
+                    activeDraftVersionId: ver?.id,
+                    clientVisible: i.clientVisible || false,
+                    accountableOwnerId: asgn?.assigneeUserId || p?.accountableOwnerId || "",
+                    collaboratorIds: [],
+                    deadlines: {
+                      submissionDeadline: p?.submissionDeadline || now,
+                      scheduledPublicationDate: p?.scheduledPublicationDate,
+                    },
+                    scheduledPublicationDate: p?.scheduledPublicationDate,
+                    createdAt: i.createdAt ? new Date(i.createdAt).toISOString() : now,
+                    updatedAt: i.updatedAt ? new Date(i.updatedAt).toISOString() : now,
+                  };
+                });
+
+                return {
+                  ...prev,
+                  contentGroups: [...remainingGroups, authGroup],
+                  contentItems: [...remainingItems, ...authItems],
+                };
+              });
+            }
+          })
+          .catch((err) => console.error("Failed to sync content group to database:", err));
+      });
+    }
 
     return { success: true, group, contentItems: newItems };
   };
@@ -2081,6 +2193,18 @@ export function AppStateProvider({
       auditRecords: [audit, ...prev.auditRecords],
     }));
 
+    if (typeof window !== "undefined") {
+      import("../actions/content").then(({ updatePublicationDetailsAction }) => {
+        updatePublicationDetailsAction({
+          actorUserId: params.actorUserId,
+          contentItemId: params.contentItemId,
+          publishedAt: params.publishedAt || new Date().toISOString(),
+          liveUrl: params.liveUrl,
+          reason: params.reason,
+        }).catch((err) => console.error("Failed to sync publication details to database:", err));
+      });
+    }
+
     return { success: true };
   };
 
@@ -2359,6 +2483,18 @@ export function AppStateProvider({
         auditRecords: [audit, ...prev.auditRecords],
       };
     });
+
+    if (typeof window !== "undefined") {
+      import("../actions/content").then(({ updateDeadlineAction }) => {
+        updateDeadlineAction({
+          actorUserId: params.changedByUserId,
+          contentItemId: params.contentItemId,
+          kind: params.kind,
+          newDueAt: params.newDueAt,
+          reason: params.reason,
+        }).catch((err) => console.error("Failed to sync deadline to database:", err));
+      });
+    }
   };
 
   // --- EXTERNAL GUEST LINKS ---

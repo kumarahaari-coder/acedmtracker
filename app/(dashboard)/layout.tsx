@@ -20,7 +20,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Hydrate and maintain authoritative workspace state
   useEffect(() => {
     let isMounted = true;
+    let isSyncing = false;
+    let focusTimeout: any = null;
+
     async function loadWorkspace() {
+      if (isSyncing || !isMounted) return;
+      isSyncing = true;
       try {
         const result = await getAuthoritativeWorkspaceStateAction();
         if (isMounted && result.success) {
@@ -39,28 +44,42 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       } catch (err) {
         console.warn("[DashboardLayout] Workspace sync notice:", err);
       } finally {
+        isSyncing = false;
         if (isMounted) {
           setIsLoading(false);
         }
       }
     }
 
+    // Initial load
     loadWorkspace();
 
-    // Revalidate when user returns to window/tab
+    // Revalidate when user returns to window/tab (debounced and only if visible)
     const handleFocus = () => {
-      loadWorkspace();
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      clearTimeout(focusTimeout);
+      focusTimeout = setTimeout(() => {
+        if (!isSyncing && isMounted) {
+          loadWorkspace();
+        }
+      }, 1000);
     };
     window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
 
-    // Lightweight secondary background sync (15s interval)
+    // Lightweight secondary background sync (20s interval, only when tab is visible and idle)
     const interval = setInterval(() => {
-      loadWorkspace();
-    }, 15000);
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (!isSyncing && isMounted) {
+        loadWorkspace();
+      }
+    }, 20000);
 
     return () => {
       isMounted = false;
+      clearTimeout(focusTimeout);
       window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
       clearInterval(interval);
     };
   }, []);

@@ -15,45 +15,29 @@ export async function invalidateWorkspaceEntities(options: {
 
     if (options.orgId) {
       try {
-        revalidateTag(`org:${options.orgId}:users`);
-      } catch (_) {}
-      try {
-        revalidateTag(`org:${options.orgId}:projects`);
+        revalidateTag(`org:${options.orgId}`);
       } catch (_) {}
     }
+
     if (options.projectId) {
       try {
         revalidateTag(`project:${options.projectId}`);
       } catch (_) {}
       try {
-        revalidateTag(`project:${options.projectId}:members`);
+        revalidatePath(`/projects/${options.projectId}`, "layout");
       } catch (_) {}
       try {
-        revalidatePath(`/projects/${options.projectId}`);
-      } catch (_) {}
-      try {
-        revalidatePath(`/projects/${options.projectId}/settings`);
-      } catch (_) {}
-      try {
-        revalidatePath(`/portal/${options.projectId}`);
-      } catch (_) {}
-    }
-    if (options.userId) {
-      try {
-        revalidateTag(`user:${options.userId}:projects`);
-      } catch (_) {}
-      try {
-        revalidateTag(`user:${options.userId}:assignments`);
-      } catch (_) {}
-      try {
-        revalidatePath(`/team/${options.userId}`);
-      } catch (_) {}
-      try {
-        revalidatePath(`/performance/${options.userId}`);
+        revalidatePath(`/portal/${options.projectId}`, "layout");
       } catch (_) {}
     }
 
-    const standardPaths = options.paths || ["/", "/projects", "/team", "/performance", "/portal"];
+    if (options.userId) {
+      try {
+        revalidateTag(`user:${options.userId}`);
+      } catch (_) {}
+    }
+
+    const standardPaths = options.paths || ["/"];
     for (const p of standardPaths) {
       try {
         revalidatePath(p);

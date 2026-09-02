@@ -42,7 +42,7 @@ describe("Rendered Global Team Management & Profile Workflows", () => {
     fireEvent.click(addBtn);
 
     expect(screen.getByText("Add Organization Team Member")).toBeDefined();
-    expect(screen.getByPlaceholderText("e.g. Vikram Sharma")).toBeDefined();
+    expect(screen.getByPlaceholderText("e.g. Alex Morgan")).toBeDefined();
   });
 
   it("renders Employee Profile /team/[userId] with Project Memberships and Attendance", () => {

@@ -118,9 +118,9 @@ async function runProductionReadinessAcceptanceAudit() {
     scheduledPublicationDate: "2026-10-01T15:00:00Z",
     initialCopy: { caption: "Keynote Announcement", hashtags: ["keynote", "leadership"], cta: "Register" },
   });
-  if (!createItemRes.success || !createItemRes.item || !createItemRes.version) throw new Error("Failed to create deliverable");
-  const item = createItemRes.item;
-  const versionV1 = createItemRes.version;
+  if (!createItemRes.success || !(createItemRes as any).item || !(createItemRes as any).version) throw new Error("Failed to create deliverable");
+  const item = (createItemRes as any).item;
+  const versionV1 = (createItemRes as any).version;
   console.log(`  ✓ Consultant created Deliverable (${item.id}) with initial V1 Draft (${versionV1.id})`);
 
   // Assign to Designer

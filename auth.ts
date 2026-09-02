@@ -24,55 +24,41 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
      * Database-driven signIn validation
      * Enforces:
      * 1. Normalized email matching against provisioned AceCore users.
-     * 2. Rejection of unprovisioned emails.
-     * 3. Rejection of inactive user accounts.
+     * 2. Rejection of unprovisioned emails with explicit classification.
+     * 3. Rejection of inactive/deleted user accounts.
      */
     async signIn({ user, account, profile }) {
       try {
-        if (!user.email) {
-          console.warn("[Auth.js] Sign-in rejected: No email provided");
+        const rawEmail = user?.email || (profile as any)?.email;
+        if (!rawEmail) {
+          console.warn("[Auth.js] Sign-in rejected [NO_EMAIL]: No email provided in OAuth profile");
           return false;
         }
-        const normalizedEmail = user.email.toLowerCase().trim();
+        const normalizedEmail = rawEmail.toLowerCase().trim();
 
-        // Query AceCore provisioned user
-        const existingUser = await db
+        // Query AceCore provisioned user from PostgreSQL
+        const [aceUser] = await db
           .select()
           .from(users)
           .where(eq(users.normalizedEmail, normalizedEmail))
           .limit(1);
 
-        if (existingUser.length === 0) {
-          console.warn(`[Auth.js] Sign-in rejected: Unprovisioned email ${normalizedEmail}`);
+        if (!aceUser) {
+          console.warn(`[Auth.js] Sign-in rejected [USER_NOT_FOUND]: Unprovisioned email ${normalizedEmail}`);
           return false;
         }
 
-        const aceUser = existingUser[0];
-
-        if (aceUser.status === "inactive" || aceUser.status === "deleted") {
-          console.warn(`[Auth.js] Sign-in rejected: ${aceUser.status} account ${normalizedEmail}`);
+        if (aceUser.status === "inactive") {
+          console.warn(`[Auth.js] Sign-in rejected [USER_INACTIVE]: Inactive account ${normalizedEmail}`);
           return false;
         }
 
-        // Atomically link Auth.js identity and avatar on first or subsequent logins
-        const updates: Record<string, any> = { updatedAt: sql`NOW()` };
-        if (!aceUser.authUserId && (user as any).id) {
-          updates.authUserId = (user as any).id;
-        }
-        if (user.image && aceUser.avatarUrl !== user.image) {
-          updates.avatarUrl = user.image;
-        }
-        if (user.name && aceUser.fullName === "Client Contact" && user.name.trim()) {
-          updates.fullName = user.name.trim();
+        if (aceUser.status === "deleted") {
+          console.warn(`[Auth.js] Sign-in rejected [USER_DELETED]: Permanently deleted account ${normalizedEmail}`);
+          return false;
         }
 
-        if (Object.keys(updates).length > 1) {
-          await db
-            .update(users)
-            .set(updates)
-            .where(eq(users.id, aceUser.id));
-        }
-
+        console.log(`[Auth.js] Sign-in approved [AUTHORIZED]: ${normalizedEmail} (role: ${aceUser.organizationRole})`);
         return true;
       } catch (err) {
         console.error("[Auth.js] Unexpected error in signIn callback:", err);
@@ -82,20 +68,40 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
     async jwt({ token, user, account, profile }) {
       try {
-        if (token.email) {
-          const normalizedEmail = token.email.toLowerCase().trim();
-          const aceUser = await db
+        const rawEmail = token.email || user?.email || (profile as any)?.email;
+        if (rawEmail) {
+          const normalizedEmail = rawEmail.toLowerCase().trim();
+          const [aceUser] = await db
             .select()
             .from(users)
             .where(eq(users.normalizedEmail, normalizedEmail))
             .limit(1);
 
-          if (aceUser.length > 0) {
-            token.userId = aceUser[0].id;
-            token.orgId = aceUser[0].orgId;
-            token.role = aceUser[0].organizationRole;
-            token.status = aceUser[0].status;
-            token.name = aceUser[0].fullName;
+          if (aceUser && aceUser.status === "active") {
+            token.userId = aceUser.id;
+            token.orgId = aceUser.orgId;
+            token.role = aceUser.organizationRole;
+            token.status = aceUser.status;
+            token.name = aceUser.fullName;
+
+            // Atomically link Auth.js identity and sync avatar/name if newly provisioned
+            const updates: Record<string, any> = { updatedAt: sql`NOW()` };
+            if (user?.id && aceUser.authUserId !== user.id) {
+              updates.authUserId = user.id;
+            }
+            if (user?.image && aceUser.avatarUrl !== user.image) {
+              updates.avatarUrl = user.image;
+            }
+            if (user?.name && aceUser.fullName === "Client Contact" && user.name.trim()) {
+              updates.fullName = user.name.trim();
+            }
+
+            if (Object.keys(updates).length > 1) {
+              await db
+                .update(users)
+                .set(updates)
+                .where(eq(users.id, aceUser.id));
+            }
           }
         }
       } catch (err) {

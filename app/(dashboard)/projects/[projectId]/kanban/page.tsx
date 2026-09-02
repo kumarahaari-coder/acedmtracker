@@ -19,9 +19,9 @@ import { ContentItem, ContentStage } from "@/lib/types";
 import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate } from "@/lib/formatters";
 
-export default function KanbanPage() {
+export default function KanbanBoardPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state, updateContentItem } = useAppState();
   const { activeRole, canManageWorkflow, canApprove } = useRole();
 

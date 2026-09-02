@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.production.local" });
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
+import { assertNonProductionEnvironment } from "@/lib/guards/environment-safety";
 
 import { createTeamMemberAction, permanentlyDeleteTeamMemberAction } from "@/lib/actions/team";
 import { createProjectAction, addProjectMemberAction } from "@/lib/actions/projects";
@@ -10,7 +9,16 @@ import { users, contentAssignments, workSessions, projects, contentItems } from 
 import { eq, and } from "drizzle-orm";
 
 describe("Permanent Team Member Deletion Architecture & Safeguards", () => {
-  const orgId = "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
+  let orgId = "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
+
+  beforeAll(async () => {
+    assertNonProductionEnvironment("Permanent team member deletion test");
+    const [org] = await db.select().from(projects).limit(1);
+    if (org) {
+      orgId = org.orgId;
+    }
+  });
+
   let founderUserId: string;
   let adminUserId: string;
   let consultantUserId: string;

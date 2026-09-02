@@ -24,7 +24,7 @@ import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
 
 export default function ApprovalsQueuePage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state, createContentItem, submitVersion } = useAppState();
   const { activeRole, activeUserId } = useRole();
 
@@ -38,7 +38,7 @@ export default function ApprovalsQueuePage() {
   const [newPlatform, setNewPlatform] = useState<ContentPlatform>("Instagram");
   const [newType, setNewType] = useState<ContentType>("carousel");
   const [newDate, setNewDate] = useState(() => new Date().toISOString().split("T")[0]);
-  const [newAssigneeId, setNewAssigneeId] = useState("u_designer1");
+  const [newAssigneeId, setNewAssigneeId] = useState("");
   const [newCaption, setNewCaption] = useState("");
   const [newAssetFile, setNewAssetFile] = useState<{
     filename: string;
@@ -78,6 +78,11 @@ export default function ApprovalsQueuePage() {
     });
 
   const filteredItems = projectItems.filter((item) => {
+    // Drafts and ideas are internal work-in-progress and must NOT appear in the review queue
+    if (item.stage === "draft" || item.stage === "idea") {
+      return false;
+    }
+
     const version = state.submissionVersions.find(
       (v) => v.id === item.latestSubmittedVersionId || v.id === item.activeDraftVersionId
     );

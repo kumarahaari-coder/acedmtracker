@@ -31,9 +31,9 @@ import { formatDate, formatDurationHuman } from "@/lib/formatters";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
 
-export default function ProjectOverviewPage() {
+export default function ProjectDashboardPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state, updateProjectObjective } = useAppState();
   const { activeRole, activeUserId, canApprove } = useRole();
 

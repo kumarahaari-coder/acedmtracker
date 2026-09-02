@@ -200,9 +200,9 @@ async function runLiveIntegrationVerification() {
     initialCopy: { caption: "Alpha Carousel V1 Copy", hashtags: ["alpha", "growth"], cta: "Visit website" },
   });
 
-  if (!itemResult.success || !itemResult.item || !itemResult.version) throw new Error("ContentItem creation failed");
-  const contentItem = itemResult.item;
-  const versionV1 = itemResult.version;
+  if (!itemResult.success || !(itemResult as any).item || !(itemResult as any).version) throw new Error("ContentItem creation failed");
+  const contentItem = (itemResult as any).item;
+  const versionV1 = (itemResult as any).version;
 
   // Attach PDF Asset to V1
   await confirmAssetUploadAction({

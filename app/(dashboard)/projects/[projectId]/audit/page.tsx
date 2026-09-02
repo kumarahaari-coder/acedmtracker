@@ -9,9 +9,9 @@ import { History, ShieldAlert, Lock, ArrowLeft, Filter, ShieldCheck } from "luci
 import { formatDateTime } from "@/lib/formatters";
 import { getAuthoritativeAuditHistory } from "@/lib/derived";
 
-export default function AuditLogPage() {
+export default function AuditTrailPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state } = useAppState();
   const { activeRole, activeUserId } = useRole();
 

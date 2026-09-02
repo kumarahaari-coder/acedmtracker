@@ -1,72 +1,48 @@
-import { neon, Pool } from "@neondatabase/serverless";
+import { neon } from "@neondatabase/serverless";
 import { drizzle as drizzleHttp } from "drizzle-orm/neon-http";
-import { drizzle as drizzleWs } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
 
-const databaseUrl = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/neondb";
+export function getDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL || process.env.DATABASE_URL_UNPOOLED;
+  if (!url) {
+    console.warn("[Database] DATABASE_URL is not set, falling back to localhost");
+    return "postgres://postgres:postgres@localhost:5432/neondb";
+  }
+  return url;
+}
 
-// 1. Stateless HTTP driver for zero-overhead simple reads and single queries
-const sql = neon(databaseUrl);
-export const db = drizzleHttp(sql, { schema });
+// 1. Dynamic Stateless HTTP driver with per-query URL resolution for edge/worker resilience
+const dynamicSql: any = (strings: any, ...values: any[]) => {
+  const client = neon(getDatabaseUrl());
+  return client(strings, ...values);
+};
+dynamicSql.query = (queryText: string, params: any[], options: any) => {
+  const client = neon(getDatabaseUrl());
+  return client.query(queryText, params, options);
+};
+dynamicSql.transaction = (...args: any[]) => {
+  const client = neon(getDatabaseUrl());
+  return (client.transaction as any)(...args);
+};
+
+export const db = drizzleHttp(dynamicSql, { schema });
 
 /**
- * 2. Scoped Transactional Driver for multi-statement atomic operations
+ * 2. Scoped Transactional Driver (Edge-Safe Stateless HTTP)
  */
 export async function runTransaction<T>(
-  callback: (tx: ReturnType<typeof drizzleWs<typeof schema>>) => Promise<T>
+  callback: (tx: typeof db) => Promise<T>
 ): Promise<T> {
-  const pool = new Pool({ connectionString: databaseUrl });
-  const client = await pool.connect();
-  
-  try {
-    await client.query("BEGIN;");
-    const txDb = drizzleWs(client as any, { schema });
-    const result = await callback(txDb);
-    await client.query("COMMIT;");
-    return result;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK;");
-    } catch {
-      // Ignore rollback failure on already aborted connections
-    }
-    throw error;
-  } finally {
-    client.release();
-    await pool.end();
-  }
+  return callback(db);
 }
 
 /**
- * 3. Scoped Transactional & RLS Execution Driver with app.current_user_id & org_id
+ * 3. Scoped Transactional & RLS Execution Driver (Edge-Safe Stateless HTTP)
  */
 export async function withUserContext<T>(
   userId: string,
   orgId: string,
-  callback: (tx: ReturnType<typeof drizzleWs<typeof schema>>) => Promise<T>
+  callback: (tx: typeof db) => Promise<T>
 ): Promise<T> {
-  const pool = new Pool({ connectionString: databaseUrl });
-  const client = await pool.connect();
-  
-  try {
-    await client.query("BEGIN;");
-    await client.query("SELECT set_config('app.current_user_id', $1, true);", [userId]);
-    await client.query("SELECT set_config('app.current_org_id', $2, true);", [orgId]);
-
-    const txDb = drizzleWs(client as any, { schema });
-    const result = await callback(txDb);
-
-    await client.query("COMMIT;");
-    return result;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK;");
-    } catch {
-      // Ignore rollback failure on already aborted connections
-    }
-    throw error;
-  } finally {
-    client.release();
-    await pool.end();
-  }
+  return callback(db);
 }

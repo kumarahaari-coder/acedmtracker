@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "../db";
-import { projects, projectMemberships, users } from "../db/schema";
+import { projects, projectMemberships, users, organizations } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
 import { resolveProjectId, resolveUserId } from "../compat/resolver";
@@ -49,7 +49,8 @@ export async function createProjectAction(params: {
     }
 
     if (!orgId) {
-      orgId = "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
+      const [org] = await db.select({ id: organizations.id }).from(organizations).limit(1);
+      orgId = org?.id || "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
     }
 
     const [created] = await db

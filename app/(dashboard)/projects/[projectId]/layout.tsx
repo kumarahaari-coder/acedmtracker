@@ -6,7 +6,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
 
   return (
     <div className="flex-1 flex bg-[#ffffff]">

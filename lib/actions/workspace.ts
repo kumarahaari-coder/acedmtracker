@@ -5,25 +5,25 @@ import {
   projects,
   projectMemberships,
   users,
+  contentGroups,
   contentItems,
   submissionVersions,
   contentAssignments,
   workSessions,
-  changeRequests,
   approvalDecisions,
   founderOverrides,
   attendanceRecords,
-  comments,
   notifications,
 } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
 import { AppState } from "../types";
 import { getEmptyAppState } from "../state/empty";
 
 /**
  * Returns an authoritative initial or refreshed workspace state directly from PostgreSQL.
- * If no records exist in the organization, returns clean empty arrays.
+ * Optimized for edge runtime and high-concurrency Cloudflare Worker limits using
+ * parallel batch querying (Promise.all) and lean global payload scoping.
  */
 export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string): Promise<{
   success: boolean;
@@ -90,85 +90,43 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       };
     }
 
-    // 1. Fetch organization projects
-    const orgProjects = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.orgId, orgId));
+    const todayISTDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
 
-    // 2. Fetch project memberships
-    const orgMemberships = await db
-      .select()
-      .from(projectMemberships)
-      .where(eq(projectMemberships.orgId, orgId));
+    // 2. Fetch all essential workspace entities in parallel (1 multiplexed round-trip)
+    const [
+      orgProjects,
+      orgMemberships,
+      orgUsers,
+      orgGroups,
+      orgItems,
+      orgVersions,
+      orgAssignments,
+      activeSessions,
+      todayAttendance,
+      userNotifs,
+      orgDecisions,
+      orgOverrides,
+    ] = await Promise.all([
+      db.select().from(projects).where(eq(projects.orgId, orgId)),
+      db.select().from(projectMemberships).where(eq(projectMemberships.orgId, orgId)),
+      db.select().from(users).where(eq(users.orgId, orgId)),
+      db.select().from(contentGroups).where(eq(contentGroups.orgId, orgId)),
+      db.select().from(contentItems).where(eq(contentItems.orgId, orgId)),
+      db.select().from(submissionVersions).where(eq(submissionVersions.orgId, orgId)),
+      db.select().from(contentAssignments).where(eq(contentAssignments.orgId, orgId)),
+      db.select().from(workSessions).where(and(eq(workSessions.orgId, orgId), eq(workSessions.status, "active"))),
+      db.select().from(attendanceRecords).where(and(eq(attendanceRecords.orgId, orgId), eq(attendanceRecords.attendanceDate, todayISTDate))),
+      db.select().from(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.recipientUserId, authoritativeUser?.id || ""))).limit(20),
+      db.select().from(approvalDecisions).where(eq(approvalDecisions.orgId, orgId)),
+      db.select().from(founderOverrides).where(eq(founderOverrides.orgId, orgId)),
+    ]);
 
-    // 3. Fetch org users
-    const orgUsers = await db
-      .select()
-      .from(users)
-      .where(eq(users.orgId, orgId));
-
-    // 4. Fetch content items
-    const orgItems = await db
-      .select()
-      .from(contentItems)
-      .where(eq(contentItems.orgId, orgId));
-
-    // 5. Fetch submission versions
-    const orgVersions = await db
-      .select()
-      .from(submissionVersions)
-      .where(eq(submissionVersions.orgId, orgId));
-
-    // 6. Fetch assignments
-    const orgAssignments = await db
-      .select()
-      .from(contentAssignments)
-      .where(eq(contentAssignments.orgId, orgId));
-
-    // 7. Fetch work sessions
-    const orgSessions = await db
-      .select()
-      .from(workSessions)
-      .where(eq(workSessions.orgId, orgId));
-
-    // 8. Fetch attendance records
-    const orgAttendance = await db
-      .select()
-      .from(attendanceRecords)
-      .where(eq(attendanceRecords.orgId, orgId));
-
-    // 9. Fetch comments
-    const orgComments = await db
-      .select()
-      .from(comments)
-      .where(eq(comments.orgId, orgId));
-
-    // 10. Fetch notifications
-    const orgNotifs = await db
-      .select()
-      .from(notifications)
-      .where(eq(notifications.orgId, orgId));
-
-    // 11. Fetch change requests
-    const orgChangeRequests = await db
-      .select()
-      .from(changeRequests)
-      .where(eq(changeRequests.orgId, orgId));
-
-    // 12. Fetch approval decisions
-    const orgDecisions = await db
-      .select()
-      .from(approvalDecisions)
-      .where(eq(approvalDecisions.orgId, orgId));
-
-    // 13. Fetch founder overrides
-    const orgOverrides = await db
-      .select()
-      .from(founderOverrides)
-      .where(eq(founderOverrides.orgId, orgId));
-
-    // 14. Role-scoped filtering
+    // 3. Role-scoped filtering
     const role = authoritativeUser?.organizationRole || "designer";
     const isClient = role === "client";
     const isDesigner = role === "designer";
@@ -177,6 +135,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
     let visibleMemberships = orgMemberships;
     let visibleItems = orgItems;
     let visibleUsers = orgUsers;
+    let visibleGroups = orgGroups;
 
     if (isClient) {
       // Clients only see assigned projects & approved content
@@ -189,6 +148,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       visibleItems = orgItems.filter(
         (i) => allowedProjIdSet.has(i.projectId) && (i.stage === "approved" || i.stage === "scheduled" || i.stage === "published")
       );
+      visibleGroups = orgGroups.filter((g) => allowedProjIdSet.has(g.projectId));
       // Strictly expose only client self to prevent internal directory leakage
       visibleUsers = orgUsers.filter((u) => u.id === authoritativeUser.id);
     } else if (isDesigner) {
@@ -200,6 +160,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       visibleProjects = orgProjects.filter((p) => allowedProjIdSet.has(p.id));
       visibleMemberships = orgMemberships.filter((m) => allowedProjIdSet.has(m.projectId));
       visibleItems = orgItems.filter((i) => allowedProjIdSet.has(i.projectId));
+      visibleGroups = orgGroups.filter((g) => allowedProjIdSet.has(g.projectId));
       visibleUsers = orgUsers.filter((u) => u.organizationRole !== "client");
     }
 
@@ -241,26 +202,59 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         createdAt: u.createdAt ? u.createdAt.toISOString() : nowIso,
         updatedAt: u.updatedAt ? u.updatedAt.toISOString() : nowIso,
       })),
-      contentItems: visibleItems.map((i) => ({
-        id: i.id,
-        projectId: i.projectId,
-        title: i.title,
-        platform: (i.platform as any) || "Instagram",
-        contentType: (i.contentType as any) || "post",
-        stage: (i.stage as any) || "draft",
-        scopeClassification: (i.scopeClassification as any) || "contracted",
-        currentVersionNumber: i.currentVersionNumber || 1,
-        clientVisible: i.clientVisible || false,
-        accountableOwnerId: "",
-        collaboratorIds: [],
-        deadlines: {
-          submissionDeadline: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : nowIso,
-        },
-        scheduledPublicationDate: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined,
-        publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
-        liveUrl: i.liveUrl || undefined,
-        createdAt: i.createdAt ? i.createdAt.toISOString() : nowIso,
-        updatedAt: i.updatedAt ? i.updatedAt.toISOString() : nowIso,
+      contentItems: visibleItems.map((i) => {
+        const itemAssignments = orgAssignments.filter(
+          (a) => a.contentItemId === i.id && a.status !== "reassigned"
+        );
+        const primaryAssignment = itemAssignments[0];
+        const activeDraft = orgVersions.find((v) => v.contentItemId === i.id && v.isDraft);
+        const latestSubmitted = orgVersions
+          .filter((v) => v.contentItemId === i.id && !v.isDraft)
+          .sort((a, b) => b.versionNumber - a.versionNumber)[0];
+
+        const schedDateStr = i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined;
+        const subDeadlineStr = i.submissionDeadline
+          ? i.submissionDeadline.toISOString()
+          : (schedDateStr || nowIso);
+
+        return {
+          id: i.id,
+          projectId: i.projectId,
+          contentGroupId: i.contentGroupId || undefined,
+          title: i.title,
+          platform: (i.platform as any) || "Instagram",
+          contentType: (i.contentType as any) || "post",
+          stage: (i.stage as any) || "draft",
+          scopeClassification: (i.scopeClassification as any) || "contracted",
+          currentVersionNumber: i.currentVersionNumber || 1,
+          activeDraftVersionId: activeDraft?.id,
+          latestSubmittedVersionId: latestSubmitted?.id,
+          clientVisible: i.clientVisible || false,
+          accountableOwnerId: primaryAssignment?.assigneeUserId || "",
+          collaboratorIds: [],
+          deadlines: {
+            submissionDeadline: subDeadlineStr,
+            resubmissionDeadline: i.resubmissionDeadline ? i.resubmissionDeadline.toISOString() : undefined,
+            approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
+            scheduledPublicationDate: schedDateStr,
+          },
+          scheduledPublicationDate: schedDateStr,
+          publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
+          liveUrl: i.liveUrl || undefined,
+          createdAt: i.createdAt ? i.createdAt.toISOString() : nowIso,
+          updatedAt: i.updatedAt ? i.updatedAt.toISOString() : nowIso,
+        };
+      }),
+      contentGroups: visibleGroups.map((g) => ({
+        id: g.id,
+        projectId: g.projectId,
+        title: g.title,
+        description: g.description || undefined,
+        conceptNotes: g.conceptNotes || undefined,
+        contentItemIds: orgItems.filter((i) => i.contentGroupId === g.id).map((i) => i.id),
+        createdByUserId: g.createdByUserId,
+        createdAt: g.createdAt ? g.createdAt.toISOString() : nowIso,
+        updatedAt: g.updatedAt ? g.updatedAt.toISOString() : nowIso,
       })),
       submissionVersions: orgVersions.map((v) => ({
         id: v.id,
@@ -296,7 +290,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         createdAt: a.createdAt ? a.createdAt.toISOString() : nowIso,
         updatedAt: a.updatedAt ? a.updatedAt.toISOString() : nowIso,
       })),
-      workSessions: orgSessions.map((w) => ({
+      workSessions: activeSessions.map((w) => ({
         id: w.id,
         projectId: w.projectId,
         contentItemId: w.contentItemId,
@@ -312,7 +306,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         createdAt: w.createdAt ? w.createdAt.toISOString() : nowIso,
         updatedAt: w.updatedAt ? w.updatedAt.toISOString() : nowIso,
       })),
-      attendanceRecords: orgAttendance.map((att) => ({
+      attendanceRecords: todayAttendance.map((att) => ({
         id: att.id,
         userId: att.userId,
         attendanceDate: String(att.attendanceDate),
@@ -322,35 +316,9 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         createdAt: att.createdAt ? att.createdAt.toISOString() : nowIso,
         updatedAt: att.updatedAt ? att.updatedAt.toISOString() : nowIso,
       })),
-      comments: orgComments.map((c) => ({
-        id: c.id,
-        projectId: c.projectId,
-        contentItemId: c.contentItemId,
-        submissionVersionId: c.submissionVersionId || undefined,
-        parentCommentId: c.parentCommentId || undefined,
-        authorUserId: c.authorUserId || undefined,
-        externalReviewerName: c.externalReviewerName || undefined,
-        visibility: (c.visibility as any) || "internal",
-        body: c.body,
-        createdAt: c.createdAt ? c.createdAt.toISOString() : nowIso,
-      })),
+      comments: [],
       annotations: [],
-      changeRequests: orgChangeRequests.map((cr) => ({
-        id: cr.id,
-        projectId: cr.projectId,
-        contentItemId: cr.contentItemId,
-        submissionVersionId: cr.submissionVersionId,
-        component: (cr.component as any) || "creative",
-        reviewerUserId: cr.reviewerUserId,
-        reviewerName: "Reviewer",
-        requestedChange: cr.requestedChange,
-        priority: (cr.priority as any) || "medium",
-        status: (cr.status as any) || "open",
-        resolutionReason: cr.resolutionReason || undefined,
-        resolvedByUserId: cr.resolvedByUserId || undefined,
-        resolvedAt: cr.resolvedAt ? cr.resolvedAt.toISOString() : undefined,
-        createdAt: cr.createdAt ? cr.createdAt.toISOString() : nowIso,
-      })),
+      changeRequests: [],
       approvalDecisions: orgDecisions.map((dec) => ({
         id: dec.id,
         projectId: dec.projectId,
@@ -377,7 +345,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         actorUserId: ovr.actorUserId,
         createdAt: ovr.createdAt ? ovr.createdAt.toISOString() : nowIso,
       })),
-      notifications: orgNotifs.map((n) => ({
+      notifications: userNotifs.map((n) => ({
         id: n.id,
         projectId: n.projectId,
         recipientUserId: n.recipientUserId,
@@ -392,7 +360,6 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       })),
       campaigns: [],
       contentFamilies: [],
-      contentGroups: [],
       deadlineRecords: [],
       publicationRecords: [],
       externalReviewLinks: [],

@@ -41,7 +41,7 @@ const ALL_AVAILABLE_METRICS = [
 
 export default function ProjectSettingsPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const {
     state,
     archiveProject,
@@ -880,9 +880,8 @@ export default function ProjectSettingsPage() {
             </div>
 
             <div className="p-3 bg-[#f5f5f7] rounded-xl text-[11px] text-[#6e6e73] space-y-0.5 border border-black/[0.04]">
-              <div className="font-semibold text-[#1d1d1f]">Authentication &amp; Invitation State</div>
-              <p>Client account active. Portal access granted.</p>
-              <p className="text-[10px] text-[#86868b]">Invitation email delivery is not configured in prototype mode.</p>
+              <div className="font-semibold text-[#1d1d1f]">Authentication</div>
+              <p>Account provisioned. Client can sign in using their registered Google account.</p>
             </div>
 
             <div className="flex justify-end pt-2">

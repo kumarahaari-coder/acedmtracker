@@ -29,9 +29,9 @@ import {
 import { Script, ScriptScene, ContentPlatform } from "@/lib/types";
 import { formatDate } from "@/lib/formatters";
 
-export default function ScriptLibraryPage() {
+export default function ScriptsEditorPage() {
   const params = useParams();
-  const projectId = (params?.projectId as string) || "proj_acme";
+  const projectId = (params?.projectId as string) || "";
   const { state, createScript, updateScript, deleteScript, linkScriptToContent } = useAppState();
   const { canUploadCreative } = useRole();
 
