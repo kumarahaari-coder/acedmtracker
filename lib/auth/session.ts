@@ -46,18 +46,18 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /**
  * Resolves live active user from database to defeat stale JWT claims
  */
-export async function getAuthoritativeUser(userId: string): Promise<AuthoritativeUser | null> {
-  if (!userId) return null;
-  const isUuid = UUID_REGEX.test(userId);
+export async function getAuthoritativeUser(userId?: string): Promise<AuthoritativeUser | null> {
+  const isUuid = userId ? UUID_REGEX.test(userId) : false;
 
   try {
-    const result = await db
-      .select({
-        id: users.id,
-        orgId: users.orgId,
-        email: users.email,
-        fullName: users.fullName,
-        organizationRole: users.organizationRole,
+    if (userId) {
+      const result = await db
+        .select({
+          id: users.id,
+          orgId: users.orgId,
+          email: users.email,
+          fullName: users.fullName,
+          organizationRole: users.organizationRole,
         status: users.status,
       })
       .from(users)
@@ -71,57 +71,60 @@ export async function getAuthoritativeUser(userId: string): Promise<Authoritativ
 
     if (result.length > 0) return result[0];
 
-    // Fallback for mock/simulated legacy IDs (e.g. "u_founder", "u_admin") to first matching active role
-    if (!isUuid) {
-      const roleMatch = userId.includes("founder")
-        ? "founder"
-        : userId.includes("admin")
-        ? "admin"
-        : userId.includes("consultant")
-        ? "consultant"
-        : null;
+      if (!isUuid) {
+        const roleMatch = userId.includes("founder")
+          ? "founder"
+          : userId.includes("admin")
+          ? "admin"
+          : userId.includes("consultant")
+          ? "consultant"
+          : null;
 
-      if (roleMatch) {
-        const [fallback] = await db
-          .select({
-            id: users.id,
-            orgId: users.orgId,
-            email: users.email,
-            fullName: users.fullName,
-            organizationRole: users.organizationRole,
-            status: users.status,
-          })
-          .from(users)
-          .where(
-            and(
-              eq(users.organizationRole, roleMatch as OrganizationRole),
-              eq(users.status, "active")
+        if (roleMatch) {
+          const [fallback] = await db
+            .select({
+              id: users.id,
+              orgId: users.orgId,
+              email: users.email,
+              fullName: users.fullName,
+              organizationRole: users.organizationRole,
+              status: users.status,
+            })
+            .from(users)
+            .where(
+              and(
+                eq(users.organizationRole, roleMatch as OrganizationRole),
+                eq(users.status, "active")
+              )
             )
-          )
-          .limit(1);
-        if (fallback) return fallback;
+            .limit(1);
+          if (fallback) return fallback;
+        }
       }
 
-      // Default fallback: return first active founder user
-      const [firstFounder] = await db
-        .select({
-          id: users.id,
-          orgId: users.orgId,
-          email: users.email,
-          fullName: users.fullName,
-          organizationRole: users.organizationRole,
-          status: users.status,
-        })
-        .from(users)
-        .where(
-          and(
-            eq(users.organizationRole, "founder"),
-            eq(users.status, "active")
-          )
-        )
-        .limit(1);
-      if (firstFounder) return firstFounder;
+      // Explicit userId was provided and was not found / not active
+      return null;
     }
+
+    // Default fallback (no userId passed): return first active founder user
+    const [firstFounder] = await db
+      .select({
+        id: users.id,
+        orgId: users.orgId,
+        email: users.email,
+        fullName: users.fullName,
+        organizationRole: users.organizationRole,
+        status: users.status,
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.organizationRole, "founder"),
+          eq(users.status, "active")
+        )
+      )
+      .limit(1);
+    if (firstFounder) return firstFounder;
 
     return null;
   } catch (err) {

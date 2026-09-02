@@ -27,5 +27,10 @@ export function getEmptyAppState(): AppState {
     assets: [],
     analyticsSnapshots: [],
     auditRecords: [],
+    effortStandards: [],
+    employeeCapacitySchedules: [],
+    capacityAdjustments: [],
+    projectCommitments: [],
+    projectPerformanceInputs: [],
   };
 }

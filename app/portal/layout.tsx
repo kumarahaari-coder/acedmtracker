@@ -37,12 +37,15 @@ export default function ClientPortalLayout({
     let isSyncing = false;
     let focusTimeout: any = null;
 
+    let lastSyncedAt = 0;
+
     async function syncPortalState() {
       if (isSyncing || !isMounted) return;
       isSyncing = true;
       try {
         const result = await getAuthoritativeWorkspaceStateAction();
         if (isMounted && result.success) {
+          lastSyncedAt = Date.now();
           if (hydrateServerState) {
             hydrateServerState(result.state);
           }
@@ -65,12 +68,13 @@ export default function ClientPortalLayout({
     // Initial load
     syncPortalState();
 
-    // Revalidate when user returns to window/tab (debounced and only if visible)
+    // Revalidate when user returns to window/tab (debounced and only if stale by > 60s and visible)
     const handleFocus = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (Date.now() - lastSyncedAt < 60000) return;
       clearTimeout(focusTimeout);
       focusTimeout = setTimeout(() => {
-        if (!isSyncing && isMounted) {
+        if (!isSyncing && isMounted && Date.now() - lastSyncedAt >= 60000) {
           syncPortalState();
         }
       }, 1000);
@@ -78,20 +82,11 @@ export default function ClientPortalLayout({
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleFocus);
 
-    // Lightweight secondary background sync (20s interval, only when tab is visible and idle)
-    const interval = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (!isSyncing && isMounted) {
-        syncPortalState();
-      }
-    }, 20000);
-
     return () => {
       isMounted = false;
       clearTimeout(focusTimeout);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleFocus);
-      clearInterval(interval);
     };
   }, []);
 

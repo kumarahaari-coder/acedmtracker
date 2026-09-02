@@ -143,25 +143,17 @@ export default function ProjectSettingsPage() {
 
     setIsMemberSubmitting(true);
     try {
-      const { addProjectMemberAction } = await import("@/lib/actions/projects");
-      const serverRes = await addProjectMemberAction({
+      const res = await addProjectMember({
         projectId,
         userId: selectedUserId,
         membershipRole: selectedRole,
         actorUserId,
       });
 
-      if (!serverRes.success) {
-        alert(serverRes.error || "Failed to add member to database.");
+      if (!res.success) {
+        alert(res.error || "Failed to add member.");
         return;
       }
-
-      addProjectMember({
-        projectId,
-        userId: selectedUserId,
-        membershipRole: selectedRole,
-        actorUserId,
-      });
 
       setIsAddMemberModalOpen(false);
       setSelectedUserId("");
@@ -183,25 +175,9 @@ export default function ProjectSettingsPage() {
       return;
     }
 
-    // 1. Synchronous validation against active state
-    const localRes = addClientToProject({
-      name: clientName.trim(),
-      email: clientEmail.trim(),
-      jobTitle: clientJobTitle.trim() || undefined,
-      phone: clientPhone.trim() || undefined,
-      projectId,
-      actorUserId,
-    });
-
-    if (!localRes.success) {
-      setClientModalError(localRes.error || "Failed to add client access.");
-      return;
-    }
-
     setIsClientSubmitting(true);
     try {
-      const { addClientToProjectAction } = await import("@/lib/actions/clients");
-      await addClientToProjectAction({
+      const res = await addClientToProject({
         name: clientName.trim(),
         email: clientEmail.trim(),
         jobTitle: clientJobTitle.trim() || undefined,
@@ -209,6 +185,11 @@ export default function ProjectSettingsPage() {
         projectId,
         actorUserId,
       });
+
+      if (!res.success) {
+        setClientModalError(res.error || "Failed to add client access.");
+        return;
+      }
 
       setIsAddClientModalOpen(false);
       setClientName("");
@@ -218,7 +199,7 @@ export default function ProjectSettingsPage() {
       setClientModalError(null);
       showToast(`Granted Client Portal access to ${clientName.trim()}.`);
     } catch (err: any) {
-      console.warn("[Settings] Non-fatal server action sync:", err);
+      setClientModalError(err.message || "Failed to add client.");
     } finally {
       setIsClientSubmitting(false);
     }
@@ -266,9 +247,9 @@ export default function ProjectSettingsPage() {
     }
   };
 
-  const handleRemoveMembership = (membershipId: string, userName: string) => {
+  const handleRemoveMembership = async (membershipId: string, userName: string) => {
     if (confirm(`Remove ${userName} from project "${project.name}"?`)) {
-      const res = removeProjectMember(membershipId, actorUserId, "Removed by manager");
+      const res = await removeProjectMember(membershipId, actorUserId, "Removed by manager");
       if (res.success) {
         showToast(`Removed ${userName} from project access.`);
       } else {

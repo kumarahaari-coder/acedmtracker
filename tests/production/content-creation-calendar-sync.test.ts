@@ -48,7 +48,7 @@ describe("Production Content Creation & Calendar Synchronization Architecture", 
     } else {
       const createdProj = await createProjectAction({
         name: "Staging Test Project",
-        clientName: "Staging Client",
+        clientBrand: "Staging Client",
         actorUserId: founderId,
       });
       projectId = createdProj.project!.id;

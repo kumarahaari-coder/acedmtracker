@@ -23,12 +23,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     let isSyncing = false;
     let focusTimeout: any = null;
 
+    let lastSyncedAt = 0;
+
     async function loadWorkspace() {
       if (isSyncing || !isMounted) return;
       isSyncing = true;
       try {
         const result = await getAuthoritativeWorkspaceStateAction();
         if (isMounted && result.success) {
+          lastSyncedAt = Date.now();
           if (hydrateServerState) {
             hydrateServerState(result.state);
           }
@@ -51,15 +54,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     }
 
-    // Initial load
+    // Initial authoritative load
     loadWorkspace();
 
-    // Revalidate when user returns to window/tab (debounced and only if visible)
+    // Revalidate on focus ONLY if stale by > 60 seconds and document is visible
     const handleFocus = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (Date.now() - lastSyncedAt < 60000) return; // Stale-time guard (60s)
       clearTimeout(focusTimeout);
       focusTimeout = setTimeout(() => {
-        if (!isSyncing && isMounted) {
+        if (!isSyncing && isMounted && Date.now() - lastSyncedAt >= 60000) {
           loadWorkspace();
         }
       }, 1000);
@@ -67,20 +71,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleFocus);
 
-    // Lightweight secondary background sync (20s interval, only when tab is visible and idle)
-    const interval = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (!isSyncing && isMounted) {
-        loadWorkspace();
-      }
-    }, 20000);
-
     return () => {
       isMounted = false;
       clearTimeout(focusTimeout);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleFocus);
-      clearInterval(interval);
     };
   }, []);
 

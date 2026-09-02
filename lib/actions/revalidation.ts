@@ -5,6 +5,7 @@ export async function invalidateWorkspaceEntities(options: {
   projectId?: string;
   userId?: string;
   paths?: string[];
+  tags?: string[];
 }) {
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return;
@@ -12,6 +13,14 @@ export async function invalidateWorkspaceEntities(options: {
 
   try {
     const { revalidatePath, revalidateTag } = await import("next/cache");
+
+    if (options.tags && options.tags.length > 0) {
+      for (const tag of options.tags) {
+        try {
+          revalidateTag(tag);
+        } catch (_) {}
+      }
+    }
 
     if (options.orgId) {
       try {

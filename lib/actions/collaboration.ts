@@ -1,10 +1,11 @@
 "use server";
 
 import { db, runTransaction } from "../db";
-import { comments, annotations, externalReviewTokens, auditRecords, notifications, submissionVersions, contentItems, projects, creativeAssets } from "../db/schema";
+import { comments, annotations, externalReviewTokens, auditRecords, notifications, submissionVersions, contentItems, projects, creativeAssets, campaigns } from "../db/schema";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
-import { generateLegacyId, resolveSubmissionVersionId, resolveContentItemId } from "../compat/resolver";
+import { generateLegacyId, resolveSubmissionVersionId, resolveContentItemId, resolveProjectId, resolveUserId } from "../compat/resolver";
+import { invalidateWorkspaceEntities } from "./revalidation";
 import crypto from "node:crypto";
 
 /**
@@ -235,3 +236,155 @@ export async function logAuditRecordAction(params: {
 
   return { success: true, record };
 }
+
+/**
+ * 6. Authoritative Campaign Management Actions (PostgreSQL-backed)
+ */
+export async function createCampaignAction(params: {
+  projectId: string;
+  name: string;
+  objective?: string;
+  description?: string;
+  status?: "planning" | "active" | "completed" | "paused";
+  startDate?: string;
+  endDate?: string;
+  ownerId?: string;
+  actorUserId?: string;
+}): Promise<{
+  success: boolean;
+  campaign?: {
+    id: string;
+    projectId: string;
+    name: string;
+    objective: string;
+    description: string;
+    status: string;
+    startDate?: string;
+    endDate?: string;
+    ownerId: string;
+  };
+  error?: string;
+}> {
+  try {
+    const canonicalProjectId = await resolveProjectId(params.projectId);
+    if (!canonicalProjectId) return { success: false, error: "Project not found in database." };
+
+    const [proj] = await db.select().from(projects).where(eq(projects.id, canonicalProjectId)).limit(1);
+    if (!proj) return { success: false, error: "Project record not found." };
+
+    let ownerUserId: string | null = null;
+    if (params.ownerId) {
+      ownerUserId = await resolveUserId(params.ownerId);
+    } else if (params.actorUserId) {
+      ownerUserId = await resolveUserId(params.actorUserId);
+    }
+
+    const [created] = await db
+      .insert(campaigns)
+      .values({
+        projectId: canonicalProjectId,
+        orgId: proj.orgId,
+        name: params.name.trim(),
+        objective: (params.objective || "").trim(),
+        description: (params.description || "").trim(),
+        status: params.status || "planning",
+        startDate: params.startDate ? new Date(params.startDate) : null,
+        endDate: params.endDate ? new Date(params.endDate) : null,
+        ownerId: ownerUserId || null,
+      })
+      .returning();
+
+    await invalidateWorkspaceEntities({
+      projectId: canonicalProjectId,
+      orgId: proj.orgId,
+      paths: [`/projects/${canonicalProjectId}`, "/projects"],
+    });
+
+    return {
+      success: true,
+      campaign: {
+        id: created.id,
+        projectId: created.projectId,
+        name: created.name,
+        objective: created.objective,
+        description: created.description,
+        status: created.status,
+        startDate: created.startDate ? created.startDate.toISOString() : undefined,
+        endDate: created.endDate ? created.endDate.toISOString() : undefined,
+        ownerId: created.ownerId || params.actorUserId || "u_founder",
+      },
+    };
+  } catch (err: any) {
+    console.error("Failed to create campaign in database:", err);
+    return { success: false, error: err.message || "Failed to create campaign." };
+  }
+}
+
+export async function updateCampaignAction(params: {
+  campaignId: string;
+  name?: string;
+  objective?: string;
+  description?: string;
+  status?: "planning" | "active" | "completed" | "paused";
+  startDate?: string;
+  endDate?: string;
+  ownerId?: string;
+  actorUserId?: string;
+}) {
+  try {
+    const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, params.campaignId)).limit(1);
+    if (!existing) return { success: false, error: "Campaign not found." };
+
+    let ownerUserId: string | null = existing.ownerId;
+    if (params.ownerId) {
+      ownerUserId = await resolveUserId(params.ownerId);
+    }
+
+    const [updated] = await db
+      .update(campaigns)
+      .set({
+        name: params.name !== undefined ? params.name.trim() : existing.name,
+        objective: params.objective !== undefined ? params.objective.trim() : existing.objective,
+        description: params.description !== undefined ? params.description.trim() : existing.description,
+        status: params.status || existing.status,
+        startDate: params.startDate !== undefined ? (params.startDate ? new Date(params.startDate) : null) : existing.startDate,
+        endDate: params.endDate !== undefined ? (params.endDate ? new Date(params.endDate) : null) : existing.endDate,
+        ownerId: ownerUserId,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(campaigns.id, existing.id))
+      .returning();
+
+    await invalidateWorkspaceEntities({
+      projectId: existing.projectId,
+      orgId: existing.orgId,
+      paths: [`/projects/${existing.projectId}`],
+    });
+
+    return { success: true, campaign: updated };
+  } catch (err: any) {
+    console.error("Failed to update campaign:", err);
+    return { success: false, error: err.message || "Failed to update campaign." };
+  }
+}
+
+export async function deleteCampaignAction(campaignId: string) {
+  try {
+    const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+    if (!existing) return { success: false, error: "Campaign not found." };
+
+    await db.delete(campaigns).where(eq(campaigns.id, campaignId));
+
+    await invalidateWorkspaceEntities({
+      projectId: existing.projectId,
+      orgId: existing.orgId,
+      paths: [`/projects/${existing.projectId}`],
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.error("Failed to delete campaign:", err);
+    return { success: false, error: err.message || "Failed to delete campaign." };
+  }
+}
+

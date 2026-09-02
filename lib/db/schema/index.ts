@@ -10,3 +10,5 @@ export * from "./approvals";
 export * from "./work-sessions";
 export * from "./attendance";
 export * from "./collaboration";
+export * from "./operational";
+

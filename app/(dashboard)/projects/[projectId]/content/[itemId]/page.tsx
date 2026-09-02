@@ -2312,13 +2312,13 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (!editPublicationReason.trim()) {
                   alert("Please provide a mandatory reason for updating publication details.");
                   return;
                 }
-                const res = updatePublicationDetails({
+                const res = await updatePublicationDetails({
                   contentItemId: item.id,
                   publishedAt: editPublishedDateInput ? new Date(editPublishedDateInput).toISOString() : undefined,
                   liveUrl: editLiveUrlInput.trim() || undefined,

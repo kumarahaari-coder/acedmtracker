@@ -235,3 +235,32 @@ export async function archiveProjectAction(params: {
     return { success: false, error: err.message || "Failed to archive project." };
   }
 }
+
+export async function restoreProjectAction(params: {
+  projectId: string;
+  actorUserId?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const canonicalProjectId = await resolveProjectId(params.projectId);
+    if (!canonicalProjectId) return { success: false, error: "Project not found." };
+
+    await db
+      .update(projects)
+      .set({
+        status: "active",
+        archivedAt: null,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(projects.id, canonicalProjectId));
+
+    await invalidateWorkspaceEntities({
+      projectId: canonicalProjectId,
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.error("Failed to restore project in database:", err);
+    return { success: false, error: err.message || "Failed to restore project." };
+  }
+}
+

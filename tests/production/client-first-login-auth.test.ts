@@ -50,7 +50,7 @@ describe("Production Client & Team Member First-Login Authentication Architectur
     } else {
       const createdProj = await createProjectAction({
         name: "Staging Test Project",
-        clientName: "Staging Client",
+        clientBrand: "Staging Client",
         actorUserId: founderId,
       });
       testProjectId = createdProj.project!.id;
@@ -91,6 +91,7 @@ describe("Production Client & Team Member First-Login Authentication Architectur
 
     // 3. Simulate first Google login and Auth.js identity creation
     const authUser = await adapter.createUser!({
+      id: crypto.randomUUID(),
       name: "Probe Client",
       email: tempClientEmail,
       emailVerified: new Date(),
@@ -134,6 +135,7 @@ describe("Production Client & Team Member First-Login Authentication Architectur
 
     // 3. First Google SSO login
     const authUser = await adapter.createUser!({
+      id: crypto.randomUUID(),
       name: "Probe Designer",
       email: designerEmail,
       emailVerified: new Date(),

@@ -97,29 +97,20 @@ export default function GlobalTeamPage() {
 
     setIsSubmitting(true);
     try {
-      const serverRes = await createTeamMemberAction({
-        fullName: newName.trim(),
+      const res = await createTeamMember({
+        name: newName.trim(),
         email: newEmail.trim(),
         role: newRole as any,
-        actorUserId: activeUserId,
-      });
-
-      if (!serverRes.success || !serverRes.user) {
-        setCreateError(serverRes.error || "Failed to create team member in database.");
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Sync local context state with authoritative created user
-      const res = createTeamMember({
-        id: serverRes.user.id,
-        name: serverRes.user.fullName,
-        email: serverRes.user.email,
-        role: (serverRes.user.organizationRole as any) || newRole,
         jobTitle: newJobTitle.trim() || undefined,
         workingHoursPerDay: newWorkingHours,
         actorUserId: activeUserId,
       });
+
+      if (!res.success || !res.user) {
+        setCreateError(res.error || "Failed to create team member.");
+        setIsSubmitting(false);
+        return;
+      }
 
       setIsAddModalOpen(false);
       setNewName("");
@@ -127,7 +118,7 @@ export default function GlobalTeamPage() {
       setNewRole("designer");
       setNewJobTitle("");
       setNewWorkingHours(8);
-      router.push(`/team/${serverRes.user.id}`);
+      router.push(`/team/${res.user.id}`);
     } catch (err: any) {
       setCreateError(err.message || "Failed to create team member.");
     } finally {

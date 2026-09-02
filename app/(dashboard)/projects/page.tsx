@@ -27,7 +27,7 @@ import { Project, ContentPlatform, ContentType, ProjectEngagementModel, ProjectO
 export default function ProjectsPortfolioPage() {
   const router = useRouter();
   const { state, createProject, archiveProject, restoreProject } = useAppState();
-  const { canCreateProjects, canManageRetention, setActiveProjectId } = useRole();
+  const { canCreateProjects, canManageRetention, setActiveProjectId, activeUserId } = useRole();
 
   const [viewLayout, setViewLayout] = useState<"cards" | "table">("cards");
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
@@ -68,7 +68,7 @@ export default function ProjectsPortfolioPage() {
     router.push(`/projects/${projectId}`);
   };
 
-  const handleFinishWizard = () => {
+  const handleFinishWizard = async () => {
     if (!newProjectName.trim() || !newClientBrand.trim()) {
       alert("Please fill in the project and brand name.");
       return;
@@ -93,7 +93,7 @@ export default function ProjectsPortfolioPage() {
           }
         : undefined;
 
-    const created = createProject({
+    const res = await createProject({
       name: newProjectName,
       clientBrand: newClientBrand,
       avatar: avatar || "PR",
@@ -109,14 +109,19 @@ export default function ProjectsPortfolioPage() {
         trialReels: Number(targetTrialReels),
       },
       workflowStages: ["Idea", "Draft", "Submitted", "In Review", "Changes Requested", "Approved", "Scheduled", "Published", "Reported"],
-    });
+    }, activeUserId);
+
+    if (!res.success || !res.project) {
+      alert(res.error || "Failed to create project");
+      return;
+    }
 
     setIsWizardOpen(false);
     setWizardStep(1);
     setNewProjectName("");
     setNewClientBrand("");
     setNewScope("");
-    handleSelectProject(created.id);
+    handleSelectProject(res.project.id);
   };
 
   return (

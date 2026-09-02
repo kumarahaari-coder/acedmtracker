@@ -48,6 +48,7 @@ export interface ProjectObjectiveConfig {
 
 export interface Project {
   id: string;
+  legacyId?: string;
   name: string;
   clientBrand: string;
   avatar: string;
@@ -73,8 +74,8 @@ export interface Campaign {
   objective: string;
   description: string;
   status: 'planning' | 'active' | 'completed' | 'paused';
-  startDate: string;
-  endDate: string;
+  startDate?: string;
+  endDate?: string;
   ownerId: string;
 }
 
@@ -122,6 +123,81 @@ export interface ContentGroup {
 
 export type ScopeClassification = 'contracted' | 'goodwill' | 'additional_billable';
 
+export interface EffortStandard {
+  id: string;
+  orgId: string;
+  category: string;
+  workType: string;
+  contentSeconds: number;
+  productionSeconds: number;
+  totalSeconds: number;
+  leadTimeWorkdays: number;
+  defaultRole: string;
+  active: boolean;
+  version: number;
+  effectiveFrom: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmployeeCapacitySchedule {
+  id: string;
+  orgId: string;
+  userId: string;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  mondayHours: number;
+  tuesdayHours: number;
+  wednesdayHours: number;
+  thursdayHours: number;
+  fridayHours: number;
+  saturdayHours: number;
+  sundayHours: number;
+  primaryFunction: string;
+  creativeEligibility: 'primary' | 'backup' | 'not_eligible';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CapacityAdjustment {
+  id: string;
+  orgId: string;
+  userId: string;
+  adjustmentDate: string;
+  kind: 'leave' | 'holiday' | 'overtime' | 'manual';
+  adjustmentHours: number;
+  reason: string;
+  createdByUserId?: string;
+  createdAt: string;
+}
+
+export interface ProjectCommitment {
+  id: string;
+  orgId: string;
+  projectId: string;
+  workTypeId?: string;
+  workTypeName: string;
+  committedQuantity: number;
+  effectiveMonth: string; // 'YYYY-MM-DD'
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectPerformanceInput {
+  id: string;
+  orgId: string;
+  projectId: string;
+  campaignId?: string;
+  effectiveMonth: string;
+  currency: string;
+  adBudget: number;
+  adSpend: number;
+  leads: number;
+  conversions: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ContentItem {
   id: string;
   projectId: string;
@@ -131,10 +207,28 @@ export interface ContentItem {
   title: string;
   platform: ContentPlatform;
   contentType: ContentType;
+  workType?: string;
+  workTypeId?: string;
+  contentPillar?: string;
+  topic?: string;
+  brief?: string;
+  referenceLink?: string;
+  priority?: 'urgent' | 'normal' | 'low';
+  workNature?: 'planned' | 'ad_hoc';
+  accountOwnerId?: string;
   stage: ContentStage;
   accountableOwnerId: string;
   collaboratorIds: string[];
   deadlines: ContentDeadlines;
+  calculatedInternalDeadline?: string;
+  finalInternalDeadline?: string;
+  deadlineOverrideReason?: string;
+  standardContentSeconds?: number;
+  standardProductionSeconds?: number;
+  revisionContentSeconds?: number;
+  revisionProductionSeconds?: number;
+  finalPlannedSeconds?: number;
+  completedAt?: string;
   currentVersionNumber: number; // 1, 2, 3...
   activeDraftVersionId?: string;
   latestSubmittedVersionId?: string;
@@ -529,4 +623,9 @@ export interface AppState {
   assets: Asset[];
   analyticsSnapshots: AnalyticsSnapshot[];
   auditRecords: AuditRecord[];
+  effortStandards: EffortStandard[];
+  employeeCapacitySchedules: EmployeeCapacitySchedule[];
+  capacityAdjustments: CapacityAdjustment[];
+  projectCommitments: ProjectCommitment[];
+  projectPerformanceInputs: ProjectPerformanceInput[];
 }

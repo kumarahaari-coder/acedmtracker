@@ -14,10 +14,11 @@ import {
   founderOverrides,
   attendanceRecords,
   notifications,
+  campaigns,
 } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
-import { AppState } from "../types";
+import { AppState, Campaign } from "../types";
 import { getEmptyAppState } from "../state/empty";
 
 /**
@@ -111,6 +112,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       userNotifs,
       orgDecisions,
       orgOverrides,
+      orgCampaigns,
     ] = await Promise.all([
       db.select().from(projects).where(eq(projects.orgId, orgId)),
       db.select().from(projectMemberships).where(eq(projectMemberships.orgId, orgId)),
@@ -124,6 +126,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       db.select().from(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.recipientUserId, authoritativeUser?.id || ""))).limit(20),
       db.select().from(approvalDecisions).where(eq(approvalDecisions.orgId, orgId)),
       db.select().from(founderOverrides).where(eq(founderOverrides.orgId, orgId)),
+      db.select().from(campaigns).where(eq(campaigns.orgId, orgId)),
     ]);
 
     // 3. Role-scoped filtering
@@ -168,7 +171,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
 
     const mappedState: AppState = {
       projects: visibleProjects.map((p) => ({
-        id: p.legacyId || p.id,
+        id: p.id,
         name: p.name,
         clientBrand: p.clientName,
         avatar: p.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "PR",
@@ -179,18 +182,15 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         workflowStages: ["draft", "submitted", "in_review", "changes_requested", "approved", "scheduled", "published"],
         createdAt: p.createdAt ? p.createdAt.toISOString() : nowIso,
       })),
-      projectMemberships: visibleMemberships.map((m) => {
-        const proj = orgProjects.find((p) => p.id === m.projectId);
-        return {
-          id: m.id,
-          projectId: proj?.legacyId || m.projectId,
-          userId: m.userId,
-          membershipRole: (m.membershipRole as any) || "designer",
-          status: (m.status as any) || "active",
-          addedByUserId: m.assignedByUserId || m.userId,
-          addedAt: m.assignedAt ? m.assignedAt.toISOString() : nowIso,
-        };
-      }),
+      projectMemberships: visibleMemberships.map((m) => ({
+        id: m.id,
+        projectId: m.projectId,
+        userId: m.userId,
+        membershipRole: (m.membershipRole as any) || "designer",
+        status: (m.status as any) || "active",
+        addedByUserId: m.assignedByUserId || m.userId,
+        addedAt: m.assignedAt ? m.assignedAt.toISOString() : nowIso,
+      })),
       users: visibleUsers.map((u) => ({
         id: u.id,
         name: u.fullName,
@@ -358,7 +358,17 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         readAt: n.readAt ? n.readAt.toISOString() : undefined,
         createdAt: n.createdAt ? n.createdAt.toISOString() : nowIso,
       })),
-      campaigns: [],
+      campaigns: orgCampaigns.map((c): Campaign => ({
+        id: c.id,
+        projectId: c.projectId,
+        name: c.name,
+        objective: c.objective || "",
+        description: c.description || "",
+        status: (c.status as any) || "planning",
+        startDate: c.startDate ? c.startDate.toISOString() : undefined,
+        endDate: c.endDate ? c.endDate.toISOString() : undefined,
+        ownerId: c.ownerId || "",
+      })),
       contentFamilies: [],
       deadlineRecords: [],
       publicationRecords: [],
@@ -368,6 +378,11 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       assets: [],
       analyticsSnapshots: [],
       auditRecords: [],
+      effortStandards: [],
+      employeeCapacitySchedules: [],
+      capacityAdjustments: [],
+      projectCommitments: [],
+      projectPerformanceInputs: [],
     };
 
     return {

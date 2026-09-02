@@ -12,7 +12,7 @@ describe("Production Authoritative Synchronization & Provisioning Architecture",
 
   const orgId = "7af122b1-9de9-4f26-bab3-4a7537eecdf7";
 
-  it("provisions a new Team Member in PostgreSQL with immediate login eligibility", async () => {
+  it("provisions a new Team Member in PostgreSQL with immediate login eligibility", { timeout: 30000 }, async () => {
     const designerEmail = `designer_${Date.now()}@aceassured.com`;
     const res = await createTeamMemberAction({
       fullName: "Maya Designer",

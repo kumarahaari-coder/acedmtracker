@@ -13,9 +13,11 @@ import {
   ContentType,
   ScopeClassification,
 } from "../db/schema";
+import { effortStandards } from "../db/schema/operational";
 import { eq, and, sql } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveProjectId, resolveContentItemId, resolveUserId } from "../compat/resolver";
+import { calculateInternalDeadline } from "../calculations/operationalEngine";
 import { invalidateWorkspaceEntities } from "./revalidation";
 
 // Helper for computing fingerprints
@@ -36,8 +38,23 @@ export async function createContentItemAction(params: {
   actorUserId: string;
   projectId: string;
   title: string;
-  platform: ContentPlatform;
-  contentType: ContentType;
+  platform?: ContentPlatform;
+  contentType?: ContentType;
+  workType?: string;
+  workTypeId?: string;
+  campaignId?: string;
+  contentPillar?: string;
+  topic?: string;
+  brief?: string;
+  referenceLink?: string;
+  priority?: "urgent" | "normal" | "low";
+  workNature?: "planned" | "ad_hoc";
+  accountOwnerId?: string;
+  productionOwnerId?: string;
+  contentEffortAdjustmentHours?: number;
+  productionEffortAdjustmentHours?: number;
+  finalInternalDeadlineOverride?: string;
+  deadlineOverrideReason?: string;
   scopeClassification?: ScopeClassification;
   scheduledPublicationDate?: string;
   submissionDeadline?: string;
@@ -48,8 +65,23 @@ export async function createContentItemAction(params: {
     actorUserId,
     projectId,
     title,
-    platform,
-    contentType,
+    platform = "Instagram",
+    contentType = "reel",
+    workType,
+    workTypeId,
+    campaignId,
+    contentPillar,
+    topic,
+    brief,
+    referenceLink,
+    priority = "normal",
+    workNature = "planned",
+    accountOwnerId,
+    productionOwnerId,
+    contentEffortAdjustmentHours,
+    productionEffortAdjustmentHours,
+    finalInternalDeadlineOverride,
+    deadlineOverrideReason,
     scopeClassification,
     scheduledPublicationDate,
     submissionDeadline,
@@ -68,10 +100,58 @@ export async function createContentItemAction(params: {
   const actor = await getAuthoritativeUser(actorUserId);
   if (!actor) return { success: false, error: "Actor not found." };
 
+  const effectiveAssigneeId = productionOwnerId || accountableOwnerId;
   let resolvedAssigneeId: string | undefined = undefined;
-  if (accountableOwnerId) {
-    resolvedAssigneeId = (await resolveUserId(accountableOwnerId)) || undefined;
+  if (effectiveAssigneeId) {
+    resolvedAssigneeId = (await resolveUserId(effectiveAssigneeId)) || undefined;
   }
+
+  // Standard Effort and Lead Time Calculation
+  let standardContentSeconds = 0;
+  let standardProductionSeconds = 0;
+  let leadTimeWorkdays = 2;
+  let matchedWorkType = workType;
+
+  if (!matchedWorkType) {
+    if (contentType === "post") matchedWorkType = "Simple Static Poster";
+    else if (contentType === "carousel") matchedWorkType = "Simple Carousel";
+    else if (contentType === "reel") matchedWorkType = "Short-form Reel";
+    else if (contentType === "trial_reel") matchedWorkType = "Trial Reel Concept";
+    else matchedWorkType = "Simple Static Poster";
+  }
+
+  const [standard] = await db
+    .select()
+    .from(effortStandards)
+    .where(
+      and(
+        eq(effortStandards.orgId, actor.orgId),
+        eq(effortStandards.workType, matchedWorkType),
+        eq(effortStandards.active, true)
+      )
+    )
+    .limit(1);
+
+  if (standard) {
+    standardContentSeconds = standard.contentSeconds;
+    standardProductionSeconds = standard.productionSeconds;
+    leadTimeWorkdays = standard.leadTimeWorkdays;
+  } else {
+    if (matchedWorkType.includes("Reel")) {
+      standardContentSeconds = 2700;
+      standardProductionSeconds = 10800;
+    } else if (matchedWorkType.includes("Carousel")) {
+      standardContentSeconds = 2700;
+      standardProductionSeconds = 9000;
+    } else {
+      standardContentSeconds = 1800;
+      standardProductionSeconds = 3600;
+    }
+  }
+
+  const contentAdjSeconds = Math.round((contentEffortAdjustmentHours || 0) * 3600);
+  const prodAdjSeconds = Math.round((productionEffortAdjustmentHours || 0) * 3600);
+  const finalPlannedSeconds = standardContentSeconds + standardProductionSeconds + contentAdjSeconds + prodAdjSeconds;
 
   const legacyItemId = generateLegacyId("item");
   const legacyVerId = generateLegacyId("ver");
@@ -81,7 +161,11 @@ export async function createContentItemAction(params: {
   const fingerprints = computeFingerprints(copy, scheduledPublicationDate);
 
   const schedDate = scheduledPublicationDate ? new Date(scheduledPublicationDate) : null;
-  const subDeadline = submissionDeadline ? new Date(submissionDeadline) : (schedDate || new Date());
+  const calculatedDeadline = schedDate ? calculateInternalDeadline(schedDate, leadTimeWorkdays) : null;
+  const finalDeadline = finalInternalDeadlineOverride
+    ? new Date(finalInternalDeadlineOverride)
+    : (calculatedDeadline || (submissionDeadline ? new Date(submissionDeadline) : (schedDate || new Date())));
+  const subDeadline = submissionDeadline ? new Date(submissionDeadline) : finalDeadline;
 
   try {
     const result = await runTransaction(async (tx) => {
@@ -95,11 +179,29 @@ export async function createContentItemAction(params: {
           title,
           platform,
           contentType,
+          workType: matchedWorkType,
+          workTypeId: standard?.id || workTypeId || null,
+          campaignId: campaignId || null,
+          contentPillar: contentPillar || null,
+          topic: topic || title,
+          brief: brief || null,
+          referenceLink: referenceLink || null,
+          priority,
+          workNature,
+          accountOwnerId: accountOwnerId || null,
           stage: "draft",
           scopeClassification: scopeClassification || "contracted",
           clientVisible: false,
           scheduledPublicationDate: schedDate,
           submissionDeadline: subDeadline,
+          calculatedInternalDeadline: calculatedDeadline,
+          finalInternalDeadline: finalDeadline,
+          deadlineOverrideReason: deadlineOverrideReason || null,
+          standardContentSeconds,
+          standardProductionSeconds,
+          revisionContentSeconds: contentAdjSeconds,
+          revisionProductionSeconds: prodAdjSeconds,
+          finalPlannedSeconds,
           currentVersionNumber: 1,
         })
         .returning();
@@ -126,7 +228,7 @@ export async function createContentItemAction(params: {
         })
         .returning();
 
-      // 3. Insert ContentAssignment if assignee specified
+      // 3. Insert ContentAssignment if assignee specified (authoritative task ownership)
       let assignment = null;
       if (resolvedAssigneeId) {
         const [asgn] = await tx
@@ -140,8 +242,8 @@ export async function createContentItemAction(params: {
             assignmentRole: "designer",
             status: "assigned",
             assignedByUserId: actor.id,
-            initialDueAt: subDeadline,
-            currentDueAt: subDeadline,
+            initialDueAt: finalDeadline,
+            currentDueAt: finalDeadline,
           })
           .returning();
         assignment = asgn;
@@ -832,6 +934,7 @@ export async function markContentPublishedAction(params: {
       stage: "published",
       liveUrl,
       publishedAt: pubTimestamp,
+      completedAt: item.completedAt || pubTimestamp,
       publishedByUserId: actorUserId,
       updatedAt: sql`NOW()`,
     })
@@ -842,7 +945,67 @@ export async function markContentPublishedAction(params: {
     projectId: item.projectId,
     userId: actorUserId,
     orgId: item.orgId,
+    tags: ["performance", "content", "calendar", "workspace"],
   });
 
   return { success: true, item: updated };
 }
+
+/**
+ * 11. Generic Operational Task Completion (Meetings, Research, Reports, Blogs, Landing Pages, etc.)
+ */
+export async function completeTaskAction(params: {
+  actorUserId: string;
+  contentItemId: string;
+  completedAt?: string;
+}) {
+  const { actorUserId, contentItemId, completedAt } = params;
+
+  const resolvedItemId = await resolveContentItemId(contentItemId);
+  if (!resolvedItemId) return { success: false, error: "Task not found." };
+
+  const [item] = await db
+    .select()
+    .from(contentItems)
+    .where(eq(contentItems.id, resolvedItemId))
+    .limit(1);
+
+  if (!item) return { success: false, error: "Task not found." };
+
+  const access = await requireProjectAccess(actorUserId, item.projectId);
+  if (!access.allowed || access.role === "client") {
+    return { success: false, error: "Unauthorized: Clients cannot mark tasks completed." };
+  }
+
+  const compTimestamp = completedAt ? new Date(completedAt) : new Date();
+
+  const [updated] = await db
+    .update(contentItems)
+    .set({
+      stage: item.stage === "draft" || item.stage === "in_review" ? "approved" : item.stage,
+      completedAt: compTimestamp,
+      updatedAt: sql`NOW()`,
+    })
+    .where(eq(contentItems.id, item.id))
+    .returning();
+
+  // Also complete open assignment if present
+  await db
+    .update(contentAssignments)
+    .set({
+      status: "completed",
+      completedAt: compTimestamp,
+      updatedAt: sql`NOW()`,
+    })
+    .where(and(eq(contentAssignments.contentItemId, item.id), sql`${contentAssignments.status} != 'completed'`));
+
+  await invalidateWorkspaceEntities({
+    projectId: item.projectId,
+    userId: actorUserId,
+    orgId: item.orgId,
+    tags: ["performance", "content", "calendar", "workspace"],
+  });
+
+  return { success: true, item: updated };
+}
+

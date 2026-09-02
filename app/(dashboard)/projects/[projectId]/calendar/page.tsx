@@ -34,7 +34,7 @@ export default function CalendarPage() {
   const isManagement = activeRole === "founder" || activeRole === "consultant" || activeRole === "admin";
 
   const [viewMode, setViewMode] = useState<"month" | "week">("month");
-  const [dateLayer, setDateLayer] = useState<DeadlineKind>("scheduled_publication");
+  const [dateLayer, setDateLayer] = useState<string>("scheduled_publication");
 
   // Dynamic runtime IST current date
   const [todayIST, setTodayIST] = useState(() => getCurrentISTDate());
@@ -56,27 +56,22 @@ export default function CalendarPage() {
   const [newDateVal, setNewDateVal] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
 
-  // Multi-Platform Quick Create Modal
+  // Multi-Platform / Standard Quick Create Modal
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
   const [quickTitle, setQuickTitle] = useState("");
+  const [quickWorkType, setQuickWorkType] = useState("Simple Static Poster");
   const [quickPlatforms, setQuickPlatforms] = useState<ContentPlatform[]>(["Instagram"]);
-  const [quickType, setQuickType] = useState<ContentType>("carousel");
+  const [quickType, setQuickType] = useState<ContentType>("post");
   const [quickScope, setQuickScope] = useState<ScopeClassification>("contracted");
   const [quickDate, setQuickDate] = useState(() => todayIST.dateString);
   const [quickAssigneeId, setQuickAssigneeId] = useState("");
+  const [quickPriority, setQuickPriority] = useState<"urgent" | "normal" | "low">("normal");
+  const [quickWorkNature, setQuickWorkNature] = useState<"planned" | "ad_hoc">("planned");
+  const [quickDeadlineOverride, setQuickDeadlineOverride] = useState("");
 
   const project = state.projects.find((p) => p.id === projectId);
   const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
-  const projectMembers = state.projectMemberships
-    .filter((m) => m.projectId === projectId && m.status === "active")
-    .map((m) => {
-      const user = state.users.find((u) => u.id === m.userId);
-      return {
-        userId: m.userId,
-        role: m.membershipRole || user?.role || "designer",
-        name: user?.name || m.userId,
-      };
-    });
+  const effortStandardsList = state.effortStandards || [];
 
   const monthNames = [
     "January", "February", "March", "April", "May", "June",
@@ -87,6 +82,9 @@ export default function CalendarPage() {
   const month = currentDate.getMonth();
 
   const getItemLayerDate = (item: ContentItem): string | undefined => {
+    if (dateLayer === "internal_deadline") {
+      return item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline;
+    }
     if (dateLayer === "submission") return item.deadlines?.submissionDeadline;
     if (dateLayer === "resubmission") return item.deadlines?.resubmissionDeadline;
     if (dateLayer === "approval_target") return item.deadlines?.approvalTarget;
@@ -159,7 +157,7 @@ export default function CalendarPage() {
     setNewDateVal(dateStr);
   };
 
-  const handleRescheduleSubmit = (e: React.FormEvent) => {
+  const handleRescheduleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedItemForReschedule || !newDateVal) return;
 
@@ -170,16 +168,16 @@ export default function CalendarPage() {
     }
 
     if (dateLayer === "actual_publication") {
-      updatePublicationDetails({
+      await updatePublicationDetails({
         contentItemId: selectedItemForReschedule.id,
         publishedAt: newDateVal,
         reason: rescheduleReason || "Date adjusted via Calendar actual publication layer",
         actorUserId: activeUserId,
       });
     } else {
-      updateDeadline({
+      await updateDeadline({
         contentItemId: selectedItemForReschedule.id,
-        kind: dateLayer,
+        kind: dateLayer === "publication" ? "scheduled_publication" : "submission",
         newDueAt: newDateVal,
         changedByUserId: activeUserId,
         reason: rescheduleReason || `Rescheduled in calendar ${dateLayer} layer`,
@@ -196,7 +194,7 @@ export default function CalendarPage() {
     );
   };
 
-  const handleQuickCreateSubmit = (e: React.FormEvent) => {
+  const handleQuickCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickTitle.trim() || quickPlatforms.length === 0) return;
 
@@ -207,7 +205,7 @@ export default function CalendarPage() {
 
     if (quickPlatforms.length > 1) {
       // Multi-Platform: 1 ContentGroup + N platform-specific ContentItems + N ContentAssignments
-      createContentGroupWithItems({
+      await createContentGroupWithItems({
         projectId,
         title: quickTitle.trim(),
         actorUserId: activeUserId,
@@ -221,7 +219,7 @@ export default function CalendarPage() {
       });
     } else {
       // Single Platform
-      createContentItem({
+      await createContentItem({
         projectId,
         title: quickTitle.trim(),
         platform: quickPlatforms[0],
@@ -234,7 +232,7 @@ export default function CalendarPage() {
           scheduledPublicationDate: quickDate,
         },
         scopeClassification: quickScope,
-      });
+      }, undefined, [], activeUserId);
     }
 
     setIsQuickCreateOpen(false);
@@ -331,19 +329,20 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        {/* Milestone Layer Selector */}
+        {/* Perspective / Milestone Layer Selector */}
         <div className="flex items-center gap-2">
           <span className="text-[12px] font-semibold text-[#86868b] uppercase tracking-wider hidden md:inline">
-            Milestone Layer:
+            Perspective:
           </span>
           <select
             value={dateLayer}
-            onChange={(e) => setDateLayer(e.target.value as DeadlineKind)}
+            onChange={(e) => setDateLayer(e.target.value)}
             className="rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
           >
-            <option value="scheduled_publication">Scheduled Publication (with Live Resolution)</option>
+            <option value="scheduled_publication">📅 Publication / Delivery Date (Client Target)</option>
+            <option value="internal_deadline">⏱️ Internal Production Deadline (Production Cutoff)</option>
             <option value="submission">First Submission Deadline</option>
-            <option value="resubmission">Revision / Resubmission</option>
+            <option value="resubmission">Revision / Resubmission Target</option>
             <option value="approval_target">Target Approval Date</option>
             <option value="actual_publication">Historical Live Date (publishedAt)</option>
           </select>
@@ -353,12 +352,18 @@ export default function CalendarPage() {
       {/* Layer Explanation Banner */}
       <div className="px-4 py-2 bg-[#fbfbfd] border border-black/[0.06] rounded-xl text-[12px] text-[#6e6e73] flex items-center justify-between">
         <span>
-          Current Layer:{" "}
-          <strong className="text-[#1d1d1f] capitalize">
-            {dateLayer.replace(/_/g, " ")}
+          Current Perspective:{" "}
+          <strong className="text-[#1d1d1f]">
+            {dateLayer === "scheduled_publication"
+              ? "Publication / Delivery Date"
+              : dateLayer === "internal_deadline"
+              ? "Internal Production Deadline"
+              : dateLayer.replace(/_/g, " ")}
           </strong>
           {dateLayer === "scheduled_publication" &&
-            " — Published items dynamically resolve to their actual live date (publishedAt), while pending items stay at scheduledPublicationDate."}
+            " — Shows client-facing target publication dates (or actual published date when live)."}
+          {dateLayer === "internal_deadline" &&
+            " — Shows internal designer production cutoff dates calculated from lead time standards."}
         </span>
         <span className="text-[11px] text-[#86868b] font-medium">
           Org Timezone: Asia/Kolkata (IST)
@@ -671,7 +676,7 @@ export default function CalendarPage() {
             <form onSubmit={handleQuickCreateSubmit} className="space-y-3.5">
               <div>
                 <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                  Campaign / Concept Title *
+                  Deliverable Title / Topic *
                 </label>
                 <input
                   type="text"
@@ -682,6 +687,64 @@ export default function CalendarPage() {
                   required
                 />
               </div>
+
+              {/* Work Type Selection from Authoritative Standards */}
+              <div>
+                <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                  Operational Work Type *
+                </label>
+                <select
+                  value={quickWorkType}
+                  onChange={(e) => {
+                    const wt = e.target.value;
+                    setQuickWorkType(wt);
+                    const matched = effortStandardsList.find((s) => s.workType === wt);
+                    if (matched) {
+                      if (matched.category === "Static") setQuickType("post");
+                      else if (matched.category === "Carousel") setQuickType("carousel");
+                      else if (matched.category === "Video") setQuickType("reel");
+                    }
+                  }}
+                  className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] font-medium text-[#1d1d1f] focus:outline-none"
+                >
+                  {effortStandardsList.length > 0 ? (
+                    effortStandardsList.map((s) => (
+                      <option key={s.id} value={s.workType}>
+                        {s.workType} ({s.category} • {(s.totalSeconds / 3600).toFixed(2)}h)
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Simple Static Poster">Simple Static Poster (1.50h)</option>
+                      <option value="Simple Carousel">Simple Carousel (3.25h)</option>
+                      <option value="Short-form Reel">Short-form Reel (3.75h)</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              {/* Instant Standard Preview Box */}
+              {(() => {
+                const matchedStd = effortStandardsList.find((s) => s.workType === quickWorkType) || {
+                  contentSeconds: 1800,
+                  productionSeconds: 3600,
+                  totalSeconds: 5400,
+                  leadTimeWorkdays: 2,
+                  defaultRole: "Designer",
+                };
+                return (
+                  <div className="p-3 bg-[#f5f5f7] rounded-xl text-xs space-y-1">
+                    <div className="flex justify-between font-semibold text-[#1d1d1f]">
+                      <span>Standard Base Effort:</span>
+                      <span className="text-[#0071e3]">{(matchedStd.totalSeconds / 3600).toFixed(2)} hours</span>
+                    </div>
+                    <div className="flex justify-between text-[#86868b] text-[11px]">
+                      <span>Content: {(matchedStd.contentSeconds / 3600).toFixed(2)}h | Production: {(matchedStd.productionSeconds / 3600).toFixed(2)}h</span>
+                      <span>Lead Time: {matchedStd.leadTimeWorkdays} workdays ({matchedStd.defaultRole})</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Multi-Platform Selector */}
               <div>
@@ -713,22 +776,6 @@ export default function CalendarPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                    Content Type
-                  </label>
-                  <select
-                    value={quickType}
-                    onChange={(e) => setQuickType(e.target.value as ContentType)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
-                  >
-                    <option value="post">Standard Post</option>
-                    <option value="carousel">Carousel (PDF/Slides)</option>
-                    <option value="reel">Reel / Short</option>
-                    <option value="trial_reel">Trial Reel</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
                     Scope Classification
                   </label>
                   <select
@@ -741,11 +788,25 @@ export default function CalendarPage() {
                     <option value="additional_billable">Additional Billable</option>
                   </select>
                 </div>
+
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
+                    Work Nature
+                  </label>
+                  <select
+                    value={quickWorkNature}
+                    onChange={(e) => setQuickWorkNature(e.target.value as "planned" | "ad_hoc")}
+                    className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
+                  >
+                    <option value="planned">Planned (Standard Pipeline)</option>
+                    <option value="ad_hoc">Ad-Hoc / Urgent Client Request</option>
+                  </select>
+                </div>
               </div>
 
               <div>
                 <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                  Scheduled Date &amp; Deadline
+                  Target Publication Date
                 </label>
                 <input
                   type="date"
@@ -758,18 +819,21 @@ export default function CalendarPage() {
 
               <div>
                 <label className="block text-[12px] font-semibold text-[#86868b] uppercase mb-1">
-                  Assign Designer / Lead
+                  Assign Production Owner
                 </label>
                 <select
                   value={quickAssigneeId}
                   onChange={(e) => setQuickAssigneeId(e.target.value)}
                   className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
                 >
-                  {projectMembers.map((m) => (
-                    <option key={m.userId} value={m.userId}>
-                      {m.name} ({m.role})
-                    </option>
-                  ))}
+                  <option value="">Unassigned</option>
+                  {state.users
+                    .filter((u) => u.role !== "client" && u.status === "active")
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} ({u.role})
+                      </option>
+                    ))}
                 </select>
               </div>
 

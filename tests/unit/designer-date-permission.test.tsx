@@ -6,7 +6,7 @@ import { RoleProvider, useRole } from "../../lib/context/RoleContext";
 import { ContentItem } from "../../lib/types";
 
 describe("Designer Permissions & Date Protection", () => {
-  it("rejects Designer attempts to modify publishing dates or update publication details", () => {
+  it("rejects Designer attempts to modify publishing dates or update publication details", async () => {
     const { result } = renderHook(
       () => {
         const appState = useAppState();
@@ -49,8 +49,8 @@ describe("Designer Permissions & Date Protection", () => {
 
     // Designer attempts updatePublicationDetails
     let pubResult: any;
-    act(() => {
-      pubResult = result.current.appState.updatePublicationDetails({
+    await act(async () => {
+      pubResult = await result.current.appState.updatePublicationDetails({
         contentItemId: testItemId,
         publishedAt: "2026-12-31T18:00:00Z",
         reason: "Designer unauthorized publication details update",

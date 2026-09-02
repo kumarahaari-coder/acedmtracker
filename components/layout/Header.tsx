@@ -97,7 +97,7 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
 
             <div className="h-4 w-[1px] bg-black/[0.12] hidden sm:block" />
 
-            {/* My Work Link */}
+            {/* Top-Level Navigation */}
             <Link
               href="/"
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
@@ -106,11 +106,31 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
                   : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
               }`}
             >
-              <Briefcase className="h-3.5 w-3.5" />
-              <span>My Work</span>
+              <span>Dashboard</span>
             </Link>
 
-            {/* Global Team Link */}
+            <Link
+              href={activeProjectId ? `/projects/${activeProjectId}/calendar` : "/projects"}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
+                pathname.includes("/calendar")
+                  ? "bg-[#e8e8ed] text-[#1d1d1f]"
+                  : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+              }`}
+            >
+              <span>Calendar</span>
+            </Link>
+
+            <Link
+              href="/projects"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
+                pathname === "/projects" || (pathname.startsWith("/projects") && !pathname.includes("/calendar") && !pathname.includes("/approvals") && !pathname.includes("/commitments"))
+                  ? "bg-[#e8e8ed] text-[#1d1d1f]"
+                  : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+              }`}
+            >
+              <span>Projects</span>
+            </Link>
+
             {activeRole !== "client" && (
               <Link
                 href="/team"
@@ -120,13 +140,22 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
                     : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
                 }`}
               >
-                <Users className="h-3.5 w-3.5" />
                 <span>Team</span>
               </Link>
             )}
 
-            {/* Performance Dashboard Link */}
-            {(activeRole === "founder" || activeRole === "admin" || activeRole === "consultant") && (
+            <Link
+              href={activeProjectId ? `/projects/${activeProjectId}/approvals` : "/projects"}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
+                pathname.includes("/approvals")
+                  ? "bg-[#e8e8ed] text-[#1d1d1f]"
+                  : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+              }`}
+            >
+              <span>Approvals</span>
+            </Link>
+
+            {activeRole !== "client" && (
               <Link
                 href="/performance"
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
@@ -135,8 +164,20 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
                     : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
                 }`}
               >
-                <LineChart className="h-3.5 w-3.5 text-[#0071e3]" />
                 <span>Performance</span>
+              </Link>
+            )}
+
+            {(activeRole === "founder" || activeRole === "admin") && (
+              <Link
+                href="/admin/effort-standards"
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
+                  pathname.startsWith("/admin")
+                    ? "bg-[#e8e8ed] text-[#1d1d1f]"
+                    : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                }`}
+              >
+                <span>Admin</span>
               </Link>
             )}
 

@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import ProjectSettingsPage from "@/app/(dashboard)/projects/[projectId]/settings/page";
 import { AppStateProvider } from "@/lib/context/AppStateContext";
 import { RoleProvider, useRole } from "@/lib/context/RoleContext";
@@ -76,7 +76,7 @@ describe("Rendered Project Settings — Client Access Flow", () => {
     expect(screen.getByText("Grant Portal Access")).toBeDefined();
   });
 
-  it("shows email collision error when attempting to add an internal employee email as a client", () => {
+  it("shows email collision error when attempting to add an internal employee email as a client", async () => {
     render(
       <AppStateProvider>
         <RoleProvider>
@@ -97,10 +97,12 @@ describe("Rendered Project Settings — Client Access Flow", () => {
     // Enter rohan's designer email
     fireEvent.change(nameInput, { target: { value: "Rohan Verma" } });
     fireEvent.change(emailInput, { target: { value: "rohan@aceassured.com" } });
-    fireEvent.click(submitBtn);
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
 
     expect(
-      screen.getByText(/already registered as an internal team member/i)
+      await screen.findByText(/already registered as an internal team member/i)
     ).toBeDefined();
   });
 });

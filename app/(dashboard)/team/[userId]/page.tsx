@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+
 import { useParams, useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
@@ -24,7 +25,13 @@ import {
   X,
   AlertCircle,
 } from "lucide-react";
-import { UserRole, ProjectMembership } from "@/lib/types";
+import {
+  getEmployeeCapacityScheduleAction,
+  updateEmployeeCapacityScheduleAction,
+  recordCapacityAdjustmentAction,
+  deleteCapacityAdjustmentAction,
+} from "@/lib/actions/capacity";
+import { UserRole, ProjectMembership, EmployeeCapacitySchedule, CapacityAdjustment } from "@/lib/types";
 import { formatDate, formatDateTime, formatTime } from "@/lib/formatters";
 
 export default function TeamMemberProfilePage() {
@@ -41,6 +48,106 @@ export default function TeamMemberProfilePage() {
     adjustAttendance,
   } = useAppState();
   const { activeRole, activeUserId, canAdmin } = useRole();
+
+  // Capacity Schedule State
+  const [schedules, setSchedules] = useState<EmployeeCapacitySchedule[]>([]);
+  const [adjustments, setAdjustments] = useState<CapacityAdjustment[]>([]);
+  const [loadingCapacity, setLoadingCapacity] = useState(false);
+  const [isEditScheduleOpen, setIsEditScheduleOpen] = useState(false);
+  const [monHours, setMonHours] = useState(8);
+  const [tueHours, setTueHours] = useState(8);
+  const [wedHours, setWedHours] = useState(8);
+  const [thuHours, setThuHours] = useState(8);
+  const [friHours, setFriHours] = useState(8);
+  const [satHours, setSatHours] = useState(0);
+  const [sunHours, setSunHours] = useState(0);
+  const [primaryFunction, setPrimaryFunction] = useState("Creative");
+  const [creativeEligibility, setCreativeEligibility] = useState<"primary" | "backup" | "not_eligible">("primary");
+
+  // Add Adjustment Modal State
+  const [isAddAdjOpen, setIsAddAdjOpen] = useState(false);
+  const [adjDate, setAdjDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [adjKind, setAdjKind] = useState<"leave" | "holiday" | "overtime" | "manual">("leave");
+  const [adjHours, setAdjHours] = useState(-8);
+  const [adjReason, setAdjReason] = useState("");
+
+  useEffect(() => {
+    if (userId) {
+      loadCapacityData();
+    }
+  }, [userId]);
+
+  const loadCapacityData = async () => {
+    setLoadingCapacity(true);
+    const res = await getEmployeeCapacityScheduleAction(userId);
+    if (res.success) {
+      setSchedules(res.schedules);
+      setAdjustments(res.adjustments);
+      if (res.schedules.length > 0) {
+        const active = res.schedules[0];
+        setMonHours(active.mondayHours);
+        setTueHours(active.tuesdayHours);
+        setWedHours(active.wednesdayHours);
+        setThuHours(active.thursdayHours);
+        setFriHours(active.fridayHours);
+        setSatHours(active.saturdayHours);
+        setSunHours(active.sundayHours);
+        setPrimaryFunction(active.primaryFunction);
+        setCreativeEligibility(active.creativeEligibility);
+      }
+    }
+    setLoadingCapacity(false);
+  };
+
+  const handleSaveSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await updateEmployeeCapacityScheduleAction({
+      userId,
+      mondayHours: monHours,
+      tuesdayHours: tueHours,
+      wednesdayHours: wedHours,
+      thursdayHours: thuHours,
+      fridayHours: friHours,
+      saturdayHours: satHours,
+      sundayHours: sunHours,
+      primaryFunction,
+      creativeEligibility,
+    });
+    if (res.success) {
+      setIsEditScheduleOpen(false);
+      await loadCapacityData();
+    } else {
+      alert(res.error || "Failed to save capacity schedule");
+    }
+  };
+
+  const handleSaveAdjustment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adjReason.trim()) return;
+    const res = await recordCapacityAdjustmentAction({
+      userId,
+      adjustmentDate: adjDate,
+      kind: adjKind,
+      adjustmentHours: adjHours,
+      reason: adjReason,
+    });
+    if (res.success) {
+      setIsAddAdjOpen(false);
+      setAdjReason("");
+      await loadCapacityData();
+    } else {
+      alert(res.error || "Failed to record adjustment");
+    }
+  };
+
+  const handleDeleteAdjustment = async (adjId: string) => {
+    if (confirm("Delete this capacity adjustment?")) {
+      const res = await deleteCapacityAdjustmentAction(adjId);
+      if (res.success) {
+        await loadCapacityData();
+      }
+    }
+  };
 
   // Modals state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -147,14 +254,14 @@ export default function TeamMemberProfilePage() {
     setIsEditModalOpen(false);
   };
 
-  const handleAddProject = (e: React.FormEvent) => {
+  const handleAddProject = async (e: React.FormEvent) => {
     e.preventDefault();
     setMembershipError(null);
     if (!selectedProjectId) {
       setMembershipError("Please select a project.");
       return;
     }
-    const res = addProjectMember({
+    const res = await addProjectMember({
       projectId: selectedProjectId,
       userId: user.id,
       membershipRole: selectedMembershipRole,
@@ -366,6 +473,99 @@ export default function TeamMemberProfilePage() {
                 <span className="text-[#86868b]">Profile ID</span>
                 <span className="font-mono text-[11px] text-[#86868b]">{user.id}</span>
               </div>
+            </div>
+          </div>
+
+          {/* Capacity & Operational Work Settings Card */}
+          <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[15px] font-semibold text-[#1d1d1f] flex items-center gap-2">
+                <Clock className="h-4 w-4 text-[#0071e3]" /> Capacity &amp; Work Settings
+              </h2>
+              {(canAdmin || activeRole === "founder" || activeRole === "admin") && (
+                <button
+                  onClick={() => setIsEditScheduleOpen(true)}
+                  className="text-xs font-semibold text-[#0071e3] hover:underline"
+                >
+                  Edit Schedule
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2.5 text-[13px]">
+              <div className="flex justify-between">
+                <span className="text-[#86868b]">Primary Function</span>
+                <span className="font-semibold text-[#1d1d1f]">{primaryFunction}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#86868b]">Creative Eligibility</span>
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                  creativeEligibility === "primary"
+                    ? "bg-[#0071e3]/10 text-[#0071e3]"
+                    : creativeEligibility === "backup"
+                    ? "bg-[#ff9500]/10 text-[#c97800]"
+                    : "bg-black/[0.05] text-[#86868b]"
+                }`}>
+                  {creativeEligibility}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#86868b]">Mon - Fri Hours</span>
+                <span className="font-medium text-[#1d1d1f]">{monHours}h / day</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#86868b]">Sat / Sun Hours</span>
+                <span className="font-medium text-[#1d1d1f]">{satHours}h / {sunHours}h</span>
+              </div>
+            </div>
+
+            {/* Adjustments Section */}
+            <div className="pt-3 border-t border-black/[0.06] space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[#1d1d1f]">Capacity Adjustments</span>
+                {(canAdmin || activeRole === "founder" || activeRole === "admin") && (
+                  <button
+                    onClick={() => setIsAddAdjOpen(true)}
+                    className="text-[11px] font-semibold text-[#0071e3] hover:underline flex items-center gap-1"
+                  >
+                    <Plus className="h-3 w-3" /> Add Adjustment
+                  </button>
+                )}
+              </div>
+
+              {adjustments.length === 0 ? (
+                <div className="text-[11px] text-[#86868b] p-2 bg-[#fbfbfd] rounded-lg text-center">
+                  No adjustments recorded.
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                  {adjustments.map((a) => (
+                    <div
+                      key={a.id}
+                      className="p-2 bg-[#f5f5f7] rounded-lg flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <span className="font-semibold text-[#1d1d1f] capitalize">{a.kind}</span>
+                        <span className="text-[10px] text-[#86868b] ml-1.5">{a.adjustmentDate}</span>
+                        <div className="text-[11px] text-[#6e6e73] truncate max-w-[140px]">{a.reason}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-bold ${a.adjustmentHours < 0 ? "text-[#ff3b30]" : "text-[#34c759]"}`}>
+                          {a.adjustmentHours > 0 ? `+${a.adjustmentHours}h` : `${a.adjustmentHours}h`}
+                        </span>
+                        {(canAdmin || activeRole === "founder" || activeRole === "admin") && (
+                          <button
+                            onClick={() => handleDeleteAdjustment(a.id)}
+                            className="text-[#86868b] hover:text-[#ff3b30]"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -860,20 +1060,14 @@ export default function TeamMemberProfilePage() {
                 setDeleteError(null);
 
                 try {
-                  const { permanentlyDeleteTeamMemberAction } = await import("@/lib/actions/team");
-                  const serverRes = await permanentlyDeleteTeamMemberAction({
-                    userId: user.id,
-                    actorUserId: activeUserId,
-                    reason: deleteReason.trim() || undefined,
-                  });
+                  const res = await permanentlyDeleteTeamMember(user.id, activeUserId, deleteReason.trim() || undefined);
 
-                  if (!serverRes.success) {
-                    setDeleteError(serverRes.error || "Failed to permanently delete team member.");
+                  if (!res.success) {
+                    setDeleteError(res.error || "Failed to permanently delete team member.");
                     setIsDeleting(false);
                     return;
                   }
 
-                  permanentlyDeleteTeamMember(user.id, activeUserId, deleteReason.trim() || undefined);
                   setIsDeleteModalOpen(false);
                   router.replace("/team");
                 } catch (err: any) {
@@ -925,6 +1119,236 @@ export default function TeamMemberProfilePage() {
                   className="rounded-full bg-[#d92d20] hover:bg-[#b42318] px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isDeleting ? "Deleting..." : "Permanently Delete Member"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Capacity Schedule Modal */}
+      {isEditScheduleOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-black/[0.08] space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
+              <h3 className="text-base font-bold text-[#1d1d1f]">Edit Capacity & Work Schedule</h3>
+              <button onClick={() => setIsEditScheduleOpen(false)}>
+                <X className="h-4 w-4 text-[#86868b]" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSchedule} className="space-y-4 pt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Primary Function</label>
+                  <input
+                    type="text"
+                    value={primaryFunction}
+                    onChange={(e) => setPrimaryFunction(e.target.value)}
+                    placeholder="e.g. Creative, Video Editing, Strategy"
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Creative Eligibility</label>
+                  <select
+                    value={creativeEligibility}
+                    onChange={(e) => setCreativeEligibility(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs"
+                  >
+                    <option value="primary">Primary Creative</option>
+                    <option value="backup">Backup Creative</option>
+                    <option value="not_eligible">Not Eligible</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#1d1d1f] mb-1.5">Daily Working Hours</label>
+                <div className="grid grid-cols-7 gap-1.5 text-center text-xs">
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Mon</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={monHours}
+                      onChange={(e) => setMonHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Tue</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={tueHours}
+                      onChange={(e) => setTueHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Wed</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={wedHours}
+                      onChange={(e) => setWedHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Thu</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={thuHours}
+                      onChange={(e) => setThuHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Fri</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={friHours}
+                      onChange={(e) => setFriHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Sat</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={satHours}
+                      onChange={(e) => setSatHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#86868b]">Sun</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="24"
+                      value={sunHours}
+                      onChange={(e) => setSunHours(parseFloat(e.target.value) || 0)}
+                      className="w-full mt-1 p-1.5 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-center font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsEditScheduleOpen(false)}
+                  className="px-4 py-2 text-xs text-[#86868b] hover:text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#0071e3] text-white rounded-full text-xs font-semibold"
+                >
+                  Save Schedule
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Capacity Adjustment Modal */}
+      {isAddAdjOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-black/[0.08] space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
+              <h3 className="text-base font-bold text-[#1d1d1f]">Record Capacity Adjustment</h3>
+              <button onClick={() => setIsAddAdjOpen(false)}>
+                <X className="h-4 w-4 text-[#86868b]" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAdjustment} className="space-y-3.5 pt-1">
+              <div>
+                <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Adjustment Date *</label>
+                <input
+                  type="date"
+                  value={adjDate}
+                  onChange={(e) => setAdjDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs font-semibold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Type *</label>
+                  <select
+                    value={adjKind}
+                    onChange={(e) => {
+                      const k = e.target.value as any;
+                      setAdjKind(k);
+                      if (k === "leave" || k === "holiday") setAdjHours(-8);
+                      else if (k === "overtime") setAdjHours(4);
+                    }}
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs"
+                  >
+                    <option value="leave">Leave / Day Off (-8h)</option>
+                    <option value="holiday">Public Holiday (-8h)</option>
+                    <option value="overtime">Overtime (+Hours)</option>
+                    <option value="manual">Manual Adjustment</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Adjustment Hours *</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={adjHours}
+                    onChange={(e) => setAdjHours(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs font-bold"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#1d1d1f] mb-1">Reason *</label>
+                <textarea
+                  rows={2}
+                  required
+                  placeholder="e.g. Approved casual leave, Project crunch overtime..."
+                  value={adjReason}
+                  onChange={(e) => setAdjReason(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-black/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setIsAddAdjOpen(false)}
+                  className="px-4 py-2 text-xs text-[#86868b] hover:text-[#1d1d1f]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#0071e3] text-white rounded-full text-xs font-semibold"
+                >
+                  Record Adjustment
                 </button>
               </div>
             </form>

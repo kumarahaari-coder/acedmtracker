@@ -1169,6 +1169,11 @@ export function getInitialDeterministicState(): AppState {
         before: { decision: "pending" },
         after: { decision: "changes_requested" }
       }
-    ]
+    ],
+    effortStandards: [],
+    employeeCapacitySchedules: [],
+    capacityAdjustments: [],
+    projectCommitments: [],
+    projectPerformanceInputs: [],
   };
 }

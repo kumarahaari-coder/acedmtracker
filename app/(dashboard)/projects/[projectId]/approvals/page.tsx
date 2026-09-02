@@ -99,7 +99,7 @@ export default function ApprovalsQueuePage() {
     return true;
   });
 
-  const handleAddDirectForReview = (e: React.FormEvent) => {
+  const handleAddDirectForReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
 
@@ -134,7 +134,7 @@ export default function ApprovalsQueuePage() {
           },
         ];
 
-    const created = createContentItem(
+    const res = await createContentItem(
       {
         projectId,
         title: newTitle.trim(),
@@ -150,11 +150,12 @@ export default function ApprovalsQueuePage() {
         scopeClassification: "contracted",
       },
       initialCopy,
-      initialAssets
+      initialAssets,
+      activeUserId
     );
 
-    if (created.activeDraftVersionId) {
-      submitVersion(created.activeDraftVersionId, activeUserId);
+    if (res.success && res.item?.activeDraftVersionId) {
+      submitVersion(res.item.activeDraftVersionId, activeUserId);
     }
 
     setIsAddModalOpen(false);

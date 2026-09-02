@@ -50,15 +50,15 @@ interface AppStateContextType {
   resetAllData: () => void;
   hydrateServerState: (serverState: AppState) => void;
   // Project & Campaign Actions
-  createProject: (project: Omit<Project, "id" | "createdAt">) => Project;
+  createProject: (project: Omit<Project, "id" | "createdAt">, actorUserId?: string) => Promise<{ success: boolean; project?: Project; error?: string }>;
   updateProjectObjective: (params: {
     projectId: string;
     updates: Partial<ProjectObjectiveConfig>;
     actorUserId: string;
   }) => { success: boolean; error?: string };
-  archiveProject: (projectId: string, reason?: string) => void;
-  restoreProject: (projectId: string) => void;
-  createCampaign: (campaign: Omit<Campaign, "id">) => Campaign;
+  archiveProject: (projectId: string, reason?: string, actorUserId?: string) => Promise<{ success: boolean; error?: string }>;
+  restoreProject: (projectId: string, actorUserId?: string) => Promise<{ success: boolean; error?: string }>;
+  createCampaign: (campaign: Omit<Campaign, "id">, actorUserId?: string) => Promise<{ success: boolean; campaign?: Campaign; error?: string }>;
   // Content Groups & Multi-Platform (Phase 3)
   createContentGroupWithItems: (params: {
     projectId: string;
@@ -81,7 +81,7 @@ interface AppStateContextType {
       destinationUrl?: string;
     };
     sharedAssets?: SubmissionAsset[];
-  }) => { success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string };
+  }) => Promise<{ success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string }>;
   syncContentGroupFields: (params: {
     contentGroupId: string;
     sourceItemId?: string;
@@ -101,7 +101,7 @@ interface AppStateContextType {
     reason?: string;
   }) => { success: boolean; error?: string; affectedItemCount?: number };
   // Content Actions & Assignments (Phase 2)
-  createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[]) => ContentItem;
+  createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[], actorUserId?: string) => Promise<{ success: boolean; item?: ContentItem; error?: string }>;
   updateContentItem: (itemId: string, updates: Partial<ContentItem>, reason?: string) => void;
   assignContentItem: (params: {
     projectId?: string;
@@ -182,7 +182,7 @@ interface AppStateContextType {
     liveUrl?: string;
     reason: string;
     actorUserId: string;
-  }) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
   importAnalyticsBatch: (params: {
     projectId: string;
     filename: string;
@@ -215,7 +215,7 @@ interface AppStateContextType {
     newDueAt: string;
     changedByUserId: string;
     reason: string;
-  }) => void;
+  }) => Promise<{ success: boolean; error?: string }>;
   // Team Management & Memberships (Phase 1)
   createTeamMember: (data: {
     id?: string;
@@ -225,7 +225,7 @@ interface AppStateContextType {
     jobTitle?: string;
     workingHoursPerDay?: number;
     actorUserId: string;
-  }) => { success: boolean; user?: User; error?: string };
+  }) => Promise<{ success: boolean; user?: User; error?: string }>;
   updateTeamMember: (
     userId: string,
     updates: Partial<Pick<User, "name" | "email" | "role" | "jobTitle" | "workingHoursPerDay">>,
@@ -241,18 +241,18 @@ interface AppStateContextType {
     userId: string,
     actorUserId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   addProjectMember: (params: {
     projectId: string;
     userId: string;
     membershipRole?: UserRole;
     actorUserId: string;
-  }) => { success: boolean; membership?: ProjectMembership; error?: string };
+  }) => Promise<{ success: boolean; membership?: ProjectMembership; error?: string }>;
   removeProjectMember: (
     membershipId: string,
     actorUserId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   // External Guest Links
   generateExternalReviewLink: (params: {
     projectId: string;
@@ -264,15 +264,15 @@ interface AppStateContextType {
   }) => ExternalReviewLink;
   revokeExternalReviewLink: (linkId: string) => void;
   // Attendance & Presence (Phase 2.1)
-  checkInAttendance: (userId: string) => { success: boolean; record?: AttendanceRecord; error?: string };
-  checkOutAttendance: (userId: string) => { success: boolean; record?: AttendanceRecord; error?: string };
+  checkInAttendance: (userId: string) => Promise<{ success: boolean; record?: AttendanceRecord; error?: string }>;
+  checkOutAttendance: (userId: string) => Promise<{ success: boolean; record?: AttendanceRecord; error?: string }>;
   adjustAttendance: (params: {
     attendanceId: string;
     checkedInAt?: string;
     checkedOutAt?: string;
     reason: string;
     actorUserId: string;
-  }) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
   // Client Portal & Visibility (Phase 5)
   setClientVisibility: (params: {
     contentItemId: string;
@@ -292,13 +292,13 @@ interface AppStateContextType {
     phone?: string;
     projectId: string;
     actorUserId: string;
-  }) => { success: boolean; user?: User; membership?: ProjectMembership; error?: string };
+  }) => Promise<{ success: boolean; user?: User; membership?: ProjectMembership; error?: string }>;
   createClientUserAndAssign: (params: {
     name: string;
     email: string;
     projectId: string;
     actorUserId: string;
-  }) => { success: boolean; user?: User; membership?: ProjectMembership; error?: string };
+  }) => Promise<{ success: boolean; user?: User; membership?: ProjectMembership; error?: string }>;
   revokeClientAccess: (params: {
     projectId: string;
     userId: string;
@@ -379,34 +379,55 @@ export function AppStateProvider({
   };
 
   // --- PROJECT ACTIONS ---
-  const createProject = (projectData: Omit<Project, "id" | "createdAt">): Project => {
-    const newId = "proj_" + Math.random().toString(36).substr(2, 9);
-    const newProject: Project = {
-      ...projectData,
-      id: newId,
-      engagementModel: projectData.engagementModel || "deliverable_based",
-      createdAt: new Date().toISOString(),
-    };
-    const audit = createAuditEntry(newId, "u_founder", "create_project", "project", newId, `Created project '${newProject.name}'`);
-    setState((prev) => ({
-      ...prev,
-      projects: [...prev.projects, newProject],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/projects").then(({ createProjectAction }) => {
-        createProjectAction({
-          legacyId: newId,
-          name: projectData.name,
-          clientBrand: projectData.clientBrand,
-          scope: projectData.scope,
-          engagementModel: projectData.engagementModel,
-        }).catch((err) => console.error("Failed to sync project to database:", err));
+  const createProject = async (
+    projectData: Omit<Project, "id" | "createdAt">,
+    actorUserId?: string
+  ): Promise<{ success: boolean; project?: Project; error?: string }> => {
+    try {
+      const { createProjectAction } = await import("../actions/projects");
+      const res = await createProjectAction({
+        name: projectData.name,
+        clientBrand: projectData.clientBrand,
+        scope: projectData.scope,
+        engagementModel: projectData.engagementModel,
+        actorUserId,
       });
-    }
 
-    return newProject;
+      if (!res.success || !res.project) {
+        return { success: false, error: res.error || "Failed to create project in database." };
+      }
+
+      const canonicalId = res.project.id;
+      const newProject: Project = {
+        ...projectData,
+        id: canonicalId,
+        legacyId: res.project.legacyId || undefined,
+        name: res.project.name,
+        clientBrand: res.project.clientBrand,
+        status: (res.project.status as any) || "active",
+        createdAt: res.project.createdAt,
+      };
+
+      const audit = createAuditEntry(
+        canonicalId,
+        actorUserId || "u_founder",
+        "create_project",
+        "project",
+        canonicalId,
+        `Created project '${newProject.name}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        projects: [...prev.projects, newProject],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, project: newProject };
+    } catch (err: any) {
+      console.error("Failed to create project:", err);
+      return { success: false, error: err.message || "Failed to create project." };
+    }
   };
 
   const updateProjectObjective = (params: {
@@ -453,192 +474,242 @@ export function AppStateProvider({
     return { success: true };
   };
 
-  const archiveProject = (projectId: string, reason?: string) => {
-    const audit = createAuditEntry(projectId, "u_admin", "archive_project", "project", projectId, `Archived project ${projectId}`, reason);
-    setState((prev) => ({
-      ...prev,
-      projects: prev.projects.map((p) =>
-        p.id === projectId ? { ...p, status: "archived", archivedAt: new Date().toISOString() } : p
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/projects").then(({ archiveProjectAction }) => {
-        archiveProjectAction({
-          projectId,
-        }).catch((err) => console.error("Failed to sync project archive to database:", err));
+  const archiveProject = async (
+    projectId: string,
+    reason?: string,
+    actorUserId?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { archiveProjectAction } = await import("../actions/projects");
+      const res = await archiveProjectAction({
+        projectId,
+        actorUserId,
       });
+
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to archive project." };
+      }
+
+      const audit = createAuditEntry(
+        projectId,
+        actorUserId || "u_admin",
+        "archive_project",
+        "project",
+        projectId,
+        `Archived project ${projectId}`,
+        reason
+      );
+
+      setState((prev) => ({
+        ...prev,
+        projects: prev.projects.map((p) =>
+          p.id === projectId ? { ...p, status: "archived", archivedAt: new Date().toISOString() } : p
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
   };
 
-  const restoreProject = (projectId: string) => {
-    const audit = createAuditEntry(projectId, "u_admin", "restore_project", "project", projectId, `Restored project ${projectId}`);
-    setState((prev) => ({
-      ...prev,
-      projects: prev.projects.map((p) =>
-        p.id === projectId ? { ...p, status: "active", archivedAt: undefined } : p
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
+  const restoreProject = async (
+    projectId: string,
+    actorUserId?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { restoreProjectAction } = await import("../actions/projects");
+      const res = await restoreProjectAction({
+        projectId,
+        actorUserId,
+      });
+
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to restore project." };
+      }
+
+      const audit = createAuditEntry(
+        projectId,
+        actorUserId || "u_admin",
+        "restore_project",
+        "project",
+        projectId,
+        `Restored project ${projectId}`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        projects: prev.projects.map((p) =>
+          p.id === projectId ? { ...p, status: "active", archivedAt: undefined } : p
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   };
 
-  const createCampaign = (campData: Omit<Campaign, "id">): Campaign => {
-    const newId = "camp_" + Math.random().toString(36).substr(2, 9);
-    const newCamp: Campaign = { ...campData, id: newId };
-    const audit = createAuditEntry(campData.projectId, campData.ownerId, "create_campaign", "campaign", newId, `Created campaign '${newCamp.name}'`);
-    setState((prev) => ({
-      ...prev,
-      campaigns: [...prev.campaigns, newCamp],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-    return newCamp;
+  const createCampaign = async (
+    campData: Omit<Campaign, "id">,
+    actorUserId?: string
+  ): Promise<{ success: boolean; campaign?: Campaign; error?: string }> => {
+    try {
+      const { createCampaignAction } = await import("../actions/collaboration");
+      const res = await createCampaignAction({
+        projectId: campData.projectId,
+        name: campData.name,
+        objective: campData.objective,
+        description: campData.description,
+        status: campData.status as any,
+        startDate: campData.startDate,
+        endDate: campData.endDate,
+        ownerId: campData.ownerId,
+        actorUserId,
+      });
+
+      if (!res.success || !res.campaign) {
+        return { success: false, error: res.error || "Failed to create campaign in database." };
+      }
+
+      const newCamp: Campaign = {
+        id: res.campaign.id,
+        projectId: res.campaign.projectId,
+        name: res.campaign.name,
+        objective: res.campaign.objective,
+        description: res.campaign.description,
+        status: res.campaign.status as any,
+        startDate: res.campaign.startDate,
+        endDate: res.campaign.endDate,
+        ownerId: res.campaign.ownerId,
+      };
+
+      const audit = createAuditEntry(
+        campData.projectId,
+        campData.ownerId || actorUserId || "u_founder",
+        "create_campaign",
+        "campaign",
+        newCamp.id,
+        `Created campaign '${newCamp.name}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        campaigns: [...prev.campaigns, newCamp],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, campaign: newCamp };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   };
 
   // --- CONTENT ACTIONS ---
-  const createContentItem = (
+  const createContentItem = async (
     itemData: Omit<ContentItem, "id" | "currentVersionNumber">,
     initialCopy?: any,
-    initialAssets: SubmissionAsset[] = []
-  ): ContentItem => {
-    const newId = "item_" + Math.random().toString(36).substr(2, 9);
-    const v1Id = "ver_" + newId + "_v1";
-
-    const copy = initialCopy || {
-      caption: "Draft copy for " + itemData.title,
-      hashtags: ["marketing", "growth"],
-      cta: "Learn more at our website.",
-    };
-
-    const fingerprints = computeVersionFingerprints({
-      copy,
-      creativeAssets: initialAssets,
-      scheduledDate: itemData.deadlines.scheduledPublicationDate,
-    });
-
-    const v1: SubmissionVersion = {
-      id: v1Id,
-      contentItemId: newId,
-      versionNumber: 1,
-      isDraft: true,
-      createdAt: new Date().toISOString(),
-      copy,
-      creativeAssets: initialAssets,
-      scheduledDate: itemData.deadlines.scheduledPublicationDate,
-      componentFingerprints: fingerprints,
-    };
-
-    const newItem: ContentItem = {
-      ...itemData,
-      id: newId,
-      currentVersionNumber: 1,
-      activeDraftVersionId: v1Id,
-      scopeClassification: itemData.scopeClassification || "contracted",
-    };
-
-    const audit = createAuditEntry(
-      itemData.projectId,
-      itemData.accountableOwnerId,
-      "create_content_item",
-      "content_item",
-      newId,
-      `Created content item '${newItem.title}'`
-    );
-
-    const deadlineRec: DeadlineRecord = {
-      id: "dl_" + Math.random().toString(36).substr(2, 9),
-      projectId: itemData.projectId,
-      contentItemId: newId,
-      kind: "submission",
-      dueAt: itemData.deadlines.submissionDeadline || new Date().toISOString(),
-      changedByUserId: itemData.accountableOwnerId,
-      changeReason: "Initial brief assignment",
-      createdAt: new Date().toISOString(),
-    };
-
-    // Authoritative ContentAssignment creation
-    const assignment: ContentAssignment = {
-      id: "asgn_" + Math.random().toString(36).substr(2, 9),
-      projectId: itemData.projectId,
-      contentItemId: newId,
-      assigneeUserId: itemData.accountableOwnerId,
-      assignmentRole: "designer",
-      status: "assigned",
-      assignedByUserId: itemData.accountableOwnerId,
-      assignedAt: new Date().toISOString(),
-      initialDueAt: itemData.deadlines.submissionDeadline || new Date().toISOString(),
-      currentDueAt: itemData.deadlines.submissionDeadline || new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    setState((prev) => ({
-      ...prev,
-      contentItems: [...prev.contentItems, newItem],
-      contentAssignments: [...prev.contentAssignments, assignment],
-      submissionVersions: [...prev.submissionVersions, v1],
-      deadlineRecords: [...prev.deadlineRecords, deadlineRec],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/content").then(({ createContentItemAction }) => {
-        createContentItemAction({
-          actorUserId: itemData.accountableOwnerId || "u_founder",
-          projectId: itemData.projectId,
-          title: itemData.title,
-          platform: itemData.platform,
-          contentType: itemData.contentType,
-          scopeClassification: itemData.scopeClassification,
-          scheduledPublicationDate: itemData.deadlines?.scheduledPublicationDate,
-          submissionDeadline: itemData.deadlines?.submissionDeadline,
-          accountableOwnerId: itemData.accountableOwnerId,
-        })
-          .then((res: any) => {
-            if (res.success && res.item) {
-              setState((prev) => ({
-                ...prev,
-                contentItems: prev.contentItems.map((ci) =>
-                  ci.id === newId
-                    ? {
-                        ...ci,
-                        id: res.item.id,
-                        projectId: res.item.projectId,
-                        currentVersionNumber: res.item.currentVersionNumber,
-                        activeDraftVersionId: res.version?.id || ci.activeDraftVersionId,
-                      }
-                    : ci
-                ),
-                submissionVersions: prev.submissionVersions.map((sv) =>
-                  sv.id === v1Id
-                    ? {
-                        ...sv,
-                        id: res.version?.id || sv.id,
-                        contentItemId: res.item.id,
-                      }
-                    : sv
-                ),
-                contentAssignments: prev.contentAssignments.map((ca) =>
-                  ca.contentItemId === newId
-                    ? {
-                        ...ca,
-                        id: res.assignment?.id || ca.id,
-                        contentItemId: res.item.id,
-                      }
-                    : ca
-                ),
-              }));
-            }
-          })
-          .catch((err) => console.error("Failed to sync content item to database:", err));
+    initialAssets: SubmissionAsset[] = [],
+    actorUserId?: string
+  ): Promise<{ success: boolean; item?: ContentItem; error?: string }> => {
+    try {
+      const { createContentItemAction } = await import("../actions/content");
+      const res: any = await createContentItemAction({
+        actorUserId: actorUserId || itemData.accountableOwnerId || "u_founder",
+        projectId: itemData.projectId,
+        title: itemData.title,
+        platform: itemData.platform,
+        contentType: itemData.contentType,
+        workType: itemData.workType,
+        workTypeId: itemData.workTypeId,
+        campaignId: itemData.campaignId,
+        contentPillar: itemData.contentPillar,
+        topic: itemData.topic,
+        brief: itemData.brief,
+        referenceLink: itemData.referenceLink,
+        priority: itemData.priority,
+        workNature: itemData.workNature,
+        accountOwnerId: itemData.accountOwnerId,
+        scopeClassification: itemData.scopeClassification,
+        scheduledPublicationDate: itemData.deadlines?.scheduledPublicationDate,
+        submissionDeadline: itemData.deadlines?.submissionDeadline,
+        accountableOwnerId: itemData.accountableOwnerId,
+        initialCopy,
       });
-    }
 
-    return newItem;
+      if (!res.success || !res.item) {
+        return { success: false, error: res.error || "Failed to create content item in database." };
+      }
+
+      const canonicalItem: ContentItem = {
+        ...itemData,
+        id: res.item.id,
+        currentVersionNumber: res.item.currentVersionNumber || 1,
+        activeDraftVersionId: res.version?.id,
+        scopeClassification: (res.item.scopeClassification as any) || itemData.scopeClassification || "contracted",
+      };
+
+      const audit = createAuditEntry(
+        itemData.projectId,
+        itemData.accountableOwnerId,
+        "create_content_item",
+        "content_item",
+        canonicalItem.id,
+        `Created content item '${canonicalItem.title}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        contentItems: [...prev.contentItems.filter((i) => i.id !== canonicalItem.id), canonicalItem],
+        contentAssignments: res.assignment
+          ? [
+              ...prev.contentAssignments.filter((a) => a.id !== res.assignment!.id),
+              {
+                id: res.assignment.id,
+                projectId: res.assignment.projectId,
+                contentItemId: res.assignment.contentItemId,
+                assigneeUserId: res.assignment.assigneeUserId,
+                assignmentRole: res.assignment.assignmentRole as any,
+                status: res.assignment.status as any,
+                assignedByUserId: res.assignment.assignedByUserId,
+                assignedAt: res.assignment.assignedAt.toISOString(),
+                initialDueAt: res.assignment.initialDueAt.toISOString(),
+                currentDueAt: res.assignment.currentDueAt.toISOString(),
+                createdAt: res.assignment.createdAt.toISOString(),
+                updatedAt: res.assignment.updatedAt.toISOString(),
+              },
+            ]
+          : prev.contentAssignments,
+        submissionVersions: res.version
+          ? [
+              ...prev.submissionVersions.filter((v) => v.id !== res.version!.id),
+              {
+                id: res.version.id,
+                contentItemId: res.version.contentItemId,
+                versionNumber: res.version.versionNumber,
+                isDraft: res.version.isDraft,
+                createdAt: res.version.createdAt.toISOString(),
+                copy: (res.version.copy as any) || { caption: "", hashtags: [], cta: "" },
+                creativeAssets: (res.version.creativeAssets as any) || [],
+                scheduledDate: res.version.scheduledDate ? res.version.scheduledDate.toISOString() : undefined,
+                componentFingerprints: res.version.componentFingerprints as any,
+              },
+            ]
+          : prev.submissionVersions,
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, item: canonicalItem };
+    } catch (err: any) {
+      console.error("Failed to create content item:", err);
+      return { success: false, error: err.message || "Failed to create content item." };
+    }
   };
 
   // --- MULTI-PLATFORM CONTENT GROUPS (Phase 3) ---
-  const createContentGroupWithItems = (params: {
+  const createContentGroupWithItems = async (params: {
     projectId: string;
     title: string;
     description?: string;
@@ -658,206 +729,121 @@ export function AppStateProvider({
       cta: string;
       destinationUrl?: string;
     };
-    sharedAssets?: SubmissionAsset[]; // Shared file references (no duplicate asset records/files)
-  }): { success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string } => {
-    // 1. Validation: Project must exist
-    const project = state.projects.find((p) => p.id === params.projectId);
-    if (!project) return { success: false, error: "Project not found" };
-    if (!params.platforms || params.platforms.length === 0) {
-      return { success: false, error: "At least one platform item must be specified." };
-    }
-
-    // 2. Validate all platform owners are active project members
-    for (const p of params.platforms) {
-      const isMember = state.projectMemberships.some(
-        (m) => m.projectId === params.projectId && m.userId === p.accountableOwnerId && m.status === "active"
-      );
-      if (!isMember) {
-        const user = state.users.find((u) => u.id === p.accountableOwnerId);
-        return { success: false, error: `Assignee '${user?.name || p.accountableOwnerId}' is not an active member of this project.` };
-      }
-    }
-
-    const now = new Date().toISOString();
-    const groupId = "grp_" + Math.random().toString(36).substr(2, 9);
-    const newItems: ContentItem[] = [];
-    const newAssignments: ContentAssignment[] = [];
-    const newVersions: SubmissionVersion[] = [];
-    const itemIds: string[] = [];
-
-    // 3. Atomically build items
-    for (const p of params.platforms) {
-      const itemId = `item_${params.projectId}_${p.platform.toLowerCase()}_${Math.random().toString(36).substr(2, 6)}`;
-      itemIds.push(itemId);
-
-      const verId = `ver_${itemId}_v1`;
-      const copy = params.sharedInitialCopy
-        ? { ...params.sharedInitialCopy, hashtags: [...params.sharedInitialCopy.hashtags] }
-        : { caption: "", hashtags: [], cta: "" };
-      const assets = params.sharedAssets ? [...params.sharedAssets] : [];
-
-      const version: SubmissionVersion = {
-        id: verId,
-        contentItemId: itemId,
-        versionNumber: 1,
-        isDraft: true,
-        createdAt: now,
-        copy,
-        creativeAssets: assets,
-        scheduledDate: p.scheduledPublicationDate,
-        componentFingerprints: computeVersionFingerprints({
-          copy,
-          creativeAssets: assets,
-          scheduledDate: p.scheduledPublicationDate,
-        }),
-      };
-      newVersions.push(version);
-
-      const item: ContentItem = {
-        id: itemId,
+    sharedAssets?: SubmissionAsset[];
+  }): Promise<{ success: boolean; group?: ContentGroup; contentItems?: ContentItem[]; error?: string }> => {
+    try {
+      const { createContentGroupAction } = await import("../actions/content");
+      const res: any = await createContentGroupAction({
+        actorUserId: params.actorUserId || "u_founder",
         projectId: params.projectId,
-        contentGroupId: groupId,
-        title: `${params.title} (${p.platform})`,
-        platform: p.platform,
-        contentType: p.contentType,
-        stage: "draft",
-        accountableOwnerId: p.accountableOwnerId,
-        collaboratorIds: p.collaboratorIds || [],
-        deadlines: {
+        title: params.title,
+        description: params.description,
+        conceptNotes: params.conceptNotes,
+        platforms: params.platforms.map((p) => ({
+          platform: p.platform,
+          contentType: p.contentType,
+          accountableOwnerId: p.accountableOwnerId,
           submissionDeadline: p.submissionDeadline,
           scheduledPublicationDate: p.scheduledPublicationDate,
-        },
-        currentVersionNumber: 1,
-        activeDraftVersionId: verId,
-      };
-      newItems.push(item);
-
-      const assignment: ContentAssignment = {
-        id: "asgn_" + Math.random().toString(36).substr(2, 9),
-        projectId: params.projectId,
-        contentItemId: itemId,
-        assigneeUserId: p.accountableOwnerId,
-        assignmentRole: "designer",
-        status: "assigned",
-        assignedByUserId: params.actorUserId,
-        assignedAt: now,
-        initialDueAt: p.submissionDeadline,
-        currentDueAt: p.submissionDeadline,
-        createdAt: now,
-        updatedAt: now,
-      };
-      newAssignments.push(assignment);
-    }
-
-    const group: ContentGroup = {
-      id: groupId,
-      projectId: params.projectId,
-      title: params.title,
-      description: params.description,
-      conceptNotes: params.conceptNotes,
-      contentItemIds: itemIds,
-      createdByUserId: params.actorUserId,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const audit = createAuditEntry(
-      params.projectId,
-      params.actorUserId,
-      "create_content_group",
-      "content_group",
-      groupId,
-      `Created multi-platform content group '${params.title}' across ${params.platforms.map((p) => p.platform).join(", ")}`
-    );
-
-    setState((prev) => ({
-      ...prev,
-      contentGroups: [...prev.contentGroups, group],
-      contentItems: [...prev.contentItems, ...newItems],
-      contentAssignments: [...prev.contentAssignments, ...newAssignments],
-      submissionVersions: [...prev.submissionVersions, ...newVersions],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/content").then(({ createContentGroupAction }) => {
-        createContentGroupAction({
-          actorUserId: params.actorUserId || "u_founder",
-          projectId: params.projectId,
-          title: params.title,
-          description: params.description,
-          conceptNotes: params.conceptNotes,
-          platforms: params.platforms.map((p) => ({
-            platform: p.platform,
-            contentType: p.contentType,
-            accountableOwnerId: p.accountableOwnerId,
-            submissionDeadline: p.submissionDeadline,
-            scheduledPublicationDate: p.scheduledPublicationDate,
-          })),
-          sharedInitialCopy: params.sharedInitialCopy,
-        })
-          .then((res: any) => {
-            if (res.success && res.group && res.items) {
-              setState((prev) => {
-                const remainingGroups = prev.contentGroups.filter((g) => g.id !== groupId);
-                const remainingItems = prev.contentItems.filter((ci) => !itemIds.includes(ci.id));
-                const remainingAssignments = prev.contentAssignments.filter(
-                  (ca) => !itemIds.includes(ca.contentItemId)
-                );
-
-                const authGroup: ContentGroup = {
-                  id: res.group.id,
-                  projectId: res.group.projectId,
-                  title: res.group.title,
-                  description: res.group.description || undefined,
-                  conceptNotes: res.group.conceptNotes || undefined,
-                  contentItemIds: res.items.map((i: any) => i.id),
-                  createdByUserId: res.group.createdByUserId,
-                  createdAt: res.group.createdAt ? new Date(res.group.createdAt).toISOString() : now,
-                  updatedAt: res.group.updatedAt ? new Date(res.group.updatedAt).toISOString() : now,
-                };
-
-                const authItems: ContentItem[] = res.items.map((i: any, idx: number) => {
-                  const ver = res.versions?.[idx];
-                  const asgn = res.assignments?.[idx];
-                  const p = params.platforms[idx];
-                  return {
-                    id: i.id,
-                    projectId: i.projectId,
-                    contentGroupId: res.group.id,
-                    title: i.title,
-                    platform: i.platform,
-                    contentType: i.contentType,
-                    stage: i.stage,
-                    scopeClassification: i.scopeClassification,
-                    currentVersionNumber: i.currentVersionNumber,
-                    activeDraftVersionId: ver?.id,
-                    clientVisible: i.clientVisible || false,
-                    accountableOwnerId: asgn?.assigneeUserId || p?.accountableOwnerId || "",
-                    collaboratorIds: [],
-                    deadlines: {
-                      submissionDeadline: p?.submissionDeadline || now,
-                      scheduledPublicationDate: p?.scheduledPublicationDate,
-                    },
-                    scheduledPublicationDate: p?.scheduledPublicationDate,
-                    createdAt: i.createdAt ? new Date(i.createdAt).toISOString() : now,
-                    updatedAt: i.updatedAt ? new Date(i.updatedAt).toISOString() : now,
-                  };
-                });
-
-                return {
-                  ...prev,
-                  contentGroups: [...remainingGroups, authGroup],
-                  contentItems: [...remainingItems, ...authItems],
-                };
-              });
-            }
-          })
-          .catch((err) => console.error("Failed to sync content group to database:", err));
+        })),
+        sharedInitialCopy: params.sharedInitialCopy,
       });
-    }
 
-    return { success: true, group, contentItems: newItems };
+      if (!res.success || !res.group || !res.items) {
+        return { success: false, error: res.error || "Failed to create content group in database." };
+      }
+
+      const now = new Date().toISOString();
+      const authGroup: ContentGroup = {
+        id: res.group.id,
+        projectId: res.group.projectId,
+        title: res.group.title,
+        description: res.group.description || undefined,
+        conceptNotes: res.group.conceptNotes || undefined,
+        contentItemIds: res.items.map((i: any) => i.id),
+        createdByUserId: res.group.createdByUserId,
+        createdAt: res.group.createdAt ? new Date(res.group.createdAt).toISOString() : now,
+        updatedAt: res.group.updatedAt ? new Date(res.group.updatedAt).toISOString() : now,
+      };
+
+      const authItems: ContentItem[] = res.items.map((i: any, idx: number) => {
+        const ver = res.versions?.[idx];
+        const asgn = res.assignments?.[idx];
+        const p = params.platforms[idx];
+        return {
+          id: i.id,
+          projectId: i.projectId,
+          contentGroupId: res.group.id,
+          title: i.title,
+          platform: i.platform,
+          contentType: i.contentType,
+          stage: i.stage,
+          scopeClassification: i.scopeClassification,
+          currentVersionNumber: i.currentVersionNumber,
+          activeDraftVersionId: ver?.id,
+          clientVisible: i.clientVisible || false,
+          accountableOwnerId: asgn?.assigneeUserId || p?.accountableOwnerId || "",
+          collaboratorIds: [],
+          deadlines: {
+            submissionDeadline: p?.submissionDeadline || now,
+            scheduledPublicationDate: p?.scheduledPublicationDate,
+          },
+          scheduledPublicationDate: p?.scheduledPublicationDate,
+          createdAt: i.createdAt ? new Date(i.createdAt).toISOString() : now,
+          updatedAt: i.updatedAt ? new Date(i.updatedAt).toISOString() : now,
+        };
+      });
+
+      const authVersions: SubmissionVersion[] = (res.versions || []).map((ver: any) => ({
+        id: ver.id,
+        contentItemId: ver.contentItemId,
+        versionNumber: ver.versionNumber,
+        isDraft: ver.isDraft,
+        createdAt: ver.createdAt ? new Date(ver.createdAt).toISOString() : now,
+        copy: (ver.copy as any) || { caption: "", hashtags: [], cta: "" },
+        creativeAssets: (ver.creativeAssets as any) || [],
+        scheduledDate: ver.scheduledDate ? new Date(ver.scheduledDate).toISOString() : undefined,
+        componentFingerprints: ver.componentFingerprints as any,
+      }));
+
+      const authAssignments: ContentAssignment[] = (res.assignments || []).map((asgn: any) => ({
+        id: asgn.id,
+        projectId: asgn.projectId,
+        contentItemId: asgn.contentItemId,
+        assigneeUserId: asgn.assigneeUserId,
+        assignmentRole: asgn.assignmentRole,
+        status: asgn.status,
+        assignedByUserId: asgn.assignedByUserId,
+        assignedAt: asgn.assignedAt ? new Date(asgn.assignedAt).toISOString() : now,
+        initialDueAt: asgn.initialDueAt ? new Date(asgn.initialDueAt).toISOString() : now,
+        currentDueAt: asgn.currentDueAt ? new Date(asgn.currentDueAt).toISOString() : now,
+        createdAt: asgn.createdAt ? new Date(asgn.createdAt).toISOString() : now,
+        updatedAt: asgn.updatedAt ? new Date(asgn.updatedAt).toISOString() : now,
+      }));
+
+      const audit = createAuditEntry(
+        params.projectId,
+        params.actorUserId,
+        "create_content_group",
+        "content_group",
+        authGroup.id,
+        `Created multi-platform content group '${params.title}' across ${params.platforms.map((p) => p.platform).join(", ")}`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        contentGroups: [...prev.contentGroups, authGroup],
+        contentItems: [...prev.contentItems, ...authItems],
+        contentAssignments: [...prev.contentAssignments, ...authAssignments],
+        submissionVersions: [...prev.submissionVersions, ...authVersions],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, group: authGroup, contentItems: authItems };
+    } catch (err: any) {
+      console.error("Failed to create content group:", err);
+      return { success: false, error: err.message || "Failed to create content group." };
+    }
   };
 
   const syncContentGroupFields = (params: {
@@ -2146,13 +2132,13 @@ export function AppStateProvider({
     });
   };
 
-  const updatePublicationDetails = (params: {
+  const updatePublicationDetails = async (params: {
     contentItemId: string;
     publishedAt?: string;
     liveUrl?: string;
     reason: string;
     actorUserId: string;
-  }): { success: boolean; error?: string } => {
+  }): Promise<{ success: boolean; error?: string }> => {
     const actor = state.users.find((u) => u.id === params.actorUserId);
     if (actor && (actor.role === "designer" || actor.role === "client")) {
       return { success: false, error: "Unauthorized: Designers and Clients cannot modify publication details." };
@@ -2164,48 +2150,54 @@ export function AppStateProvider({
       return { success: false, error: "Mandatory reason required to update publication details." };
     }
 
-    const oldPublishedAt = item.publishedAt;
-    const oldLiveUrl = item.liveUrl;
-
-    const audit = createAuditEntry(
-      item.projectId,
-      params.actorUserId,
-      "update_publication_details",
-      "content_item",
-      item.id,
-      `Updated publication details: publishedAt (${oldPublishedAt || "none"} -> ${params.publishedAt || oldPublishedAt}), liveUrl (${oldLiveUrl || "none"} -> ${params.liveUrl || oldLiveUrl})`,
-      params.reason,
-      { publishedAt: oldPublishedAt, liveUrl: oldLiveUrl },
-      { publishedAt: params.publishedAt, liveUrl: params.liveUrl }
-    );
-
-    setState((prev) => ({
-      ...prev,
-      contentItems: prev.contentItems.map((i) =>
-        i.id === item.id
-          ? {
-              ...i,
-              publishedAt: params.publishedAt !== undefined ? params.publishedAt : i.publishedAt,
-              liveUrl: params.liveUrl !== undefined ? params.liveUrl : i.liveUrl,
-            }
-          : i
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/content").then(({ updatePublicationDetailsAction }) => {
-        updatePublicationDetailsAction({
-          actorUserId: params.actorUserId,
-          contentItemId: params.contentItemId,
-          publishedAt: params.publishedAt || new Date().toISOString(),
-          liveUrl: params.liveUrl,
-          reason: params.reason,
-        }).catch((err) => console.error("Failed to sync publication details to database:", err));
+    try {
+      const { updatePublicationDetailsAction } = await import("../actions/content");
+      const res = await updatePublicationDetailsAction({
+        actorUserId: params.actorUserId,
+        contentItemId: params.contentItemId,
+        publishedAt: params.publishedAt || new Date().toISOString(),
+        liveUrl: params.liveUrl,
+        reason: params.reason,
       });
-    }
 
-    return { success: true };
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to update publication details in database." };
+      }
+
+      const oldPublishedAt = item.publishedAt;
+      const oldLiveUrl = item.liveUrl;
+
+      const audit = createAuditEntry(
+        item.projectId,
+        params.actorUserId,
+        "update_publication_details",
+        "content_item",
+        item.id,
+        `Updated publication details: publishedAt (${oldPublishedAt || "none"} -> ${params.publishedAt || oldPublishedAt}), liveUrl (${oldLiveUrl || "none"} -> ${params.liveUrl || oldLiveUrl})`,
+        params.reason,
+        { publishedAt: oldPublishedAt, liveUrl: oldLiveUrl },
+        { publishedAt: params.publishedAt, liveUrl: params.liveUrl }
+      );
+
+      setState((prev) => ({
+        ...prev,
+        contentItems: prev.contentItems.map((i) =>
+          i.id === item.id
+            ? {
+                ...i,
+                publishedAt: params.publishedAt !== undefined ? params.publishedAt : i.publishedAt,
+                liveUrl: params.liveUrl !== undefined ? params.liveUrl : i.liveUrl,
+              }
+            : i
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("Failed to update publication details:", err);
+      return { success: false, error: err.message || "Failed to update publication details." };
+    }
   };
 
   const importAnalyticsBatch = (params: {
@@ -2430,25 +2422,37 @@ export function AppStateProvider({
   };
 
   // --- DEADLINES ---
-  const updateDeadline = (params: {
+  const updateDeadline = async (params: {
     contentItemId: string;
     kind: "submission" | "resubmission" | "approval_target" | "scheduled_publication";
     newDueAt: string;
     changedByUserId: string;
     reason: string;
-  }) => {
+  }): Promise<{ success: boolean; error?: string }> => {
     const actor = state.users.find((u) => u.id === params.changedByUserId);
     if (actor && actor.role === "designer" && params.kind === "scheduled_publication") {
-      console.warn("Unauthorized: Designers cannot modify scheduled publication dates.");
-      return;
+      return { success: false, error: "Unauthorized: Designers cannot modify scheduled publication dates." };
     }
 
-    setState((prev) => {
-      const item = prev.contentItems.find((i) => i.id === params.contentItemId);
-      if (!item) return prev;
+    const item = state.contentItems.find((i) => i.id === params.contentItemId);
+    if (!item) return { success: false, error: "Content item not found" };
+
+    try {
+      const { updateDeadlineAction } = await import("../actions/content");
+      const res = await updateDeadlineAction({
+        actorUserId: params.changedByUserId,
+        contentItemId: params.contentItemId,
+        kind: params.kind,
+        newDueAt: params.newDueAt,
+        reason: params.reason,
+      });
+
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to update deadline in database." };
+      }
 
       const newRec: DeadlineRecord = {
-        id: "dl_" + Math.random().toString(36).substr(2, 9),
+        id: (res as any).recordId || ("dl_" + Math.random().toString(36).substr(2, 9)),
         projectId: item.projectId,
         contentItemId: params.contentItemId,
         kind: params.kind,
@@ -2474,26 +2478,19 @@ export function AppStateProvider({
         params.reason
       );
 
-      return {
+      setState((prev) => ({
         ...prev,
         deadlineRecords: [...prev.deadlineRecords, newRec],
         contentItems: prev.contentItems.map((i) =>
           i.id === item.id ? { ...i, deadlines: updatedDeadlines } : i
         ),
         auditRecords: [audit, ...prev.auditRecords],
-      };
-    });
+      }));
 
-    if (typeof window !== "undefined") {
-      import("../actions/content").then(({ updateDeadlineAction }) => {
-        updateDeadlineAction({
-          actorUserId: params.changedByUserId,
-          contentItemId: params.contentItemId,
-          kind: params.kind,
-          newDueAt: params.newDueAt,
-          reason: params.reason,
-        }).catch((err) => console.error("Failed to sync deadline to database:", err));
-      });
+      return { success: true };
+    } catch (err: any) {
+      console.error("Failed to update deadline:", err);
+      return { success: false, error: err.message || "Failed to update deadline." };
     }
   };
 
@@ -2568,7 +2565,7 @@ export function AppStateProvider({
   };
 
   // --- TEAM MANAGEMENT & MEMBERSHIPS (Phase 1) ---
-  const createTeamMember = (data: {
+  const createTeamMember = async (data: {
     id?: string;
     name: string;
     email: string;
@@ -2576,7 +2573,7 @@ export function AppStateProvider({
     jobTitle?: string;
     workingHoursPerDay?: number;
     actorUserId: string;
-  }): { success: boolean; user?: User; error?: string } => {
+  }): Promise<{ success: boolean; user?: User; error?: string }> => {
     const existing = state.users.find(
       (u) => u.email.toLowerCase() === data.email.trim().toLowerCase()
     );
@@ -2584,48 +2581,54 @@ export function AppStateProvider({
       return { success: false, error: `A team member with email '${data.email}' already exists.` };
     }
 
-    const newUser: User = {
-      id: data.id || "u_" + Math.random().toString(36).substr(2, 9),
-      name: data.name.trim(),
-      email: data.email.trim().toLowerCase(),
-      avatar: data.name.trim().split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "U",
-      role: data.role,
-      jobTitle: data.jobTitle?.trim() || undefined,
-      status: "active",
-      workingHoursPerDay: data.workingHoursPerDay || 8,
-      dateJoined: new Date().toISOString(),
-      createdByUserId: data.actorUserId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    const audit = createAuditEntry(
-      "proj_internal",
-      data.actorUserId,
-      "create_user",
-      "user",
-      newUser.id,
-      `Created team member '${newUser.name}' (${newUser.email}) with role '${newUser.role}'`
-    );
-
-    setState((prev) => ({
-      ...prev,
-      users: [...prev.users, newUser],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/team").then(({ createTeamMemberAction }) => {
-        createTeamMemberAction({
-          fullName: data.name,
-          email: data.email,
-          role: data.role as any,
-          actorUserId: data.actorUserId,
-        }).catch((err) => console.error("Failed to sync team member to database:", err));
+    try {
+      const { createTeamMemberAction } = await import("../actions/team");
+      const res = await createTeamMemberAction({
+        fullName: data.name,
+        email: data.email,
+        role: data.role as any,
+        actorUserId: data.actorUserId,
       });
-    }
 
-    return { success: true, user: newUser };
+      if (!res.success || !res.user) {
+        return { success: false, error: res.error || "Failed to create team member in database." };
+      }
+
+      const canonicalUser: User = {
+        id: res.user.id,
+        name: res.user.fullName || data.name.trim(),
+        email: res.user.email || data.email.trim().toLowerCase(),
+        avatar: data.name.trim().split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "U",
+        role: (res.user.organizationRole as any) || data.role,
+        jobTitle: data.jobTitle?.trim() || undefined,
+        status: "active",
+        workingHoursPerDay: data.workingHoursPerDay || 8,
+        dateJoined: res.user.createdAt ? new Date(res.user.createdAt).toISOString() : new Date().toISOString(),
+        createdByUserId: data.actorUserId,
+        createdAt: res.user.createdAt ? new Date(res.user.createdAt).toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const audit = createAuditEntry(
+        "proj_internal",
+        data.actorUserId,
+        "create_user",
+        "user",
+        canonicalUser.id,
+        `Created team member '${canonicalUser.name}' (${canonicalUser.email}) with role '${canonicalUser.role}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        users: [...prev.users.filter((u) => u.id !== canonicalUser.id), canonicalUser],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, user: canonicalUser };
+    } catch (err: any) {
+      console.error("Failed to create team member:", err);
+      return { success: false, error: err.message || "Failed to create team member." };
+    }
   };
 
   const updateTeamMember = (
@@ -2704,11 +2707,11 @@ export function AppStateProvider({
     return { success: true };
   };
 
-  const permanentlyDeleteTeamMember = (
+  const permanentlyDeleteTeamMember = async (
     userId: string,
     actorUserId: string,
     reason?: string
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const user = state.users.find((u) => u.id === userId);
     if (!user) return { success: false, error: "Team member not found." };
 
@@ -2739,152 +2742,169 @@ export function AppStateProvider({
       }
     }
 
-    const now = new Date().toISOString();
-
-    const audit = createAuditEntry(
-      "proj_internal",
-      actorUserId,
-      "permanent_delete_user",
-      "user",
-      userId,
-      `Permanently deleted user '${user.name}' (${user.email}). Account tombstoned and historical references anonymized.`,
-      reason
-    );
-
-    setState((prev) => ({
-      ...prev,
-      users: prev.users.filter((u) => u.id !== userId),
-      projectMemberships: prev.projectMemberships.map((m) =>
-        m.userId === userId ? { ...m, status: "inactive", removedAt: now } : m
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/team").then(({ permanentlyDeleteTeamMemberAction }) => {
-        permanentlyDeleteTeamMemberAction({
-          userId,
-          actorUserId,
-          reason,
-        }).catch((err) => console.error("[AppStateContext] Permanent deletion error:", err));
+    try {
+      const { permanentlyDeleteTeamMemberAction } = await import("../actions/team");
+      const res = await permanentlyDeleteTeamMemberAction({
+        userId,
+        actorUserId,
+        reason,
       });
-    }
 
-    return { success: true };
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to delete team member from database." };
+      }
+
+      const now = new Date().toISOString();
+      const audit = createAuditEntry(
+        "proj_internal",
+        actorUserId,
+        "permanent_delete_user",
+        "user",
+        userId,
+        `Permanently deleted user '${user.name}' (${user.email}). Account tombstoned and historical references anonymized.`,
+        reason
+      );
+
+      setState((prev) => ({
+        ...prev,
+        users: prev.users.filter((u) => u.id !== userId),
+        projectMemberships: prev.projectMemberships.map((m) =>
+          m.userId === userId ? { ...m, status: "inactive", removedAt: now } : m
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("[AppStateContext] Permanent deletion error:", err);
+      return { success: false, error: err.message || "Failed to permanently delete team member." };
+    }
   };
 
-  const addProjectMember = (params: {
+  const addProjectMember = async (params: {
     projectId: string;
     userId: string;
     membershipRole?: UserRole;
     actorUserId: string;
-  }): { success: boolean; membership?: ProjectMembership; error?: string } => {
+  }): Promise<{ success: boolean; membership?: ProjectMembership; error?: string }> => {
     const user = state.users.find((u) => u.id === params.userId);
     if (!user) return { success: false, error: "User not found." };
     if (user.status === "inactive") {
       return { success: false, error: "Cannot assign inactive user to a project. Reactivate account first." };
     }
 
-    const existingMembership = state.projectMemberships.find(
-      (m) => m.projectId === params.projectId && m.userId === params.userId
-    );
-
-    const now = new Date().toISOString();
-    let updatedMembership: ProjectMembership;
-
-    if (existingMembership) {
-      updatedMembership = {
-        ...existingMembership,
-        status: "active",
-        membershipRole: params.membershipRole || existingMembership.membershipRole || user.role,
-        removedAt: undefined,
-      };
-    } else {
-      updatedMembership = {
-        id: "mem_" + Math.random().toString(36).substr(2, 9),
+    try {
+      const { addProjectMemberAction } = await import("../actions/projects");
+      const res = await addProjectMemberAction({
         projectId: params.projectId,
         userId: params.userId,
-        status: "active",
-        membershipRole: params.membershipRole || user.role,
-        addedByUserId: params.actorUserId,
-        addedAt: now,
-      };
-    }
+        membershipRole: params.membershipRole,
+        actorUserId: params.actorUserId,
+      });
 
-    const audit = createAuditEntry(
-      params.projectId,
-      params.actorUserId,
-      "add_project_member",
-      "project_membership",
-      updatedMembership.id,
-      `Added/reactivated member '${user.name}' (${user.email}) in project '${params.projectId}'`
-    );
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to add project member in database." };
+      }
 
-    setState((prev) => ({
-      ...prev,
-      projectMemberships: [
-        ...prev.projectMemberships.filter(
-          (m) => !(m.projectId === params.projectId && m.userId === params.userId)
-        ),
-        updatedMembership,
-      ],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
+      const now = new Date().toISOString();
+      const existingMembership = state.projectMemberships.find(
+        (m) => m.projectId === params.projectId && m.userId === params.userId
+      );
 
-    if (typeof window !== "undefined") {
-      import("../actions/projects").then(({ addProjectMemberAction }) => {
-        addProjectMemberAction({
+      let updatedMembership: ProjectMembership;
+      if (existingMembership) {
+        updatedMembership = {
+          ...existingMembership,
+          id: (res as any).membershipId || existingMembership.id,
+          status: "active",
+          membershipRole: params.membershipRole || existingMembership.membershipRole || user.role,
+          removedAt: undefined,
+        };
+      } else {
+        updatedMembership = {
+          id: (res as any).membershipId || ("mem_" + Math.random().toString(36).substr(2, 9)),
           projectId: params.projectId,
           userId: params.userId,
-          membershipRole: params.membershipRole,
-          actorUserId: params.actorUserId,
-        }).catch((err) => console.error("Failed to sync project membership to database:", err));
-      });
-    }
+          status: "active",
+          membershipRole: params.membershipRole || user.role,
+          addedByUserId: params.actorUserId,
+          addedAt: now,
+        };
+      }
 
-    return { success: true, membership: updatedMembership };
+      const audit = createAuditEntry(
+        params.projectId,
+        params.actorUserId,
+        "add_project_member",
+        "project_membership",
+        updatedMembership.id,
+        `Added/reactivated member '${user.name}' (${user.email}) in project '${params.projectId}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        projectMemberships: [
+          ...prev.projectMemberships.filter(
+            (m) => !(m.projectId === params.projectId && m.userId === params.userId)
+          ),
+          updatedMembership,
+        ],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, membership: updatedMembership };
+    } catch (err: any) {
+      console.error("Failed to add project member:", err);
+      return { success: false, error: err.message || "Failed to add project member." };
+    }
   };
 
-  const removeProjectMember = (
+  const removeProjectMember = async (
     membershipId: string,
     actorUserId: string,
     reason?: string
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const membership = state.projectMemberships.find((m) => m.id === membershipId);
     if (!membership) return { success: false, error: "Membership record not found." };
 
     const user = state.users.find((u) => u.id === membership.userId);
     const now = new Date().toISOString();
 
-    const audit = createAuditEntry(
-      membership.projectId,
-      actorUserId,
-      "remove_project_member",
-      "project_membership",
-      membershipId,
-      `Removed member '${user?.name || membership.userId}' from project membership`,
-      reason
-    );
-
-    setState((prev) => ({
-      ...prev,
-      projectMemberships: prev.projectMemberships.map((m) =>
-        m.id === membershipId ? { ...m, status: "inactive", removedAt: now } : m
-      ),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/projects").then(({ removeProjectMemberAction }) => {
-        removeProjectMemberAction({
-          projectId: membership.projectId,
-          userId: membership.userId,
-          actorUserId,
-        }).catch((err) => console.error("Failed to sync project member removal to database:", err));
+    try {
+      const { removeProjectMemberAction } = await import("../actions/projects");
+      const res = await removeProjectMemberAction({
+        projectId: membership.projectId,
+        userId: membership.userId,
+        actorUserId,
       });
-    }
 
-    return { success: true };
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to remove project member from database." };
+      }
+
+      const audit = createAuditEntry(
+        membership.projectId,
+        actorUserId,
+        "remove_project_member",
+        "project_membership",
+        membershipId,
+        `Removed member '${user?.name || membership.userId}' from project membership`,
+        reason
+      );
+
+      setState((prev) => ({
+        ...prev,
+        projectMemberships: prev.projectMemberships.map((m) =>
+          m.id === membershipId ? { ...m, status: "inactive", removedAt: now } : m
+        ),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("Failed to remove project member:", err);
+      return { success: false, error: err.message || "Failed to remove project member." };
+    }
   };
 
   // --- ATTENDANCE & DAILY PRESENCE (Phase 2.1) ---
@@ -2897,122 +2917,114 @@ export function AppStateProvider({
     }).format(d);
   };
 
-  const checkInAttendance = (userId: string): { success: boolean; record?: AttendanceRecord; error?: string } => {
+  const checkInAttendance = async (userId: string): Promise<{ success: boolean; record?: AttendanceRecord; error?: string }> => {
     const user = state.users.find((u) => u.id === userId);
     if (!user || user.status === "inactive") {
       return { success: false, error: "Inactive or nonexistent user cannot check in." };
     }
 
-    const todayDate = getKolkataDateString();
-    const existing = state.attendanceRecords.find(
-      (r) => r.userId === userId && r.attendanceDate === todayDate
-    );
+    try {
+      const { checkInAction } = await import("../actions/attendance");
+      const res = await checkInAction({ actorUserId: userId });
 
-    if (existing) {
-      if (existing.status === "checked_in") {
-        return { success: false, error: `Already checked in today at ${new Date(existing.checkedInAt).toLocaleTimeString()}` };
+      if (!res.success || !res.record) {
+        return { success: false, error: res.error || "Failed to check in." };
       }
-      const now = new Date().toISOString();
-      const updated: AttendanceRecord = {
-        ...existing,
-        status: "checked_in",
-        checkedInAt: now,
-        checkedOutAt: undefined,
-        updatedAt: now,
+
+      const todayDate = getKolkataDateString();
+      const canonicalRecord: AttendanceRecord = {
+        id: res.record.id,
+        userId: res.record.userId,
+        attendanceDate: res.record.attendanceDate,
+        checkedInAt: res.record.checkedInAt.toISOString(),
+        checkedOutAt: res.record.checkedOutAt ? res.record.checkedOutAt.toISOString() : undefined,
+        status: (res.record.status as any) || "checked_in",
+        corrections: [],
+        createdAt: res.record.createdAt.toISOString(),
+        updatedAt: res.record.updatedAt.toISOString(),
       };
+
+      const audit = createAuditEntry(
+        "org_ace_assured",
+        userId,
+        "check_in_attendance",
+        "attendance_record",
+        canonicalRecord.id,
+        `User '${user.name}' checked in for daily attendance on ${todayDate}`
+      );
+
       setState((prev) => ({
         ...prev,
-        attendanceRecords: prev.attendanceRecords.map((r) => (r.id === existing.id ? updated : r)),
+        attendanceRecords: [
+          ...prev.attendanceRecords.filter((r) => r.id !== canonicalRecord.id),
+          canonicalRecord,
+        ],
+        auditRecords: [audit, ...prev.auditRecords],
       }));
-      return { success: true, record: updated };
+
+      return { success: true, record: canonicalRecord };
+    } catch (err: any) {
+      console.error("Failed to check in:", err);
+      return { success: false, error: err.message || "Failed to check in." };
     }
-
-    const now = new Date().toISOString();
-    const newRecord: AttendanceRecord = {
-      id: "att_" + Math.random().toString(36).substr(2, 9),
-      userId,
-      attendanceDate: todayDate,
-      checkedInAt: now,
-      status: "checked_in",
-      corrections: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const audit = createAuditEntry(
-      "org_ace_assured",
-      userId,
-      "check_in_attendance",
-      "attendance_record",
-      newRecord.id,
-      `User '${user.name}' checked in for daily attendance on ${todayDate}`
-    );
-
-    setState((prev) => ({
-      ...prev,
-      attendanceRecords: [newRecord, ...prev.attendanceRecords],
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/attendance").then(({ checkInAction }) => {
-        checkInAction({ actorUserId: userId }).catch((err) => console.error("Failed to sync check-in to database:", err));
-      });
-    }
-
-    return { success: true, record: newRecord };
   };
 
-  const checkOutAttendance = (userId: string): { success: boolean; record?: AttendanceRecord; error?: string } => {
-    const todayDate = getKolkataDateString();
-    const record = state.attendanceRecords.find(
-      (r) => r.userId === userId && r.attendanceDate === todayDate && r.status === "checked_in"
-    );
-
-    if (!record) {
-      return { success: false, error: "No active check-in found for today." };
-    }
-
-    const now = new Date().toISOString();
-    const updatedRecord: AttendanceRecord = {
-      ...record,
-      status: "checked_out",
-      checkedOutAt: now,
-      updatedAt: now,
-    };
-
+  const checkOutAttendance = async (userId: string): Promise<{ success: boolean; record?: AttendanceRecord; error?: string }> => {
     const user = state.users.find((u) => u.id === userId);
-    const audit = createAuditEntry(
-      "org_ace_assured",
-      userId,
-      "check_out_attendance",
-      "attendance_record",
-      record.id,
-      `User '${user?.name || userId}' checked out at ${new Date(now).toLocaleTimeString()}`
-    );
-
-    setState((prev) => ({
-      ...prev,
-      attendanceRecords: prev.attendanceRecords.map((r) => (r.id === record.id ? updatedRecord : r)),
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/attendance").then(({ checkOutAction }) => {
-        checkOutAction({ actorUserId: userId }).catch((err) => console.error("Failed to sync check-out to database:", err));
-      });
+    if (!user) {
+      return { success: false, error: "User not found." };
     }
 
-    return { success: true, record: updatedRecord };
+    try {
+      const { checkOutAction } = await import("../actions/attendance");
+      const res = await checkOutAction({ actorUserId: userId });
+
+      if (!res.success || !res.record) {
+        return { success: false, error: res.error || "Failed to check out." };
+      }
+
+      const now = new Date().toISOString();
+      const canonicalRecord: AttendanceRecord = {
+        id: res.record.id,
+        userId: res.record.userId,
+        attendanceDate: res.record.attendanceDate,
+        checkedInAt: res.record.checkedInAt.toISOString(),
+        checkedOutAt: res.record.checkedOutAt ? res.record.checkedOutAt.toISOString() : now,
+        status: "checked_out",
+        corrections: [],
+        createdAt: res.record.createdAt.toISOString(),
+        updatedAt: res.record.updatedAt.toISOString(),
+      };
+
+      const audit = createAuditEntry(
+        "org_ace_assured",
+        userId,
+        "check_out_attendance",
+        "attendance_record",
+        canonicalRecord.id,
+        `User '${user?.name || userId}' checked out at ${new Date(now).toLocaleTimeString()}`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        attendanceRecords: prev.attendanceRecords.map((r) => (r.id === canonicalRecord.id ? canonicalRecord : r)),
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, record: canonicalRecord };
+    } catch (err: any) {
+      console.error("Failed to check out:", err);
+      return { success: false, error: err.message || "Failed to check out." };
+    }
   };
 
-  const adjustAttendance = (params: {
+  const adjustAttendance = async (params: {
     attendanceId: string;
     checkedInAt?: string;
     checkedOutAt?: string;
     reason: string;
     actorUserId: string;
-  }): { success: boolean; error?: string } => {
+  }): Promise<{ success: boolean; error?: string }> => {
     const record = state.attendanceRecords.find((r) => r.id === params.attendanceId);
     if (!record) return { success: false, error: "Attendance record not found." };
     if (!params.reason.trim()) {
@@ -3125,14 +3137,14 @@ export function AppStateProvider({
     return { success: true };
   };
 
-  const addClientToProject = (params: {
+  const addClientToProject = async (params: {
     name: string;
     email: string;
     jobTitle?: string;
     phone?: string;
     projectId: string;
     actorUserId: string;
-  }): { success: boolean; user?: User; membership?: ProjectMembership; error?: string } => {
+  }): Promise<{ success: boolean; user?: User; membership?: ProjectMembership; error?: string }> => {
     // 1. Permission check
     const actorUser = state.users.find((u) => u.id === params.actorUserId);
     if (!actorUser) return { success: false, error: "Actor user not found." };
@@ -3175,17 +3187,24 @@ export function AppStateProvider({
       };
     }
 
-    const now = new Date().toISOString();
-    let clientUser: User;
-    let newUsers = [...state.users];
+    try {
+      const { addClientToProjectAction } = await import("../actions/clients");
+      const res = await addClientToProjectAction({
+        name: cleanName,
+        email: cleanEmail,
+        jobTitle: params.jobTitle,
+        phone: params.phone,
+        projectId: params.projectId,
+        actorUserId: params.actorUserId,
+      });
 
-    if (existingUser) {
-      // Existing client user found
-      clientUser = existingUser;
-    } else {
-      // Create new client user
-      clientUser = {
-        id: "u_client_" + Math.random().toString(36).substr(2, 9),
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to grant client access in database." };
+      }
+
+      const now = new Date().toISOString();
+      const clientUser: User = {
+        id: (res as any).userId || (existingUser ? existingUser.id : ("u_client_" + Math.random().toString(36).substr(2, 9))),
         name: cleanName,
         email: cleanEmail,
         avatar: cleanName.charAt(0).toUpperCase() || "C",
@@ -3197,37 +3216,9 @@ export function AppStateProvider({
         createdAt: now,
         updatedAt: now,
       };
-      newUsers = [clientUser, ...newUsers];
-    }
 
-    // 3. ProjectMembership handling
-    const existingMembership = state.projectMemberships.find(
-      (m) => m.projectId === params.projectId && m.userId === clientUser.id
-    );
-
-    let membership: ProjectMembership;
-    let newMemberships = [...state.projectMemberships];
-
-    if (existingMembership) {
-      if (existingMembership.status === "active") {
-        return {
-          success: false,
-          error: `Client '${clientUser.name}' already has active access to this project.`,
-        };
-      }
-      // Reactivate membership
-      membership = {
-        ...existingMembership,
-        status: "active",
-        membershipRole: "client",
-        addedByUserId: params.actorUserId,
-        addedAt: now,
-        removedAt: undefined,
-      };
-      newMemberships = newMemberships.map((m) => (m.id === existingMembership.id ? membership : m));
-    } else {
-      membership = {
-        id: "pm_" + Math.random().toString(36).substr(2, 9),
+      const membership: ProjectMembership = {
+        id: (res as any).membershipId || ("pm_" + Math.random().toString(36).substr(2, 9)),
         projectId: params.projectId,
         userId: clientUser.id,
         status: "active",
@@ -3235,39 +3226,33 @@ export function AppStateProvider({
         addedByUserId: params.actorUserId,
         addedAt: now,
       };
-      newMemberships = [membership, ...newMemberships];
+
+      const audit = createAuditEntry(
+        params.projectId,
+        params.actorUserId,
+        existingUser ? "add_existing_client_access" : "create_client_access",
+        "project_membership",
+        membership.id,
+        `Granted Client Portal access for '${clientUser.name}' (${clientUser.email}) on project '${project.name}'`
+      );
+
+      setState((prev) => ({
+        ...prev,
+        users: [...prev.users.filter((u) => u.id !== clientUser.id), clientUser],
+        projectMemberships: [
+          ...prev.projectMemberships.filter(
+            (m) => !(m.projectId === params.projectId && m.userId === clientUser.id)
+          ),
+          membership,
+        ],
+        auditRecords: [audit, ...prev.auditRecords],
+      }));
+
+      return { success: true, user: clientUser, membership };
+    } catch (err: any) {
+      console.error("[AppStateContext] Failed to sync client to database:", err);
+      return { success: false, error: err.message || "Failed to add client to project." };
     }
-
-    const audit = createAuditEntry(
-      params.projectId,
-      params.actorUserId,
-      existingUser ? "add_existing_client_access" : "create_client_access",
-      "project_membership",
-      membership.id,
-      `Granted Client Portal access for '${clientUser.name}' (${clientUser.email}) on project '${project.name}'`
-    );
-
-    setState((prev) => ({
-      ...prev,
-      users: newUsers,
-      projectMemberships: newMemberships,
-      auditRecords: [audit, ...prev.auditRecords],
-    }));
-
-    if (typeof window !== "undefined") {
-      import("../actions/clients").then(({ addClientToProjectAction }) => {
-        addClientToProjectAction({
-          name: cleanName,
-          email: cleanEmail,
-          jobTitle: params.jobTitle,
-          phone: params.phone,
-          projectId: params.projectId,
-          actorUserId: params.actorUserId,
-        }).catch((err) => console.error("[AppStateContext] Failed to sync client to database:", err));
-      });
-    }
-
-    return { success: true, user: clientUser, membership };
   };
 
   const createClientUserAndAssign = (params: {

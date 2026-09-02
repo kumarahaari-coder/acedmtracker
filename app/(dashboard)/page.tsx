@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
+import { getAuthoritativeMainDashboardAction, MainDashboardDataDTO } from "@/lib/actions/performance";
+import { KpiDrilldownModal, DrilldownType } from "@/components/performance/KpiDrilldownModal";
 import {
   AlertCircle,
   AlertTriangle,
@@ -13,22 +15,53 @@ import {
   Clock,
   ExternalLink,
   Layers,
-  LogOut,
   Pause,
   Play,
   Sparkles,
   Timer,
   UserCheck,
+  TrendingUp,
+  Users,
+  Folder,
+  ArrowUpRight,
 } from "lucide-react";
-import { getItemApprovalMatrixSummary } from "@/lib/derived";
-import { formatDate } from "@/lib/formatters";
 
-export default function MyWorkDashboardPage() {
-  const { state, pauseWorkSession, checkInAttendance, checkOutAttendance } = useAppState();
-  const { activeRole, activeUserId, canApprove, setActiveProjectId } = useRole();
+export default function AuthoritativeDashboardPage() {
+  const { state, checkInAttendance, checkOutAttendance, pauseWorkSession } = useAppState();
+  const { activeRole, activeUserId } = useRole();
 
-  // Dynamic live IST date and time
-  const [liveISTTime, setLiveISTTime] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [dashboardData, setDashboardData] = useState<MainDashboardDataDTO | null>(null);
+
+  // Drilldown Modal
+  const [drilldownModal, setDrilldownModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    type: DrilldownType;
+    items?: any[];
+    workSessions?: any[];
+  }>({
+    isOpen: false,
+    title: "",
+    type: "actual_hours",
+  });
+
+  const isManagement = activeRole === "founder" || activeRole === "admin" || activeRole === "consultant";
+
+  useEffect(() => {
+    loadDashboardData();
+  }, [activeUserId, activeRole]);
+
+  const loadDashboardData = async () => {
+    setLoading(true);
+    const res = await getAuthoritativeMainDashboardAction();
+    if (res.success && res.data) {
+      setDashboardData(res.data);
+    }
+    setLoading(false);
+  };
+
   const todayDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -36,590 +69,488 @@ export default function MyWorkDashboardPage() {
     day: "2-digit",
   }).format(new Date());
 
-  useEffect(() => {
-    const updateTime = () => {
-      const formatted = new Intl.DateTimeFormat("en-US", {
-        timeZone: "Asia/Kolkata",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      }).format(new Date());
-      setLiveISTTime(formatted);
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
   const todayAttendance = state.attendanceRecords.find(
     (r) => r.userId === activeUserId && r.attendanceDate === todayDate
   );
 
-  // Attendance Submission State Guard (Anti-double click & inline feedback)
-  const [isSubmittingAttendance, setIsSubmittingAttendance] = useState(false);
-  const [attendanceNotice, setAttendanceNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
-  const handleCheckIn = () => {
-    if (isSubmittingAttendance) return;
-    setIsSubmittingAttendance(true);
-    setAttendanceNotice(null);
-
-    const res = checkInAttendance(activeUserId);
-    setIsSubmittingAttendance(false);
-
-    if (res.success) {
-      setAttendanceNotice({ type: "success", text: "Checked in successfully for today." });
-      setTimeout(() => setAttendanceNotice(null), 3000);
-    } else {
-      setAttendanceNotice({ type: "error", text: res.error || "Failed to record check in." });
-    }
-  };
-
-  const handleCheckOut = () => {
-    if (isSubmittingAttendance) return;
-    setIsSubmittingAttendance(true);
-    setAttendanceNotice(null);
-
-    const res = checkOutAttendance(activeUserId);
-    setIsSubmittingAttendance(false);
-
-    if (res.success) {
-      setAttendanceNotice({ type: "success", text: "Checked out successfully for today." });
-      setTimeout(() => setAttendanceNotice(null), 3000);
-    } else {
-      setAttendanceNotice({ type: "error", text: res.error || "Failed to record check out." });
-    }
-  };
-
-  // Active running timer for current user
   const activeWorkSession = state.workSessions.find(
     (ws) => ws.userId === activeUserId && ws.status === "active"
   );
   const activeWorkItem = activeWorkSession
     ? state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)
     : null;
-  const activeProject = activeWorkItem
-    ? state.projects.find((p) => p.id === activeWorkItem.projectId)
-    : null;
 
-  // Today's total tracked productive task seconds
-  const todayWorkSeconds = state.workSessions
-    .filter((ws) => ws.userId === activeUserId && ws.startedAt.startsWith(todayDate))
-    .reduce((acc, ws) => {
-      let s = ws.accumulatedSeconds;
-      if (ws.status === "active" && ws.activeSegmentStartedAt) {
-        s += Math.max(0, Math.floor((Date.now() - Date.parse(ws.activeSegmentStartedAt)) / 1000));
-      }
-      return acc + s;
-    }, 0);
-
-  const todayHours = Math.floor(todayWorkSeconds / 3600);
-  const todayMins = Math.floor((todayWorkSeconds % 3600) / 60);
-
-  const [ticker, setTicker] = useState(0);
-  useEffect(() => {
-    if (!activeWorkSession) return;
-    const interval = setInterval(() => setTicker((t) => t + 1), 1000);
-    return () => clearInterval(interval);
-  }, [activeWorkSession]);
-
-  // Get active user's assigned projects
-  const accessibleProjectIds = new Set(
-    activeRole === "admin" || activeRole === "founder"
-      ? state.projects.map((p) => p.id)
-      : state.projectMemberships
-          .filter((m) => m.userId === activeUserId && m.status === "active")
-          .map((m) => m.projectId)
-  );
-
-  // Items across accessible projects
-  const accessibleItems = state.contentItems.filter((i) => accessibleProjectIds.has(i.projectId));
-
-  // My assigned items
-  const myAssignedItems = accessibleItems.filter(
-    (i) => i.accountableOwnerId === activeUserId || i.collaboratorIds.includes(activeUserId)
-  );
-
-  // Approvals awaiting my decision (if founder or consultant)
-  const itemsNeedingReview = accessibleItems.filter((i) => {
-    if (i.stage !== "in_review" && i.stage !== "submitted") return false;
-    const version = state.submissionVersions.find(
-      (v) => v.id === i.latestSubmittedVersionId || v.id === i.activeDraftVersionId
-    );
-    const summary = getItemApprovalMatrixSummary(
-      i,
-      version,
-      state.approvalDecisions,
-      state.founderOverrides
-    );
-    if (activeRole === "founder") {
-      return (
-        summary.copy.founder === "pending" ||
-        summary.creative.founder === "pending" ||
-        summary.posting_date.founder === "pending"
-      );
-    }
-    if (activeRole === "consultant") {
-      return (
-        summary.copy.consultant === "pending" ||
-        summary.creative.consultant === "pending" ||
-        summary.posting_date.consultant === "pending"
-      );
-    }
-    return false;
-  });
-
-  // Open change requests needing designer response
-  const openChangeRequests = state.changeRequests.filter(
-    (cr) =>
-      accessibleProjectIds.has(cr.projectId) &&
-      cr.status === "open" &&
-      (activeRole === "designer" || activeRole === "founder" || activeRole === "consultant")
-  );
-
-  // Overdue / approaching deadlines
-  const now = new Date();
-  const urgentItems = accessibleItems.filter((i) => {
-    if (i.stage === "published" || i.stage === "approved") return false;
-    const deadline = (i as any).deadlines?.resubmissionDeadline || (i as any).deadlines?.submissionDeadline;
-    if (!deadline) return false;
-    const dueTime = new Date(deadline).getTime();
-    return dueTime < now.getTime() + 48 * 3600 * 1000;
-  });
+  const openDrilldown = (type: DrilldownType, title: string, subtitle?: string) => {
+    const allItems = state.contentItems;
+    const allSessions = state.workSessions;
+    setDrilldownModal({
+      isOpen: true,
+      title,
+      subtitle,
+      type,
+      items: allItems,
+      workSessions: allSessions,
+    });
+  };
 
   return (
-    <div className="flex-1 p-8 sm:p-10 max-w-7xl mx-auto w-full space-y-8 animate-in fade-in">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3 border-b border-black/[0.06]">
+    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-8">
+      {/* Top Welcome / Attendance Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-black/[0.08] pb-5">
         <div>
-          <div className="flex items-center gap-2.5">
-            <Briefcase className="h-7 w-7 text-[#0071e3]" />
-            <h1 className="text-[28px] sm:text-[34px] font-bold tracking-tight text-[#1d1d1f]">
-              Cross-Project My Work
-            </h1>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-semibold text-[#0071e3] uppercase tracking-wider">
+              {isManagement ? "Operations Control Center" : "Workspace Workspace"}
+            </span>
+            <span className="text-[12px] text-[#86868b]">• Asia/Kolkata</span>
           </div>
-          <p className="text-[14px] text-[#6e6e73] mt-1">
-            Personalized operational queue and attendance presence for{" "}
-            <span className="font-semibold text-[#1d1d1f]">Asia/Kolkata (IST)</span>.
-          </p>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-[#1d1d1f] mt-1">
+            {isManagement ? "Company Operational Dashboard" : "My Work & Tasks"}
+          </h1>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Link
-            href="/projects"
-            className="flex items-center gap-2 rounded-full bg-[#ffffff] hover:bg-[#f5f5f7] text-[#1d1d1f] border border-black/[0.08] px-4 py-2 text-[13px] font-medium transition shadow-sm"
+        {/* Live Attendance / Clock Control */}
+        <div className="flex items-center gap-3 bg-white p-2 px-3 rounded-2xl border border-black/[0.08] shadow-sm self-start md:self-auto">
+          <Clock className="h-4 w-4 text-[#86868b]" />
+          <div className="text-xs">
+            <span className="text-[#86868b]">Status: </span>
+            <span className="font-semibold text-[#1d1d1f]">
+              {todayAttendance?.status === "checked_in" ? "Clocked In" : "Not Clocked In"}
+            </span>
+          </div>
+          {todayAttendance?.status !== "checked_in" ? (
+            <button
+              onClick={() => checkInAttendance(activeUserId)}
+              className="px-3 py-1 bg-[#34c759] hover:bg-[#2fb34f] text-white rounded-full text-xs font-semibold transition"
+            >
+              Check In
+            </button>
+          ) : (
+            <button
+              onClick={() => checkOutAttendance(activeUserId)}
+              className="px-3 py-1 bg-[#ff3b30] hover:bg-[#e03429] text-white rounded-full text-xs font-semibold transition"
+            >
+              Check Out
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Active Timer Alert if running */}
+      {activeWorkSession && (
+        <div className="p-4 bg-[#0071e3]/10 border border-[#0071e3]/20 rounded-2xl flex items-center justify-between animate-pulse">
+          <div className="flex items-center gap-3">
+            <Timer className="h-5 w-5 text-[#0071e3]" />
+            <div>
+              <div className="text-xs font-bold text-[#0071e3] uppercase tracking-wider">Active Timer Running</div>
+              <div className="text-sm font-semibold text-[#1d1d1f] mt-0.5">
+                {activeWorkItem?.title || "Operational Task"}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
+            className="px-4 py-1.5 bg-[#0071e3] hover:bg-[#0077ed] text-white rounded-full text-xs font-semibold flex items-center gap-1.5 transition"
           >
-            <Layers className="h-4 w-4 text-[#0071e3]" /> View Project Portfolio
-          </Link>
+            <Pause className="h-3.5 w-3.5" />
+            <span>Pause Timer</span>
+          </button>
         </div>
-      </div>
+      )}
 
-      {/* ATTENDANCE & WORK TIMER PANELS (Clean Apple Separation) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 1. TODAY'S ATTENDANCE CARD */}
-        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[22px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col justify-between space-y-4">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-              <div className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-[#0071e3]" />
-                <h2 className="text-[16px] font-bold text-[#1d1d1f]">Today&apos;s Attendance</h2>
+      {/* --- MANAGEMENT VIEW --- */}
+      {isManagement ? (
+        <div className="space-y-8">
+          {/* Top 4 Authoritative Live Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* 1. Tasks Due Today */}
+            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+              <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">
+                <span>Tasks Due Today</span>
+                <Clock className="h-4 w-4 text-[#0071e3]" />
               </div>
-
-              {todayAttendance?.status === "checked_in" ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Checked In
-                </span>
-              ) : todayAttendance?.status === "checked_out" ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#f2f2f7] text-[#6e6e73] border border-black/[0.06]">
-                  Checked Out
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold bg-[#fff8e6] text-[#9a6700] border border-[#f2e2a8]">
-                  Not Checked In
-                </span>
-              )}
+              <div className="text-2xl font-bold text-[#1d1d1f] mt-2">
+                {loading ? "..." : dashboardData?.tasksDueTodayCount || 0}
+              </div>
+              <div className="text-[11px] text-[#86868b] mt-1">Scheduled for today's deadline</div>
             </div>
 
-            {/* Attendance Content */}
-            <div className="space-y-2">
-              {todayAttendance?.status === "checked_in" ? (
-                <div className="space-y-1">
-                  <div className="text-[20px] font-bold text-[#1d1d1f]">
-                    Checked in at{" "}
-                    {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </div>
-                  <div className="text-[13px] text-[#6e6e73] flex items-center gap-2">
-                    <span>Current Time: <strong>{liveISTTime || "—"}</strong></span>
-                    <span>• Status: Active Shift Presence</span>
-                  </div>
-                </div>
-              ) : todayAttendance?.status === "checked_out" ? (
-                <div className="space-y-1">
-                  <div className="text-[20px] font-bold text-[#1d1d1f]">
-                    Shift Completed for Today
-                  </div>
-                  <div className="text-[13px] text-[#6e6e73]">
-                    Recorded hours:{" "}
-                    {new Date(todayAttendance.checkedInAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    –{" "}
-                    {new Date(todayAttendance.checkedOutAt || "").toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  <div className="text-[18px] font-semibold text-[#1d1d1f]">
-                    You haven&apos;t checked in today.
-                  </div>
-                  <div className="text-[13px] text-[#6e6e73]">
-                    Confirm your daily shift presence in <strong className="text-[#1d1d1f]">Asia/Kolkata</strong>.
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Feedback notice */}
-            {attendanceNotice && (
-              <div
-                className={`p-2.5 rounded-xl text-[12px] flex items-center gap-2 animate-in fade-in ${
-                  attendanceNotice.type === "success"
-                    ? "bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
-                    : "bg-[#fff0ee] text-[#b42318] border border-[#ffd5d0]"
-                }`}
-              >
-                {attendanceNotice.type === "success" ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                )}
-                <span>{attendanceNotice.text}</span>
+            {/* 2. Overdue Open Tasks (Clickable Drilldown) */}
+            <button
+              onClick={() => openDrilldown("overdue_tasks", "Overdue Open Tasks", "Tasks past their authoritative internal deadline")}
+              className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm text-left hover:border-[#ff3b30]/40 transition group cursor-pointer"
+            >
+              <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">
+                <span>Overdue Open Tasks</span>
+                <ArrowUpRight className="h-3.5 w-3.5 text-[#86868b] group-hover:text-[#ff3b30] transition" />
               </div>
-            )}
+              <div className="text-2xl font-bold text-[#ff3b30] mt-2">
+                {loading ? "..." : dashboardData?.overdueOpenTasksCount || 0}
+              </div>
+              <div className="text-[11px] text-[#ff3b30] font-medium mt-1">Click to view overdue tasks</div>
+            </button>
+
+            {/* 3. Ad-Hoc Hours This Month */}
+            <button
+              onClick={() => openDrilldown("adhoc_hours", "Ad-Hoc Deliverables", "Unplanned scope requests this month")}
+              className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm text-left hover:border-[#ff9500]/40 transition group cursor-pointer"
+            >
+              <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">
+                <span>Ad-Hoc Hours (Month)</span>
+                <ArrowUpRight className="h-3.5 w-3.5 text-[#86868b] group-hover:text-[#ff9500] transition" />
+              </div>
+              <div className="text-2xl font-bold text-[#ff9500] mt-2">
+                {loading ? "..." : `${dashboardData?.adHocHoursThisMonth || 0}h`}
+              </div>
+              <div className="text-[11px] text-[#86868b] mt-1">Unplanned client requests</div>
+            </button>
+
+            {/* 4. Completed Tasks This Month */}
+            <button
+              onClick={() => openDrilldown("completed_tasks", "Completed Deliverables", "All tasks completed during this month")}
+              className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm text-left hover:border-[#34c759]/40 transition group cursor-pointer"
+            >
+              <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">
+                <span>Completed (Month)</span>
+                <ArrowUpRight className="h-3.5 w-3.5 text-[#86868b] group-hover:text-[#34c759] transition" />
+              </div>
+              <div className="text-2xl font-bold text-[#34c759] mt-2">
+                {loading ? "..." : dashboardData?.completedThisMonthCount || 0}
+              </div>
+              <div className="text-[11px] text-[#86868b] mt-1">Deliverables completed</div>
+            </button>
           </div>
 
-          {/* Action Button */}
-          <div className="pt-2 border-t border-black/[0.04]">
-            {todayAttendance?.status === "checked_in" ? (
-              <button
-                onClick={handleCheckOut}
-                disabled={isSubmittingAttendance}
-                className="w-full rounded-xl bg-[#fff0ee] hover:bg-[#ffd5d0] text-[#b42318] py-2.5 text-[13px] font-semibold transition border border-[#ffd5d0] flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                <LogOut className="h-4 w-4" /> Check Out for the Day
-              </button>
-            ) : todayAttendance?.status === "checked_out" ? (
-              <div className="text-center text-[12px] font-medium text-[#86868b] py-2 bg-[#fbfbfd] rounded-xl border border-black/[0.04]">
-                Shift presence closed. Thank you!
+          {/* Today's Workload Table */}
+          <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm overflow-hidden space-y-1">
+            <div className="p-5 border-b border-black/[0.06] flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-[#1d1d1f]">Today's Operational Workload</h3>
+                <p className="text-xs text-[#86868b] mt-0.5">Tasks due today across all active client projects.</p>
               </div>
-            ) : (
-              <button
-                onClick={handleCheckIn}
-                disabled={isSubmittingAttendance}
-                className="w-full rounded-xl bg-[#0071e3] hover:bg-[#0077ed] text-white py-2.5 text-[13px] font-semibold shadow-sm transition flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                <CheckCircle2 className="h-4 w-4" /> Check In Now
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* 2. CURRENT TASK & WORK TIMER CARD */}
-        <div className="bg-[#ffffff] border border-black/[0.08] rounded-[22px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col justify-between space-y-4">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-              <div className="flex items-center gap-2">
-                <Timer className="h-5 w-5 text-[#0071e3]" />
-                <h2 className="text-[16px] font-bold text-[#1d1d1f]">Productivity Work Timer</h2>
-              </div>
-
-              {activeWorkSession ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6] animate-pulse">
-                  Timer Active
-                </span>
-              ) : (
-                <span className="text-[12px] font-semibold text-[#86868b] bg-[#f2f2f7] px-3 py-1 rounded-full">
-                  Timer Idle
-                </span>
-              )}
             </div>
 
-            {activeWorkSession && activeWorkItem ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-[#f0f7ff] text-[#0071e3]">
-                    {activeProject?.clientBrand || activeProject?.name || "Project"}
-                  </span>
-                  <span className="text-[12px] text-[#86868b]">{activeWorkItem.platform} • {activeWorkItem.contentType}</span>
-                </div>
-                <h3 className="text-[17px] font-bold text-[#1d1d1f] truncate">
-                  {activeWorkItem.title}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-black/[0.06] bg-[#fbfbfd] text-[12px] font-semibold text-[#86868b]">
+                    <th className="py-3 px-4">Task & Project</th>
+                    <th className="py-3 px-4">Work Type</th>
+                    <th className="py-3 px-4">Internal Deadline</th>
+                    <th className="py-3 px-4">Assignee</th>
+                    <th className="py-3 px-4 text-right">Planned Effort</th>
+                    <th className="py-3 px-4 text-center">Priority</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-black/[0.04]">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-[#86868b]">Loading today's workload...</td>
+                    </tr>
+                  ) : dashboardData?.todaysWorkload.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-[#86868b]">Zero tasks due today.</td>
+                    </tr>
+                  ) : (
+                    dashboardData?.todaysWorkload.map((row) => (
+                      <tr key={row.id} className="hover:bg-[#fbfbfd] transition">
+                        <td className="py-3.5 px-4 font-semibold text-[#1d1d1f]">
+                          <Link href={`/projects/${row.projectId}`} className="hover:text-[#0071e3]">
+                            {row.title}
+                          </Link>
+                          <div className="text-[11px] text-[#86868b] font-normal">{row.projectName}</div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#6e6e73]">
+                          {row.workType}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs font-medium text-[#1d1d1f]">
+                          {row.internalDeadline ? new Date(row.internalDeadline).toLocaleDateString() : "Today"}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs font-medium text-[#1d1d1f]">
+                          {row.assigneeName}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-right font-semibold text-[#0071e3]">
+                          {row.plannedHours.toFixed(2)}h
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                            row.priority === "urgent" ? "bg-[#ff3b30]/10 text-[#d70015]" : "bg-[#f5f5f7] text-[#86868b]"
+                          }`}>
+                            {row.priority}
+                          </span>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center capitalize text-xs font-medium">
+                          {row.status}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Weekly Team Capacity Table */}
+          <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm overflow-hidden space-y-1">
+            <div className="p-5 border-b border-black/[0.06] flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-[#1d1d1f]">Weekly Team Capacity (This Week)</h3>
+                <p className="text-xs text-[#86868b] mt-0.5">Authoritative capacity, assigned effort, and active status.</p>
+              </div>
+              <Link href="/performance/team" className="text-xs font-semibold text-[#0071e3] hover:underline flex items-center gap-1">
+                <span>View Full Team</span>
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-black/[0.06] bg-[#fbfbfd] text-[12px] font-semibold text-[#86868b]">
+                    <th className="py-3 px-4">Member</th>
+                    <th className="py-3 px-4 text-right">Capacity</th>
+                    <th className="py-3 px-4 text-right">Assigned</th>
+                    <th className="py-3 px-4 text-right">Remaining</th>
+                    <th className="py-3 px-4 text-right">Actual</th>
+                    <th className="py-3 px-4 text-right">Allocation %</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 text-right">Efficiency %</th>
+                    <th className="py-3 px-4 text-right">On-Time %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-black/[0.04]">
+                  {dashboardData?.weeklyTeamCapacity.map((card) => {
+                    const isOverloaded = card.allocationPercent > 105;
+                    return (
+                      <tr key={card.user.id} className="hover:bg-[#fbfbfd] transition">
+                        <td className="py-3.5 px-4 font-semibold text-[#1d1d1f]">
+                          <Link href={`/performance/${card.user.id}`} className="hover:text-[#0071e3]">
+                            {card.user.name}
+                          </Link>
+                          <div className="text-[11px] text-[#86868b] font-normal capitalize">{card.user.role}</div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-right font-medium">{card.capacity.finalCapacityHours}h</td>
+                        <td className="py-3.5 px-4 text-right font-semibold text-[#0071e3]">{card.assignedPlannedHours}h</td>
+                        <td className={`py-3.5 px-4 text-right font-semibold ${isOverloaded ? "text-[#ff3b30]" : "text-[#1d1d1f]"}`}>
+                          {card.remainingPlannedHours}h
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-medium">{card.actualLoggedHours}h</td>
+                        <td className={`py-3.5 px-4 text-right font-bold ${isOverloaded ? "text-[#ff3b30]" : "text-[#1d1d1f]"}`}>
+                          {card.allocationPercent}%
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
+                              card.capacityStatus === "Overloaded"
+                                ? "bg-[#ff3b30]/10 text-[#d70015]"
+                                : card.capacityStatus === "Fully Loaded"
+                                ? "bg-[#ff9500]/10 text-[#c97800]"
+                                : card.capacityStatus === "Healthy"
+                                ? "bg-[#34c759]/10 text-[#248a3d]"
+                                : "bg-[#0071e3]/10 text-[#0071e3]"
+                            }`}
+                          >
+                            {card.capacityStatus}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-semibold text-[#1d1d1f]">
+                          {card.efficiencyPercent !== null ? `${card.efficiencyPercent}%` : "—"}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-semibold text-[#1d1d1f]">
+                          {card.onTimePercent !== null ? `${card.onTimePercent}%` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* --- EMPLOYEE PERSONAL VIEW --- */
+        <div className="space-y-6">
+          {/* Attendance and Timer Distinct Panels */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Today's Attendance Panel */}
+            <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-[#1d1d1f] flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-[#0071e3]" /> Today's Attendance
                 </h3>
-                <div className="text-[28px] font-mono font-bold text-[#0071e3] tracking-tight">
-                  {(() => {
-                    const elapsed =
-                      activeWorkSession.accumulatedSeconds +
-                      Math.max(
-                        0,
-                        Math.floor((Date.now() - Date.parse(activeWorkSession.activeSegmentStartedAt || "")) / 1000)
-                      );
-                    const hrs = Math.floor(elapsed / 3600);
-                    const mins = Math.floor((elapsed % 3600) / 60);
-                    const secs = elapsed % 60;
-                    if (hrs > 0) {
-                      return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-                    }
-                    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-                  })()}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="text-[18px] font-semibold text-[#1d1d1f]">
-                  No task timer running.
-                </div>
-                <div className="text-[13px] text-[#6e6e73]">
-                  Select an accepted assignment from below and click &quot;Start Work&quot; to begin tracking time.
-                </div>
-                <div className="pt-2 text-[13px] text-[#86868b]">
-                  Verified productive time today: <strong className="text-[#1d1d1f]">{todayHours}h {todayMins}m</strong>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="pt-2 border-t border-black/[0.04]">
-            {activeWorkSession && activeWorkItem ? (
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => pauseWorkSession(activeWorkSession.id, activeUserId)}
-                  className="flex-1 rounded-xl bg-[#fff8e6] hover:bg-[#ffe082] text-[#9a6700] py-2.5 text-[13px] font-semibold transition flex items-center justify-center gap-1.5"
+                <span
+                  className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
+                    todayAttendance?.status === "checked_in"
+                      ? "bg-[#eaf6ed] text-[#1f6f32]"
+                      : todayAttendance?.status === "checked_out"
+                      ? "bg-[#f2f2f7] text-[#6e6e73]"
+                      : "bg-[#fff8e6] text-[#9a6700]"
+                  }`}
                 >
-                  <Pause className="h-4 w-4" /> Pause Timer
-                </button>
-                <Link
-                  href={`/projects/${activeWorkSession.projectId}/content/${activeWorkSession.contentItemId}`}
-                  className="flex-1 text-center rounded-xl bg-[#1d1d1f] hover:bg-[#2d2d2f] text-white py-2.5 text-[13px] font-semibold transition shadow-sm flex items-center justify-center gap-1.5"
+                  {todayAttendance?.status === "checked_in"
+                    ? "Checked In"
+                    : todayAttendance?.status === "checked_out"
+                    ? "Checked Out"
+                    : "Not Clocked In"}
+                </span>
+              </div>
+
+              <div className="text-xs text-[#6e6e73]">
+                {todayAttendance?.status === "checked_in" ? (
+                  <p>Checked in successfully for today. Shift in progress.</p>
+                ) : todayAttendance?.status === "checked_out" ? (
+                  <p>Shift Completed for Today.</p>
+                ) : (
+                  <p>Record your start of day attendance.</p>
+                )}
+              </div>
+
+              <div className="pt-2">
+                {todayAttendance?.status !== "checked_in" ? (
+                  <button
+                    onClick={() => checkInAttendance(activeUserId)}
+                    className="px-4 py-1.5 bg-[#34c759] hover:bg-[#2fb34f] text-white rounded-full text-xs font-semibold transition"
+                  >
+                    Check In Now
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => checkOutAttendance(activeUserId)}
+                    className="px-4 py-1.5 bg-[#ff3b30] hover:bg-[#e03429] text-white rounded-full text-xs font-semibold transition"
+                  >
+                    Check Out for the Day
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Productivity Work Timer Panel */}
+            <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-[#1d1d1f] flex items-center gap-2">
+                  <Timer className="h-4 w-4 text-[#0071e3]" /> Productivity Work Timer
+                </h3>
+                <span
+                  className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
+                    activeWorkSession ? "bg-[#0071e3]/10 text-[#0071e3] animate-pulse" : "bg-black/[0.05] text-[#86868b]"
+                  }`}
                 >
-                  Open Workspace <ExternalLink className="h-3.5 w-3.5" />
-                </Link>
+                  {activeWorkSession ? "Timer Active" : "Timer Idle"}
+                </span>
               </div>
-            ) : (
-              <div className="text-[12px] text-[#86868b] text-center py-2 bg-[#fbfbfd] rounded-xl border border-black/[0.04]">
-                Task work sessions are independent from daily attendance presence.
+
+              <div className="text-xs text-[#6e6e73]">
+                {activeWorkSession ? (
+                  <p className="font-semibold text-[#1d1d1f] truncate">
+                    Tracking task: {state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)?.title || activeWorkSession.contentItemId}
+                  </p>
+                ) : (
+                  <p>No task timer running.</p>
+                )}
               </div>
-            )}
+
+              <div className="text-xs text-[#86868b]">
+                Logged today: <span className="font-bold text-[#1d1d1f]">{dashboardData?.employeePersonalView?.loggedHoursToday || 0}h</span>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Cross-Project Summary Metrics */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="text-[13px] font-medium text-[#6e6e73]">Assigned To Me</div>
-          <div className="text-[32px] font-bold text-[#1d1d1f] tracking-tight">{myAssignedItems.length}</div>
-          <div className="text-[12px] text-[#86868b]">Deliverables under your ownership</div>
-        </div>
-
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="text-[13px] font-medium text-[#6e6e73]">Awaiting My Review</div>
-          <div className="text-[32px] font-bold text-[#9a6700] tracking-tight">{itemsNeedingReview.length}</div>
-          <div className="text-[12px] text-[#86868b]">Pending your component decisions</div>
-        </div>
-
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="text-[13px] font-medium text-[#6e6e73]">Open Change Requests</div>
-          <div className="text-[32px] font-bold text-[#d70015] tracking-tight">{openChangeRequests.length}</div>
-          <div className="text-[12px] text-[#86868b]">Requires Designer response</div>
-        </div>
-
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="text-[13px] font-medium text-[#6e6e73]">Due Soon / Overdue</div>
-          <div className="text-[32px] font-bold text-[#0071e3] tracking-tight">{urgentItems.length}</div>
-          <div className="text-[12px] text-[#86868b]">Deadlines within 48 hours</div>
-        </div>
-      </div>
-
-      {/* 2-Column Work Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Approvals Requiring Action (Founder / Consultant) */}
-        {canApprove && (
-          <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-[#9a6700]" />
-                <h3 className="font-semibold text-[#1d1d1f] text-[16px]">Items Awaiting Your Approval</h3>
+          {/* My Day Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+              <div className="text-xs text-[#86868b]">Due Today</div>
+              <div className="text-2xl font-bold text-[#1d1d1f] mt-1">
+                {dashboardData?.employeePersonalView?.dueTodayTasks.length || 0}
               </div>
-              <span className="text-[12px] font-bold status-review rounded-full px-2.5 py-0.5">
-                {itemsNeedingReview.length} Items
-              </span>
             </div>
 
-            <div className="space-y-3">
-              {itemsNeedingReview.length === 0 ? (
-                <div className="py-10 text-center text-[13px] text-[#86868b]">
-                  You have no pending items waiting for your approval.
-                </div>
-              ) : (
-                itemsNeedingReview.map((item) => {
-                  const proj = state.projects.find((p) => p.id === item.projectId);
-                  return (
-                    <Link
-                      key={item.id}
-                      href={`/projects/${item.projectId}/content/${item.id}`}
-                      onClick={() => setActiveProjectId(item.projectId)}
-                      className="block p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] hover:border-[#0071e3]/50 hover:bg-[#f5f5f7] transition space-y-1.5 group"
-                    >
-                      <div className="flex items-center justify-between text-[12px]">
-                        <span className="font-semibold text-[#0066cc]">{proj?.name}</span>
-                        <span className="text-[#86868b]">{item.platform} • {item.contentType}</span>
+            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+              <div className="text-xs text-[#86868b]">Planned Hours Today</div>
+              <div className="text-2xl font-bold text-[#0071e3] mt-1">
+                {dashboardData?.employeePersonalView?.plannedHoursToday || 0}h
+              </div>
+            </div>
+
+            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+              <div className="text-xs text-[#86868b]">Logged Hours Today</div>
+              <div className="text-2xl font-bold text-[#1d1d1f] mt-1">
+                {dashboardData?.employeePersonalView?.loggedHoursToday || 0}h
+              </div>
+            </div>
+
+            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+              <div className="text-xs text-[#86868b]">Urgent Priority</div>
+              <div className="text-2xl font-bold text-[#ff3b30] mt-1">
+                {dashboardData?.employeePersonalView?.urgentTasks.length || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* My Queue (Today / Tomorrow / Upcoming) */}
+          <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm p-6 space-y-4">
+            <h3 className="text-base font-bold text-[#1d1d1f]">My Task Queue</h3>
+
+            <div className="space-y-4">
+              {/* Today */}
+              <div>
+                <div className="text-xs font-bold text-[#0071e3] uppercase tracking-wider mb-2">Today</div>
+                {dashboardData?.employeePersonalView?.queueToday.length === 0 ? (
+                  <div className="p-3 bg-[#fbfbfd] rounded-xl text-xs text-[#86868b]">No tasks due today.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {dashboardData?.employeePersonalView?.queueToday.map((t) => (
+                      <div key={t.id} className="p-3 bg-[#f5f5f7] rounded-xl flex items-center justify-between text-xs">
+                        <div className="font-semibold text-[#1d1d1f]">{t.title}</div>
+                        <span className="text-[#0071e3] font-bold">
+                          {t.finalPlannedSeconds ? `${(t.finalPlannedSeconds / 3600).toFixed(2)}h` : "2h"}
+                        </span>
                       </div>
-                      <div className="font-semibold text-[14px] text-[#1d1d1f] group-hover:text-[#0066cc] transition truncate">
-                        {item.title}
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Tomorrow */}
+              <div>
+                <div className="text-xs font-bold text-[#86868b] uppercase tracking-wider mb-2">Tomorrow</div>
+                {dashboardData?.employeePersonalView?.queueTomorrow.length === 0 ? (
+                  <div className="p-3 bg-[#fbfbfd] rounded-xl text-xs text-[#86868b]">No tasks scheduled for tomorrow.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {dashboardData?.employeePersonalView?.queueTomorrow.map((t) => (
+                      <div key={t.id} className="p-3 bg-[#f5f5f7] rounded-xl flex items-center justify-between text-xs">
+                        <div className="font-semibold text-[#1d1d1f]">{t.title}</div>
+                        <span className="text-[#6e6e73]">
+                          {t.finalPlannedSeconds ? `${(t.finalPlannedSeconds / 3600).toFixed(2)}h` : "2h"}
+                        </span>
                       </div>
-                    </Link>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Change Requests Requiring Action (Designer) */}
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-[#d70015]" />
-              <h3 className="font-semibold text-[#1d1d1f] text-[16px]">Open Change Requests</h3>
-            </div>
-            <span className="text-[12px] font-bold status-changes rounded-full px-2.5 py-0.5">
-              {openChangeRequests.length} Open
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {openChangeRequests.length === 0 ? (
-              <div className="py-10 text-center text-[13px] text-[#86868b]">
-                No open change requests across your projects.
+                    ))}
+                  </div>
+                )}
               </div>
-            ) : (
-              openChangeRequests.map((cr) => {
-                const item = state.contentItems.find((i) => i.id === cr.contentItemId);
-                const proj = state.projects.find((p) => p.id === cr.projectId);
-                return (
-                  <Link
-                    key={cr.id}
-                    href={`/projects/${cr.projectId}/content/${cr.contentItemId}`}
-                    onClick={() => setActiveProjectId(cr.projectId)}
-                    className="block p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] hover:border-[#d70015]/50 hover:bg-[#f5f5f7] transition space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="font-semibold text-[#0066cc]">{proj?.name}</span>
-                      <span className="status-changes rounded-full px-2 py-0.2 font-bold text-[11px] uppercase">
-                        {cr.component}
-                      </span>
-                    </div>
-                    <div className="font-semibold text-[14px] text-[#1d1d1f] truncate">{item?.title}</div>
-                    <p className="text-[13px] text-[#6e6e73] line-clamp-1 italic">&quot;{cr.requestedChange}&quot;</p>
-                  </Link>
-                );
-              })
-            )}
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Assigned Deliverables */}
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-            <div className="flex items-center gap-2">
-              <UserCheck className="h-5 w-5 text-[#0071e3]" />
-              <h3 className="font-semibold text-[#1d1d1f] text-[16px]">My Active Assignments</h3>
-            </div>
-            <span className="text-[12px] font-medium rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[#1d1d1f]">
-              {myAssignedItems.length} Items
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {myAssignedItems.length === 0 ? (
-              <div className="py-10 text-center text-[13px] text-[#86868b]">
-                No items directly assigned to you at this time.
-              </div>
-            ) : (
-              myAssignedItems.map((item) => {
-                const proj = state.projects.find((p) => p.id === item.projectId);
-                return (
-                  <Link
-                    key={item.id}
-                    href={`/projects/${item.projectId}/content/${item.id}`}
-                    onClick={() => setActiveProjectId(item.projectId)}
-                    className="block p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] hover:border-[#0071e3]/50 hover:bg-[#f5f5f7] transition space-y-1 group"
-                  >
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="font-semibold text-[#0066cc]">{proj?.name}</span>
-                      <span className="text-[#86868b] capitalize">{item.stage.replace("_", " ")}</span>
-                    </div>
-                    <div className="font-semibold text-[14px] text-[#1d1d1f] group-hover:text-[#0066cc] transition truncate">
-                      {item.title}
-                    </div>
-                  </Link>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Deadlines within 48 Hours */}
-        <div className="rounded-2xl border border-black/[0.08] bg-[#ffffff] p-6 space-y-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-          <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
-            <div className="flex items-center gap-2">
-              <Clock className="h-5 w-5 text-[#0071e3]" />
-              <h3 className="font-semibold text-[#1d1d1f] text-[16px]">Approaching Deadlines</h3>
-            </div>
-            <span className="text-[12px] font-bold status-review rounded-full px-2.5 py-0.5">
-              {urgentItems.length} Urgent
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {urgentItems.length === 0 ? (
-              <div className="py-10 text-center text-[13px] text-[#86868b]">
-                No approaching deadlines within 48 hours.
-              </div>
-            ) : (
-              urgentItems.map((item) => {
-                const proj = state.projects.find((p) => p.id === item.projectId);
-                const deadline = (item as any).deadlines?.resubmissionDeadline || (item as any).deadlines?.submissionDeadline;
-                return (
-                  <Link
-                    key={item.id}
-                    href={`/projects/${item.projectId}/content/${item.id}`}
-                    onClick={() => setActiveProjectId(item.projectId)}
-                    className="block p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] hover:border-[#0071e3]/50 hover:bg-[#f5f5f7] transition space-y-1 group"
-                  >
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="font-semibold text-[#0066cc]">{proj?.name}</span>
-                      <span className="text-[#9a6700] font-bold">
-                        {formatDate(deadline)}
-                      </span>
-                    </div>
-                    <div className="font-semibold text-[14px] text-[#1d1d1f] group-hover:text-[#0066cc] transition truncate">
-                      {item.title}
-                    </div>
-                  </Link>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </div>
+      {/* Drilldown Modal */}
+      <KpiDrilldownModal
+        isOpen={drilldownModal.isOpen}
+        onClose={() => setDrilldownModal((prev) => ({ ...prev, isOpen: false }))}
+        title={drilldownModal.title}
+        subtitle={drilldownModal.subtitle}
+        type={drilldownModal.type}
+        items={drilldownModal.items}
+        workSessions={drilldownModal.workSessions}
+      />
     </div>
   );
 }
