@@ -65,6 +65,7 @@ export interface DesignerPerformanceSummary {
   role: UserRole;
   jobTitle?: string;
   userStatus: "active" | "inactive" | "deleted";
+  isFormerContributor?: boolean;
 
   // Output
   completedDeliverablesCount: number;
@@ -496,10 +497,56 @@ export function getOrganizationPerformance(
 
   const scoped = filterStateToScope(state, auth.authorizedProjectIds, filters);
 
-  // Designers list in organization
-  let designers = state.users.filter(
-    (u) => u.role === "designer" || u.jobTitle?.toLowerCase().includes("designer") || u.jobTitle?.toLowerCase().includes("editor")
-  );
+  // Eligible internal contributor roles on projects
+  const eligibleContributorRoles = new Set(["consultant", "designer", "video_editor", "collaborator"]);
+
+  let designers: (User & { isFormerContributor?: boolean })[] = [];
+
+  if (filters?.projectId && filters.projectId !== "all") {
+    // Project-Scoped Team Performance:
+    // Derives strictly from active project memberships with eligible internal contributor roles
+    const activeProjectMemberships = state.projectMemberships.filter(
+      (m) =>
+        m.projectId === filters.projectId &&
+        m.status === "active" &&
+        m.membershipRole &&
+        eligibleContributorRoles.has(m.membershipRole)
+    );
+    const activeMemberUserIds = new Set(activeProjectMemberships.map((m) => m.userId));
+
+    // Active project contributors
+    const activeContributors = state.users
+      .filter((u) => activeMemberUserIds.has(u.id) && u.role !== "client" && u.status !== "deleted")
+      .map((u) => ({ ...u, isFormerContributor: false }));
+
+    // Historical contributors: users who are not currently active members on this project,
+    // but who completed assignments or work sessions on this project during the filtered period.
+    const historicalMemberUserIds = new Set<string>();
+    for (const a of scoped.assignments) {
+      if (a.assigneeUserId && !activeMemberUserIds.has(a.assigneeUserId)) {
+        historicalMemberUserIds.add(a.assigneeUserId);
+      }
+    }
+
+    const formerContributors = state.users
+      .filter((u) => historicalMemberUserIds.has(u.id) && u.role !== "client" && u.status !== "deleted")
+      .map((u) => ({ ...u, isFormerContributor: true }));
+
+    designers = [...activeContributors, ...formerContributors];
+  } else {
+    // Organization-wide team view: all internal team members
+    designers = state.users
+      .filter(
+        (u) =>
+          u.role !== "client" &&
+          (u.role === "designer" ||
+            u.role === "consultant" ||
+            u.jobTitle?.toLowerCase().includes("designer") ||
+            u.jobTitle?.toLowerCase().includes("editor") ||
+            u.jobTitle?.toLowerCase().includes("consultant"))
+      )
+      .map((u) => ({ ...u, isFormerContributor: false }));
+  }
 
   if (filters?.designerId && filters.designerId !== "all") {
     designers = designers.filter((u) => u.id === filters.designerId);
@@ -671,6 +718,7 @@ export function getOrganizationPerformance(
       role: designer.role,
       jobTitle: designer.jobTitle,
       userStatus: designer.status,
+      isFormerContributor: designer.isFormerContributor,
       completedDeliverablesCount: dCompletedDeliverables,
       completedConceptsCount: dConceptIds.size,
       primaryAssignmentsCount: primaryAssignments.length,

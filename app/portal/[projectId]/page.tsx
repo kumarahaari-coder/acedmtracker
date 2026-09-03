@@ -1,9 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import {
   Calendar,
@@ -18,19 +17,49 @@ import {
   Sparkles,
   TrendingUp,
 } from "lucide-react";
-import { getClientProjectOverview } from "@/lib/client-portal";
+import { getAuthoritativeClientOverviewAction, ClientProjectOverviewDTO } from "@/lib/actions/clientPortal";
 import { SafeImage } from "@/components/ui/SafeImage";
 import { formatDate } from "@/lib/formatters";
 
 export default function ClientProjectOverviewPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state } = useAppState();
   const { activeRole, activeUserId } = useRole();
 
-  const overviewResult = getClientProjectOverview(state, projectId, activeUserId, activeRole);
+  const [data, setData] = useState<ClientProjectOverviewDTO | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  if (overviewResult.status !== 200 || !overviewResult.data) {
+  useEffect(() => {
+    let isMounted = true;
+    async function loadData() {
+      if (!projectId || !activeUserId) return;
+      setLoading(true);
+      const res = await getAuthoritativeClientOverviewAction(projectId, activeUserId);
+      if (!isMounted) return;
+      if (res.success && res.data) {
+        setData(res.data);
+        setError(null);
+      } else {
+        setError(res.error || "Failed to load client project overview.");
+      }
+      setLoading(false);
+    }
+    loadData();
+    return () => { isMounted = false; };
+  }, [projectId, activeUserId]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center p-6 text-center">
+        <div className="text-[15px] font-medium text-[#6e6e73] flex items-center gap-2">
+          <Clock className="h-5 w-5 animate-spin text-[#0071e3]" /> Loading Client Portal...
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
     return (
       <div className="min-h-[50vh] flex items-center justify-center p-6 text-center">
         <div className="max-w-md w-full rounded-3xl border border-black/[0.08] bg-white p-8 space-y-4 shadow-xl">
@@ -39,7 +68,7 @@ export default function ClientProjectOverviewPage() {
           </div>
           <h2 className="text-[20px] font-bold text-[#1d1d1f]">Access Restricted</h2>
           <p className="text-[14px] text-[#6e6e73] leading-relaxed">
-            {overviewResult.error || "You do not have active authorization to view this client portal."}
+            {error || "You do not have active authorization to view this client portal."}
           </p>
           <Link
             href="/portal"
@@ -52,7 +81,7 @@ export default function ClientProjectOverviewPage() {
     );
   }
 
-  const { project, summary, recentCreatives, upcomingCalendar, performanceSnapshot } = overviewResult.data;
+  const { project, summary, recentCreatives, upcomingCalendar } = data;
 
   return (
     <div className="space-y-8 animate-in fade-in">
@@ -128,7 +157,7 @@ export default function ClientProjectOverviewPage() {
       </div>
 
       {/* Whitelisted Performance Snapshot */}
-      {Object.keys(performanceSnapshot).length > 0 && (
+      {summary.performance && Object.keys(summary.performance).length > 0 && (
         <div className="bg-white border border-black/[0.08] rounded-3xl p-6 sm:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
           <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
             <div className="flex items-center gap-2">
@@ -144,13 +173,13 @@ export default function ClientProjectOverviewPage() {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-            {Object.entries(performanceSnapshot).map(([key, val]) => (
+            {Object.entries(summary.performance).map(([key, val]) => (
               <div key={key} className="p-4 rounded-2xl bg-[#fbfbfd] border border-black/[0.04] space-y-1">
                 <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block capitalize">
                   {key.replace(/([A-Z])/g, " $1")}
                 </span>
                 <span className="text-[22px] font-bold text-[#1d1d1f]">
-                  {key === "engagementRate" ? `${val}%` : val.toLocaleString()}
+                  {key === "engagementRate" ? `${val}%` : (val as number).toLocaleString()}
                 </span>
               </div>
             ))}

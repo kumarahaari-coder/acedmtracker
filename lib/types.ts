@@ -228,6 +228,7 @@ export interface ContentItem {
   revisionContentSeconds?: number;
   revisionProductionSeconds?: number;
   finalPlannedSeconds?: number;
+  isEffortAnchor?: boolean;
   completedAt?: string;
   currentVersionNumber: number; // 1, 2, 3...
   activeDraftVersionId?: string;
@@ -459,6 +460,7 @@ export interface Script {
   musicTrack?: string;
   musicUrl?: string;
   linkedContentItemId?: string;
+  createdAt?: string;
   updatedAt: string;
 }
 

@@ -22,7 +22,7 @@ import { formatDate } from "@/lib/formatters";
 export default function KanbanBoardPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state, updateContentItem } = useAppState();
+  const { state, updateContentItem, updateContentItemStage } = useAppState();
   const { activeRole, canManageWorkflow, canApprove } = useRole();
 
   const [viewMode, setViewMode] = useState<"kanban" | "timeline">("kanban");
@@ -46,7 +46,7 @@ export default function KanbanBoardPage() {
     { stage: "published", title: "7. Published" },
   ];
 
-  const handleStageTransition = (itemId: string, targetStage: ContentStage) => {
+  const handleStageTransition = async (itemId: string, targetStage: ContentStage) => {
     setTransitionError(null);
     const item = state.contentItems.find((i) => i.id === itemId);
     if (!item) return;
@@ -78,7 +78,10 @@ export default function KanbanBoardPage() {
       return;
     }
 
-    updateContentItem(itemId, { stage: targetStage }, `Stage moved to ${targetStage.toUpperCase()}`);
+    const res = await updateContentItemStage(itemId, targetStage, undefined, `Stage moved to ${targetStage.toUpperCase()}`);
+    if (!res.success) {
+      setTransitionError(res.error || `Failed to update stage for '${item.title}' in database.`);
+    }
   };
 
   const handleDragStart = (e: React.DragEvent, id: string) => {

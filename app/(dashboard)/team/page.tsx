@@ -70,8 +70,13 @@ export default function GlobalTeamPage() {
     day: "2-digit",
   }).format(new Date());
 
-  // Internal agency members (exclude client contacts and permanently deleted accounts)
-  const internalUsers = state.users.filter((u) => u.role !== "client" && u.status !== "deleted");
+  // Internal agency members (For Designers, expose ONLY self profile to prevent directory leakage)
+  const isDesignerRole = activeRole === "designer";
+  const internalUsers = state.users.filter((u) => {
+    if (u.role === "client" || u.status === "deleted") return false;
+    if (isDesignerRole) return u.id === activeUserId;
+    return true;
+  });
 
   // Filtered employees
   const filteredUsers = internalUsers.filter((u) => {

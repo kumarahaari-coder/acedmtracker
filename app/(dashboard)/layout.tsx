@@ -7,17 +7,17 @@ import { useRole } from "@/lib/context/RoleContext";
 import { Header } from "@/components/layout/Header";
 import { NotificationDrawer } from "@/components/layout/NotificationDrawer";
 import { AlertCircle, ShieldCheck, X, Loader2 } from "lucide-react";
-import { getAuthoritativeWorkspaceStateAction } from "@/lib/actions/workspace";
+import { getAuthoritativeLayoutContextAction } from "@/lib/actions/workspace";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { state, recoveryNotice, dismissRecoveryNotice, hydrateServerState } = useAppState();
+  const { state, recoveryNotice, dismissRecoveryNotice, hydrateLayoutContext } = useAppState();
   const { activeRole, activeUserId, setUserSession } = useRole();
   const router = useRouter();
 
   const [isNotifDrawerOpen, setIsNotifDrawerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Hydrate and maintain authoritative workspace state
+  // Hydrate lean layout context (projects, memberships, user, notification count)
   useEffect(() => {
     let isMounted = true;
     let isSyncing = false;
@@ -25,27 +25,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     let lastSyncedAt = 0;
 
-    async function loadWorkspace() {
+    async function loadLayoutContext() {
       if (isSyncing || !isMounted) return;
       isSyncing = true;
       try {
-        const result = await getAuthoritativeWorkspaceStateAction();
-        if (isMounted && result.success) {
+        const result = await getAuthoritativeLayoutContextAction();
+        if (isMounted && result.success && result.context) {
           lastSyncedAt = Date.now();
-          if (hydrateServerState) {
-            hydrateServerState(result.state);
+          if (hydrateLayoutContext) {
+            hydrateLayoutContext(result.context);
           }
-          if (result.user) {
+          if (result.context.user) {
             setUserSession({
-              id: result.user.id,
-              role: (result.user.organizationRole as any) || "founder",
-              email: result.user.email,
-              name: result.user.fullName,
+              id: result.context.user.id,
+              role: (result.context.user.organizationRole as any) || "founder",
+              email: result.context.user.email,
+              name: result.context.user.fullName,
             });
           }
         }
       } catch (err) {
-        console.warn("[DashboardLayout] Workspace sync notice:", err);
+        console.warn("[DashboardLayout] Layout sync notice:", err);
       } finally {
         isSyncing = false;
         if (isMounted) {
@@ -54,8 +54,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     }
 
-    // Initial authoritative load
-    loadWorkspace();
+    // Initial lean load
+    loadLayoutContext();
 
     // Revalidate on focus ONLY if stale by > 60 seconds and document is visible
     const handleFocus = () => {
@@ -64,7 +64,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       clearTimeout(focusTimeout);
       focusTimeout = setTimeout(() => {
         if (!isSyncing && isMounted && Date.now() - lastSyncedAt >= 60000) {
-          loadWorkspace();
+          loadLayoutContext();
         }
       }, 1000);
     };

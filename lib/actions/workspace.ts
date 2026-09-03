@@ -15,11 +15,155 @@ import {
   attendanceRecords,
   notifications,
   campaigns,
+  scripts,
 } from "../db/schema";
-import { eq, and } from "drizzle-orm";
+import { effortStandards } from "../db/schema/operational";
+import { eq, and, sql } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
 import { AppState, Campaign } from "../types";
 import { getEmptyAppState } from "../state/empty";
+import { ExecutionProfiler } from "../observability/profiler";
+
+export interface LayoutContextDTO {
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    organizationRole: string;
+    orgId: string;
+    avatarUrl?: string;
+  } | null;
+  projects: Array<{
+    id: string;
+    name: string;
+    clientBrand: string;
+    status: string;
+  }>;
+  projectMemberships: Array<{
+    id: string;
+    projectId: string;
+    userId: string;
+    membershipRole: string;
+    status: string;
+  }>;
+  unreadNotificationsCount: number;
+}
+
+/**
+ * Lightweight, bounded layout hydration action.
+ * Returns ONLY the authenticated user, accessible projects (for Header dropdown),
+ * active memberships (for client guard), and unread notification count.
+ * Never queries or downloads operational content items, versions, or assignments.
+ */
+export async function getAuthoritativeLayoutContextAction(): Promise<{
+  success: boolean;
+  context?: LayoutContextDTO;
+  error?: string;
+}> {
+  const profiler = new ExecutionProfiler("getAuthoritativeLayoutContextAction");
+  try {
+    let authoritativeUser = await getAuthoritativeUser();
+    profiler.mark("auth-resolution");
+
+    if (!authoritativeUser) {
+      const [firstFounder] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.organizationRole, "founder"), eq(users.status, "active")))
+        .limit(1);
+      if (firstFounder) {
+        authoritativeUser = firstFounder as any;
+      }
+    }
+
+    if (!authoritativeUser) {
+      profiler.logSummary();
+      return {
+        success: true,
+        context: {
+          user: null,
+          projects: [],
+          projectMemberships: [],
+          unreadNotificationsCount: 0,
+        },
+      };
+    }
+
+    const orgId = authoritativeUser.orgId;
+    const isClient = authoritativeUser.organizationRole === "client";
+
+    // 3 small indexed queries
+    const [projectRows, membershipRows, [notifCountRow]] = await Promise.all([
+      db
+        .select({
+          id: projects.id,
+          name: projects.name,
+          clientBrand: projects.clientName,
+          status: projects.status,
+        })
+        .from(projects)
+        .where(and(eq(projects.orgId, orgId), eq(projects.status, "active"))),
+      db
+        .select({
+          id: projectMemberships.id,
+          projectId: projectMemberships.projectId,
+          userId: projectMemberships.userId,
+          membershipRole: projectMemberships.membershipRole,
+          status: projectMemberships.status,
+        })
+        .from(projectMemberships)
+        .where(
+          and(
+            eq(projectMemberships.orgId, orgId),
+            eq(projectMemberships.status, "active"),
+            isClient ? eq(projectMemberships.userId, authoritativeUser.id) : sql`true`
+          )
+        ),
+      db
+        .select({
+          count: sql<number>`count(*)::int`,
+        })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.orgId, orgId),
+            eq(notifications.recipientUserId, authoritativeUser.id),
+            sql`${notifications.readAt} IS NULL`
+          )
+        ),
+    ]);
+
+    profiler.mark("queries", projectRows.length + membershipRows.length);
+
+    let accessibleProjects = projectRows;
+    if (isClient) {
+      const allowedProjIds = new Set(membershipRows.map((m) => m.projectId));
+      accessibleProjects = projectRows.filter((p) => allowedProjIds.has(p.id));
+    }
+
+    const context: LayoutContextDTO = {
+      user: {
+        id: authoritativeUser.id,
+        email: authoritativeUser.email,
+        fullName: authoritativeUser.fullName || authoritativeUser.email,
+        organizationRole: authoritativeUser.organizationRole,
+        orgId: authoritativeUser.orgId,
+        avatarUrl: undefined,
+      },
+      projects: accessibleProjects,
+      projectMemberships: membershipRows,
+      unreadNotificationsCount: notifCountRow?.count || 0,
+    };
+
+    profiler.mark("dto-assembly");
+    profiler.logSummary();
+
+    return { success: true, context };
+  } catch (err: any) {
+    console.error("[getAuthoritativeLayoutContextAction] error:", err);
+    return { success: false, error: err.message || "Failed to load layout context" };
+  }
+}
 
 /**
  * Returns an authoritative initial or refreshed workspace state directly from PostgreSQL.
@@ -118,6 +262,8 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       orgDecisions,
       orgOverrides,
       orgCampaigns,
+      orgEffortStandards,
+      orgScripts,
     ] = await Promise.all([
       db.select().from(projects).where(eq(projects.orgId, orgId)),
       db.select().from(projectMemberships).where(eq(projectMemberships.orgId, orgId)),
@@ -134,6 +280,8 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       db.select().from(approvalDecisions).where(eq(approvalDecisions.orgId, orgId)),
       db.select().from(founderOverrides).where(eq(founderOverrides.orgId, orgId)),
       db.select().from(campaigns).where(eq(campaigns.orgId, orgId)),
+      db.select().from(effortStandards).where(and(eq(effortStandards.orgId, orgId), eq(effortStandards.active, true))),
+      db.select().from(scripts).where(eq(scripts.orgId, orgId)),
     ]);
 
     // 3. Role-scoped filtering
@@ -231,6 +379,15 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
           title: i.title,
           platform: (i.platform as any) || "Instagram",
           contentType: (i.contentType as any) || "post",
+          workType: i.workType || undefined,
+          workTypeId: i.workTypeId || undefined,
+          contentPillar: i.contentPillar || undefined,
+          topic: i.topic || undefined,
+          brief: i.brief || undefined,
+          referenceLink: i.referenceLink || undefined,
+          priority: (i.priority as any) || "normal",
+          workNature: (i.workNature as any) || "planned",
+          accountOwnerId: i.accountOwnerId || undefined,
           stage: (i.stage as any) || "draft",
           scopeClassification: (i.scopeClassification as any) || "contracted",
           currentVersionNumber: i.currentVersionNumber || 1,
@@ -245,6 +402,16 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
             approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
             scheduledPublicationDate: schedDateStr,
           },
+          calculatedInternalDeadline: i.calculatedInternalDeadline ? i.calculatedInternalDeadline.toISOString() : undefined,
+          finalInternalDeadline: i.finalInternalDeadline ? i.finalInternalDeadline.toISOString() : undefined,
+          deadlineOverrideReason: i.deadlineOverrideReason || undefined,
+          standardContentSeconds: i.standardContentSeconds ?? undefined,
+          standardProductionSeconds: i.standardProductionSeconds ?? undefined,
+          revisionContentSeconds: i.revisionContentSeconds ?? undefined,
+          revisionProductionSeconds: i.revisionProductionSeconds ?? undefined,
+          finalPlannedSeconds: i.finalPlannedSeconds ?? undefined,
+          isEffortAnchor: i.isEffortAnchor ?? false,
+          completedAt: i.completedAt ? i.completedAt.toISOString() : undefined,
           scheduledPublicationDate: schedDateStr,
           publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
           liveUrl: i.liveUrl || undefined,
@@ -381,11 +548,42 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       publicationRecords: [],
       externalReviewLinks: [],
       importBatches: [],
-      scripts: [],
+      scripts: orgScripts.map((s) => ({
+        id: s.id,
+        projectId: s.projectId,
+        campaignId: s.campaignId || undefined,
+        linkedContentItemId: s.linkedContentItemId || undefined,
+        title: s.title,
+        platform: s.platform as any,
+        status: s.status as any,
+        hook: s.hook,
+        scenes: (s.scenes as any) || [],
+        cta: s.cta,
+        notes: s.notes,
+        musicTrack: s.musicTrack || undefined,
+        musicUrl: s.musicUrl || undefined,
+        createdAt: s.createdAt ? s.createdAt.toISOString() : nowIso,
+        updatedAt: s.updatedAt ? s.updatedAt.toISOString() : nowIso,
+      })),
       assets: [],
       analyticsSnapshots: [],
       auditRecords: [],
-      effortStandards: [],
+      effortStandards: orgEffortStandards.map((e) => ({
+        id: e.id,
+        orgId: e.orgId,
+        category: e.category,
+        workType: e.workType,
+        contentSeconds: e.contentSeconds,
+        productionSeconds: e.productionSeconds,
+        totalSeconds: e.totalSeconds,
+        leadTimeWorkdays: e.leadTimeWorkdays,
+        defaultRole: e.defaultRole,
+        active: e.active,
+        version: e.version,
+        effectiveFrom: e.effectiveFrom.toISOString(),
+        createdAt: e.createdAt.toISOString(),
+        updatedAt: e.updatedAt.toISOString(),
+      })),
       employeeCapacitySchedules: [],
       capacityAdjustments: [],
       projectCommitments: [],

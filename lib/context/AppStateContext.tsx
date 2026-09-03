@@ -33,7 +33,9 @@ import {
   WorkSessionAdjustment,
   ContentGroup,
   ContentPlatform,
+  ContentStage,
   ContentType,
+  ScopeClassification,
   AttendanceRecord,
   AttendanceCorrection,
   ProjectObjectiveConfig,
@@ -49,6 +51,11 @@ interface AppStateContextType {
   dismissRecoveryNotice: () => void;
   resetAllData: () => void;
   hydrateServerState: (serverState: AppState) => void;
+  hydrateLayoutContext: (context: {
+    projects: any[];
+    projectMemberships: any[];
+    unreadNotificationsCount?: number;
+  }) => void;
   // Project & Campaign Actions
   createProject: (project: Omit<Project, "id" | "createdAt">, actorUserId?: string) => Promise<{ success: boolean; project?: Project; error?: string }>;
   updateProjectObjective: (params: {
@@ -65,6 +72,10 @@ interface AppStateContextType {
     title: string;
     description?: string;
     conceptNotes?: string;
+    workType?: string;
+    workTypeId?: string;
+    scopeClassification?: ScopeClassification;
+    workNature?: "planned" | "ad_hoc";
     actorUserId: string;
     platforms: Array<{
       platform: ContentPlatform;
@@ -73,6 +84,8 @@ interface AppStateContextType {
       submissionDeadline: string;
       scheduledPublicationDate: string;
       collaboratorIds?: string[];
+      scopeClassification?: ScopeClassification;
+      adaptationSeconds?: number;
     }>;
     sharedInitialCopy?: {
       caption: string;
@@ -103,6 +116,7 @@ interface AppStateContextType {
   // Content Actions & Assignments (Phase 2)
   createContentItem: (item: Omit<ContentItem, "id" | "currentVersionNumber">, initialCopy?: any, initialAssets?: SubmissionAsset[], actorUserId?: string) => Promise<{ success: boolean; item?: ContentItem; error?: string }>;
   updateContentItem: (itemId: string, updates: Partial<ContentItem>, reason?: string) => void;
+  updateContentItemStage: (itemId: string, stage: ContentStage, actorUserId?: string, reason?: string) => Promise<{ success: boolean; error?: string }>;
   assignContentItem: (params: {
     projectId?: string;
     contentItemId: string;
@@ -111,7 +125,7 @@ interface AppStateContextType {
     dueAt?: string;
     actorUserId: string;
     reason?: string;
-  }) => { success: boolean; assignment?: ContentAssignment; error?: string };
+  }) => Promise<{ success: boolean; assignment?: ContentAssignment; error?: string }>;
   acceptContentAssignment: (assignmentId: string, actorUserId: string) => { success: boolean; error?: string };
   updateAssignmentDeadline: (params: {
     assignmentId: string;
@@ -199,10 +213,10 @@ interface AppStateContextType {
     }>;
   }) => { success: boolean; validCount: number; duplicateCount: number; batchId: string };
   // Scripts & Assets
-  createScript: (script: Omit<Script, "id" | "updatedAt">) => Script;
-  updateScript: (scriptId: string, updates: Partial<Script>) => void;
+  createScript: (script: Omit<Script, "id" | "updatedAt">) => Promise<Script>;
+  updateScript: (scriptId: string, updates: Partial<Script>) => Promise<void>;
   deleteScript: (scriptId: string) => void;
-  linkScriptToContent: (scriptId: string, contentItemId: string) => void;
+  linkScriptToContent: (scriptId: string, contentItemId: string) => Promise<void>;
   addAsset: (asset: Omit<Asset, "id" | "createdAt">) => Asset;
   deleteAsset: (assetId: string) => void;
   // Comments & Annotations
@@ -339,6 +353,61 @@ export function AppStateProvider({
 
   const hydrateServerState = (serverState: AppState) => {
     setState(serverState);
+  };
+
+  const hydrateLayoutContext = (context: {
+    projects: any[];
+    projectMemberships: any[];
+    unreadNotificationsCount?: number;
+  }) => {
+    setState((prev) => ({
+      ...prev,
+      projects: context.projects.map((p) => {
+        const existing = prev.projects.find((ep) => ep.id === p.id);
+        return (
+          existing || {
+            id: p.id,
+            name: p.name,
+            clientName: p.clientBrand || p.name,
+            clientBrand: p.clientBrand || p.name,
+            avatar: "",
+            scope: "",
+            timezone: "Asia/Kolkata",
+            status: p.status || "active",
+            targetRequirements: { posts: 0, carousels: 0, reels: 0, trialReels: 0 },
+            workflowStages: ["idea", "draft", "in_review", "approved", "published"],
+            createdAt: new Date().toISOString(),
+          }
+        );
+      }),
+      projectMemberships: context.projectMemberships.map((m) => ({
+        id: m.id,
+        projectId: m.projectId,
+        userId: m.userId,
+        membershipRole: m.membershipRole,
+        addedByUserId: "",
+        addedAt: new Date().toISOString(),
+        status: m.status || "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })),
+      notifications: Array(context.unreadNotificationsCount || 0)
+        .fill(null)
+        .map((_, i) => ({
+          id: `unread_${i}`,
+          orgId: "",
+          projectId: "",
+          recipientUserId: "",
+          type: "assignment_due" as any,
+          eventType: "assignment_due" as any,
+          entityType: "content_item",
+          entityId: "",
+          title: "Notification",
+          message: "",
+          readAt: undefined,
+          createdAt: new Date().toISOString(),
+        })),
+    }));
   };
 
   const dismissRecoveryNotice = () => setRecoveryNotice(null);
@@ -649,6 +718,12 @@ export function AppStateProvider({
         currentVersionNumber: res.item.currentVersionNumber || 1,
         activeDraftVersionId: res.version?.id,
         scopeClassification: (res.item.scopeClassification as any) || itemData.scopeClassification || "contracted",
+        workType: res.item.workType || itemData.workType,
+        workTypeId: res.item.workTypeId || itemData.workTypeId,
+        standardContentSeconds: res.item.standardContentSeconds ?? itemData.standardContentSeconds,
+        standardProductionSeconds: res.item.standardProductionSeconds ?? itemData.standardProductionSeconds,
+        finalPlannedSeconds: res.item.finalPlannedSeconds ?? itemData.finalPlannedSeconds,
+        isEffortAnchor: res.item.isEffortAnchor ?? true,
       };
 
       const audit = createAuditEntry(
@@ -714,6 +789,10 @@ export function AppStateProvider({
     title: string;
     description?: string;
     conceptNotes?: string;
+    workType?: string;
+    workTypeId?: string;
+    scopeClassification?: ScopeClassification;
+    workNature?: "planned" | "ad_hoc";
     actorUserId: string;
     platforms: Array<{
       platform: ContentPlatform;
@@ -722,6 +801,8 @@ export function AppStateProvider({
       submissionDeadline: string;
       scheduledPublicationDate: string;
       collaboratorIds?: string[];
+      scopeClassification?: ScopeClassification;
+      adaptationSeconds?: number;
     }>;
     sharedInitialCopy?: {
       caption: string;
@@ -739,12 +820,18 @@ export function AppStateProvider({
         title: params.title,
         description: params.description,
         conceptNotes: params.conceptNotes,
+        workType: params.workType,
+        workTypeId: params.workTypeId,
+        scopeClassification: params.scopeClassification,
+        workNature: params.workNature,
         platforms: params.platforms.map((p) => ({
           platform: p.platform,
           contentType: p.contentType,
           accountableOwnerId: p.accountableOwnerId,
           submissionDeadline: p.submissionDeadline,
           scheduledPublicationDate: p.scheduledPublicationDate,
+          scopeClassification: p.scopeClassification,
+          adaptationSeconds: p.adaptationSeconds,
         })),
         sharedInitialCopy: params.sharedInitialCopy,
       });
@@ -777,13 +864,21 @@ export function AppStateProvider({
           title: i.title,
           platform: i.platform,
           contentType: i.contentType,
+          workType: i.workType || params.workType,
+          workTypeId: i.workTypeId || params.workTypeId,
+          topic: i.topic,
           stage: i.stage,
-          scopeClassification: i.scopeClassification,
+          scopeClassification: i.scopeClassification || p?.scopeClassification || params.scopeClassification || "contracted",
+          workNature: i.workNature || params.workNature || "planned",
           currentVersionNumber: i.currentVersionNumber,
           activeDraftVersionId: ver?.id,
           clientVisible: i.clientVisible || false,
           accountableOwnerId: asgn?.assigneeUserId || p?.accountableOwnerId || "",
           collaboratorIds: [],
+          standardContentSeconds: i.standardContentSeconds,
+          standardProductionSeconds: i.standardProductionSeconds,
+          finalPlannedSeconds: i.finalPlannedSeconds,
+          isEffortAnchor: i.isEffortAnchor,
           deadlines: {
             submissionDeadline: p?.submissionDeadline || now,
             scheduledPublicationDate: p?.scheduledPublicationDate,
@@ -1033,7 +1128,46 @@ export function AppStateProvider({
     });
   };
 
-  const assignContentItem = (params: {
+  const updateContentItemStage = async (
+    itemId: string,
+    stage: ContentStage,
+    actorUserId?: string,
+    reason?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { updateContentItemStageAction } = await import("../actions/content");
+      const res = await updateContentItemStageAction({
+        actorUserId,
+        contentItemId: itemId,
+        stage,
+        reason,
+      });
+
+      if (!res.success) {
+        return { success: false, error: res.error || "Failed to update workflow stage in database." };
+      }
+
+      setState((prev) => ({
+        ...prev,
+        contentItems: prev.contentItems.map((i) =>
+          i.id === itemId
+            ? {
+                ...i,
+                stage,
+                publishedAt: stage === "published" ? new Date().toISOString() : i.publishedAt,
+              }
+            : i
+        ),
+      }));
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("Failed to update content item stage:", err);
+      return { success: false, error: err.message || "Failed to persist workflow stage." };
+    }
+  };
+
+  const assignContentItem = async (params: {
     projectId?: string;
     contentItemId: string;
     assigneeUserId: string;
@@ -1041,161 +1175,61 @@ export function AppStateProvider({
     dueAt?: string;
     actorUserId: string;
     reason?: string;
-  }): { success: boolean; assignment?: ContentAssignment; error?: string } => {
-    const item = state.contentItems.find((i) => i.id === params.contentItemId);
-    if (!item) return { success: false, error: "Content item not found" };
-
-    const effectiveProjectId = params.projectId || item.projectId;
-    const assignee = state.users.find((u) => u.id === params.assigneeUserId);
-    if (!assignee) return { success: false, error: "Assignee user not found" };
-    if (assignee.status === "inactive") {
-      return { success: false, error: "Cannot assign deliverable to an inactive user. Reactivate account first." };
-    }
-
-    // Check project membership
-    const isMember = state.projectMemberships.some(
-      (m) => m.projectId === effectiveProjectId && m.userId === params.assigneeUserId && m.status === "active"
-    );
-    if (!isMember) {
-      return { success: false, error: `User '${assignee.name}' is not an active member of this project.` };
-    }
-
-    const now = new Date().toISOString();
-    const effectiveDueAt = params.dueAt || item.deadlines.submissionDeadline || new Date(Date.now() + 86400000 * 3).toISOString();
-
-    // Find existing active assignment for this item
-    const existingActiveAssignment = state.contentAssignments.find(
-      (a) => a.contentItemId === item.id && (a.status === "assigned" || a.status === "accepted" || a.status === "in_progress")
-    );
-
-    let createdOrUpdatedAssignment: ContentAssignment;
-
-    if (existingActiveAssignment && existingActiveAssignment.assigneeUserId !== params.assigneeUserId) {
-      // Reassignment: Preserve old assignment in history as 'reassigned'
-      const updatedOldAssignment: ContentAssignment = {
-        ...existingActiveAssignment,
-        status: "reassigned",
-        reassignmentReason: params.reason || "Reassigned to another team member",
-        completedAt: now,
-        updatedAt: now,
-      };
-
-      createdOrUpdatedAssignment = {
-        id: "asgn_" + Math.random().toString(36).substr(2, 9),
-        projectId: effectiveProjectId,
-        contentItemId: item.id,
+  }): Promise<{ success: boolean; assignment?: ContentAssignment; error?: string }> => {
+    try {
+      const { assignContentItemAction } = await import("../actions/assignments");
+      const res = await assignContentItemAction({
+        actorUserId: params.actorUserId,
+        projectId: params.projectId,
+        contentItemId: params.contentItemId,
         assigneeUserId: params.assigneeUserId,
-        assignmentRole: params.assignmentRole || "designer",
-        status: "assigned",
-        assignedByUserId: params.actorUserId,
-        assignedAt: now,
-        initialDueAt: effectiveDueAt,
-        currentDueAt: effectiveDueAt,
-        replacedAssignmentId: existingActiveAssignment.id,
-        createdAt: now,
-        updatedAt: now,
-      };
+        assignmentRole: params.assignmentRole as any,
+        dueAt: params.dueAt,
+        reason: params.reason,
+      });
 
-      const audit = createAuditEntry(
-        effectiveProjectId,
-        params.actorUserId,
-        "reassign_content_item",
-        "content_assignment",
-        createdOrUpdatedAssignment.id,
-        `Reassigned '${item.title}' from ${existingActiveAssignment.assigneeUserId} to ${assignee.name}`,
-        params.reason
-      );
+      if (!res.success || !("assignment" in res) || !res.assignment) {
+        const errorMsg = "error" in res ? res.error : "Failed to persist assignment to database.";
+        return { success: false, error: errorMsg };
+      }
 
-      const notif: Notification = {
-        id: "notif_" + Math.random().toString(36).substr(2, 9),
-        projectId: effectiveProjectId,
-        recipientUserId: params.assigneeUserId,
-        eventType: "assignment",
-        entityType: "content_item",
-        entityId: item.id,
-        title: "Creative Reassigned to You",
-        message: `You have been assigned to '${item.title}' (${item.platform}).`,
-        createdAt: now,
+      const dbAsgn = res.assignment;
+      const canonicalAssignment: ContentAssignment = {
+        id: dbAsgn.id,
+        projectId: dbAsgn.projectId,
+        contentItemId: dbAsgn.contentItemId,
+        assigneeUserId: dbAsgn.assigneeUserId,
+        assignmentRole: (dbAsgn.assignmentRole as any) || "designer",
+        status: (dbAsgn.status as any) || "assigned",
+        assignedByUserId: dbAsgn.assignedByUserId,
+        assignedAt: dbAsgn.assignedAt ? new Date(dbAsgn.assignedAt).toISOString() : new Date().toISOString(),
+        initialDueAt: dbAsgn.initialDueAt ? new Date(dbAsgn.initialDueAt).toISOString() : new Date().toISOString(),
+        currentDueAt: dbAsgn.currentDueAt ? new Date(dbAsgn.currentDueAt).toISOString() : new Date().toISOString(),
+        createdAt: dbAsgn.createdAt ? new Date(dbAsgn.createdAt).toISOString() : new Date().toISOString(),
+        updatedAt: dbAsgn.updatedAt ? new Date(dbAsgn.updatedAt).toISOString() : new Date().toISOString(),
       };
 
       setState((prev) => ({
         ...prev,
         contentAssignments: [
-          ...prev.contentAssignments.map((a) => (a.id === existingActiveAssignment.id ? updatedOldAssignment : a)),
-          createdOrUpdatedAssignment,
+          ...prev.contentAssignments.filter((a) => a.contentItemId !== params.contentItemId || a.id === canonicalAssignment.id),
+          canonicalAssignment,
         ],
         contentItems: prev.contentItems.map((i) =>
-          i.id === item.id
+          i.id === params.contentItemId
             ? {
                 ...i,
-                accountableOwnerId: params.assigneeUserId,
-                deadlines: { ...i.deadlines, submissionDeadline: effectiveDueAt },
+                accountableOwnerId: canonicalAssignment.assigneeUserId,
               }
             : i
         ),
-        notifications: [notif, ...prev.notifications],
-        auditRecords: [audit, ...prev.auditRecords],
       }));
-    } else {
-      // New initial assignment or update existing assignee
-      createdOrUpdatedAssignment = {
-        id: existingActiveAssignment ? existingActiveAssignment.id : "asgn_" + Math.random().toString(36).substr(2, 9),
-        projectId: effectiveProjectId,
-        contentItemId: item.id,
-        assigneeUserId: params.assigneeUserId,
-        assignmentRole: params.assignmentRole || (existingActiveAssignment?.assignmentRole || "designer"),
-        status: existingActiveAssignment?.status || "assigned",
-        assignedByUserId: params.actorUserId,
-        assignedAt: existingActiveAssignment ? existingActiveAssignment.assignedAt : now,
-        initialDueAt: existingActiveAssignment ? existingActiveAssignment.initialDueAt : effectiveDueAt,
-        currentDueAt: effectiveDueAt,
-        createdAt: existingActiveAssignment ? existingActiveAssignment.createdAt : now,
-        updatedAt: now,
-      };
 
-      const audit = createAuditEntry(
-        effectiveProjectId,
-        params.actorUserId,
-        "assign_content_item",
-        "content_assignment",
-        createdOrUpdatedAssignment.id,
-        `Assigned '${item.title}' to ${assignee.name} (Role: ${createdOrUpdatedAssignment.assignmentRole})`,
-        params.reason
-      );
-
-      const notif: Notification = {
-        id: "notif_" + Math.random().toString(36).substr(2, 9),
-        projectId: effectiveProjectId,
-        recipientUserId: params.assigneeUserId,
-        eventType: "assignment",
-        entityType: "content_item",
-        entityId: item.id,
-        title: "New Creative Assigned",
-        message: `You were assigned to '${item.title}' (${item.platform}). Submission due by ${new Date(effectiveDueAt).toLocaleDateString()}`,
-        createdAt: now,
-      };
-
-      setState((prev) => {
-        const filtered = prev.contentAssignments.filter((a) => a.id !== createdOrUpdatedAssignment.id);
-        return {
-          ...prev,
-          contentAssignments: [...filtered, createdOrUpdatedAssignment],
-          contentItems: prev.contentItems.map((i) =>
-            i.id === item.id
-              ? {
-                  ...i,
-                  accountableOwnerId: params.assigneeUserId,
-                  deadlines: { ...i.deadlines, submissionDeadline: effectiveDueAt },
-                }
-              : i
-          ),
-          notifications: [notif, ...prev.notifications],
-          auditRecords: [audit, ...prev.auditRecords],
-        };
-      });
+      return { success: true, assignment: canonicalAssignment };
+    } catch (err: any) {
+      console.error("Failed to assign content item:", err);
+      return { success: false, error: err.message || "Failed to persist assignment." };
     }
-
-    return { success: true, assignment: createdOrUpdatedAssignment };
   };
 
   const acceptContentAssignment = (assignmentId: string, actorUserId: string): { success: boolean; error?: string } => {
@@ -2278,29 +2312,62 @@ export function AppStateProvider({
   };
 
   // --- SCRIPTS & ASSETS ---
-  const createScript = (scriptData: Omit<Script, "id" | "updatedAt">): Script => {
-    const newScript: Script = {
+  const createScript = async (scriptData: Omit<Script, "id" | "updatedAt">): Promise<Script> => {
+    try {
+      const { createScriptAction } = await import("../actions/scripts");
+      const res = await createScriptAction({
+        projectId: scriptData.projectId,
+        title: scriptData.title,
+        platform: scriptData.platform,
+        linkedContentItemId: scriptData.linkedContentItemId,
+        hook: scriptData.hook,
+        scenes: scriptData.scenes,
+        cta: scriptData.cta,
+        notes: scriptData.notes,
+      });
+
+      if (res.success && res.script) {
+        const createdScript = res.script;
+        setState((prev) => ({
+          ...prev,
+          scripts: [...prev.scripts.filter((s) => s.id !== createdScript.id), createdScript],
+        }));
+        return createdScript;
+      }
+    } catch (err) {
+      console.error("Failed to persist script to DB:", err);
+    }
+
+    const fallbackScript: Script = {
       ...scriptData,
       id: "scr_" + Math.random().toString(36).substr(2, 9),
       updatedAt: new Date().toISOString(),
     };
-    const audit = createAuditEntry(
-      scriptData.projectId,
-      "u_consultant",
-      "create_script",
-      "script",
-      newScript.id,
-      `Created script '${newScript.title}'`
-    );
     setState((prev) => ({
       ...prev,
-      scripts: [...prev.scripts, newScript],
-      auditRecords: [audit, ...prev.auditRecords],
+      scripts: [...prev.scripts, fallbackScript],
     }));
-    return newScript;
+    return fallbackScript;
   };
 
-  const updateScript = (scriptId: string, updates: Partial<Script>) => {
+  const updateScript = async (scriptId: string, updates: Partial<Script>): Promise<void> => {
+    try {
+      const { updateScriptAction } = await import("../actions/scripts");
+      await updateScriptAction({
+        scriptId,
+        title: updates.title,
+        platform: updates.platform,
+        linkedContentItemId: updates.linkedContentItemId,
+        hook: updates.hook,
+        scenes: updates.scenes,
+        cta: updates.cta,
+        notes: updates.notes,
+        status: updates.status,
+      });
+    } catch (err) {
+      console.error("Failed to update script in DB:", err);
+    }
+
     setState((prev) => ({
       ...prev,
       scripts: prev.scripts.map((s) =>
@@ -2329,13 +2396,8 @@ export function AppStateProvider({
     });
   };
 
-  const linkScriptToContent = (scriptId: string, contentItemId: string) => {
-    setState((prev) => ({
-      ...prev,
-      scripts: prev.scripts.map((s) =>
-        s.id === scriptId ? { ...s, linkedContentItemId: contentItemId, status: "linked" } : s
-      ),
-    }));
+  const linkScriptToContent = async (scriptId: string, contentItemId: string): Promise<void> => {
+    await updateScript(scriptId, { linkedContentItemId: contentItemId, status: "linked" });
   };
 
   const addAsset = (assetData: Omit<Asset, "id" | "createdAt">): Asset => {
@@ -3411,6 +3473,7 @@ export function AppStateProvider({
         dismissRecoveryNotice,
         resetAllData,
         hydrateServerState,
+        hydrateLayoutContext,
         createProject,
         updateProjectObjective,
         archiveProject,
@@ -3420,6 +3483,7 @@ export function AppStateProvider({
         syncContentGroupFields,
         createContentItem,
         updateContentItem,
+        updateContentItemStage,
         assignContentItem,
         acceptContentAssignment,
         updateAssignmentDeadline,

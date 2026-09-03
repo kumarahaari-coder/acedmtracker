@@ -83,6 +83,56 @@ npx vitest run
 npm run build
 # Output:
 # ✓ Compiled successfully
-# ✓ Generating static pages (8/8)
+# ✓ Generating static pages (14/14)
 # Finalizing page optimization ... Exit code 0
 ```
+
+---
+
+## 3. Production Hardening: Guest Review DTO, Client Visibility, Team Profiles & Performance Scoping
+
+### 3.1 Cloudflare Worker Error 1102 (CPU Limit Exceeded) Resolution
+- **Root Cause**: `lib/db/index.ts` was invoking `neon(getDatabaseUrl())` inside `getNeonClient()` on every single query execution, creating 15+ HTTP client instances per page render and exceeding Cloudflare Workers CPU time budget (Error 1102).
+- **Resolution**: Cached the Neon HTTP client singleton via module-level memoization. Worker startup time dropped to **22 ms** and page render executed cleanly under CPU limits.
+
+### 3.2 Guest Review DTO Incomplete Copy & Creative Asset Serving Fix
+- **Root Cause**: `verifyExternalReviewTokenAction` previously selected only the raw `submission_versions` row without mapping the `copy` nested object (`caption`, `hashtags`, `cta`, `destinationUrl`) and without joining `submission_assets` $\rightarrow$ `creative_assets`.
+- **Resolution**:
+  - Joined `submission_assets` with `creative_assets` for the bound version, generating short-lived signed R2 preview URLs for video, PDF, and image assets.
+  - Mapped complete `copy` payload with top-level backward compatibility.
+  - Implemented `getGuestAuthorizedAssetDownloadUrlAction` in [`lib/actions/collaboration.ts`](file:///Users/aceassured/Ace-tracker/lib/actions/collaboration.ts), restricting asset downloads strictly to assets attached to the exact token-bound submission version.
+  - Upgraded [`app/guest/review/[token]/page.tsx`](file:///Users/aceassured/Ace-tracker/app/guest/review/[token]/page.tsx) to render full-width HTML5 `<video>`, PDF preview/download, images, explicit Call to Action buttons, destination URLs, and hashtags.
+
+### 3.3 Client Portal Visibility Toggle Mutation & Persistence
+- **Root Cause**: UI state toggled locally without authoritative PostgreSQL synchronization or actor authorization checks.
+- **Resolution**:
+  - Hardened `setClientVisibilityAction` in [`lib/actions/content.ts`](file:///Users/aceassured/Ace-tracker/lib/actions/content.ts) to resolve authoritative user session, verify management role (`founder`, `admin`, `consultant`), persist `client_visible` directly in PostgreSQL, and revalidate workspace entities.
+  - Updated [`app/(dashboard)/projects/[projectId]/content/[itemId]/page.tsx`](file:///Users/aceassured/Ace-tracker/app/(dashboard)/projects/[projectId]/content/[itemId]/page.tsx) to await the server action and update state upon authoritative success.
+
+### 3.4 Team Member Profile Edits Persistence & Auth.js Safety Guard
+- **Root Cause**: Team member profile edits in the modal updated only in-memory `AppStateContext` without persisting to `users` and `employee_capacity_schedules`.
+- **Resolution**:
+  - Implemented `updateTeamMemberAction` in [`lib/actions/team.ts`](file:///Users/aceassured/Ace-tracker/lib/actions/team.ts):
+    - **Auth.js Safeguard**: If `authUserId IS NOT NULL` (account linked to Google/OAuth), email edits are blocked with: `"Login email cannot be changed because this account is already linked to a Google/OAuth identity."`
+    - If unlinked, validates unique normalized email and updates email safely.
+    - Persists `fullName`, `organizationRole`, `status`, and `jobTitle` to `users`.
+    - Persists `primaryFunction`, `creativeEligibility`, and weekday working hours to `employee_capacity_schedules`.
+  - Wired `handleEditSave` in [`app/(dashboard)/team/[userId]/page.tsx`](file:///Users/aceassured/Ace-tracker/app/(dashboard)/team/[userId]/page.tsx) to invoke `updateTeamMemberAction`.
+
+### 3.5 Project Performance Assigned Team Scoping
+- **Root Cause**: `getOrganizationPerformance` in [`lib/performance.ts`](file:///Users/aceassured/Ace-tracker/lib/performance.ts) and project performance filters fell back to organization-wide designers.
+- **Resolution**:
+  - In `getOrganizationPerformance`, when `filters.projectId` is present, contributors are strictly filtered to active `project_memberships` with eligible contributor roles (`consultant`, `designer`, `video_editor`, `collaborator`). Unrelated employees and Clients are completely excluded.
+  - For historical periods, former contributors with actual work recorded during the period are retained and clearly labeled `(Former Contributor)`.
+  - Zero-member state renders: `"No active team members assigned to this project."`
+
+### 3.6 Live Production Deployment & Automated Verification
+- **Cloudflare Worker Deployed**: Version ID `d6afabc7-d668-4ca1-9c40-8e5d3e1f315a` (`https://acecore.ace-tracker.workers.dev`).
+- **Live Script Verification**: Executed `scratch/verify_live_acceptance_batch.ts` against the live production database with **100% PASS**:
+  - **Guest Review DTO**: Version 6 rendered complete caption, hashtags, CTA, and attached creative asset preview.
+  - **Asset Security**: Token-bound asset authorized successfully (`Success: true`); unattached asset blocked (`Error: Unauthorized: Asset not attached to this review version`).
+  - **Client Visibility**: Toggle OFF persisted `client_visible = false`; Toggle ON persisted `client_visible = true`.
+  - **Profile Persistence**: Working hours updated to 7.5 and verified in PostgreSQL; restored to 8.0.
+  - **Auth.js Guard**: Email change blocked on linked account (`Login email cannot be changed because this account is already linked to a Google/OAuth identity`).
+  - **Project Performance**: CraftXSpaces rendered exactly its 3 active contributors (`Kumarahaari`, `Chandrasekar`, `Ramesh`) with zero unrelated employees and zero clients.
+

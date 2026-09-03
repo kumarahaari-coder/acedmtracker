@@ -103,7 +103,37 @@ export function getPeriodDateRange(
   };
 }
 
+export const ACTIVE_ASSIGNMENT_STATUSES = new Set<string>(["assigned", "accepted", "in_progress"]);
+
+export function isAssignmentActive(status: string): boolean {
+  return ACTIVE_ASSIGNMENT_STATUSES.has(status);
+}
+
 // --- 2. Lead Time & Internal Deadline Calculation ---
+
+export function resolveDeliverableLeadTimeWorkdays(
+  item: ContentItem,
+  effortStandardsList: EffortStandard[] = []
+): { leadTimeWorkdays: number; source: "snapshot" | "effort_standard" | "fallback" } {
+  // A. Persisted deliverable lead-time snapshot
+  if ((item as any).leadTimeWorkdays && (item as any).leadTimeWorkdays > 0) {
+    return { leadTimeWorkdays: (item as any).leadTimeWorkdays, source: "snapshot" };
+  }
+
+  // B/C. Effort standard referenced by deliverable
+  if (item.workTypeId || item.workType) {
+    const matched = effortStandardsList.find(
+      (e) => e.id === item.workTypeId || e.workType === item.workType
+    );
+    if (matched && matched.leadTimeWorkdays && matched.leadTimeWorkdays > 0) {
+      return { leadTimeWorkdays: matched.leadTimeWorkdays, source: "effort_standard" };
+    }
+  }
+
+  // D. Defensive fallback default (logged)
+  console.warn(`[LeadTime] Deliverable '${item.id}' (${item.title}) missing lead time snapshot/standard; fallback to 2 workdays.`);
+  return { leadTimeWorkdays: 2, source: "fallback" };
+}
 
 export function calculateInternalDeadline(postingDate: string | Date, leadTimeWorkdays: number): Date {
   const target = new Date(postingDate);
@@ -231,7 +261,8 @@ export function calculateEmployeePeriodCapacity(
 // --- 4. Task Planned & Actual Effort Resolvers ---
 
 export function getTaskPlannedHours(item: ContentItem): number {
-  if (item.finalPlannedSeconds && item.finalPlannedSeconds > 0) {
+  // A. Persisted deliverable effort snapshot (Authoritative Source of Truth)
+  if (item.finalPlannedSeconds !== undefined && item.finalPlannedSeconds !== null) {
     return item.finalPlannedSeconds / 3600;
   }
   const contentSec = item.standardContentSeconds || 0;
@@ -242,12 +273,46 @@ export function getTaskPlannedHours(item: ContentItem): number {
   if (totalSec > 0) {
     return totalSec / 3600;
   }
-  // Default fallback for legacy items
-  if (item.contentType === "post") return 1.5;
-  if (item.contentType === "carousel") return 3.0;
-  if (item.contentType === "reel") return 3.75;
-  if (item.contentType === "trial_reel") return 2.5;
-  return 2.0;
+
+  // Never silently manufacture a 2.0h workload. If snapshot is missing, return 0.
+  return 0;
+}
+
+export function getTaskPlannedHoursOrNull(item: ContentItem): number | null {
+  if (item.finalPlannedSeconds !== undefined && item.finalPlannedSeconds !== null) {
+    return item.finalPlannedSeconds / 3600;
+  }
+  const contentSec = item.standardContentSeconds || 0;
+  const prodSec = item.standardProductionSeconds || 0;
+  const totalSec = contentSec + prodSec;
+  if (totalSec > 0) {
+    return totalSec / 3600;
+  }
+  return null;
+}
+
+export function calculateItemCollectionPlannedHours(items: ContentItem[]): number {
+  const countedGroups = new Set<string>();
+  let totalHours = 0;
+  for (const item of items) {
+    if (item.contentGroupId) {
+      if (item.isEffortAnchor) {
+        totalHours += getTaskPlannedHours(item);
+        countedGroups.add(item.contentGroupId);
+      } else if (!countedGroups.has(item.contentGroupId)) {
+        totalHours += getTaskPlannedHours(item);
+        countedGroups.add(item.contentGroupId);
+      } else {
+        // Group creative effort already counted; add adaptation effort if present
+        if (item.finalPlannedSeconds && !item.isEffortAnchor) {
+          totalHours += item.finalPlannedSeconds / 3600;
+        }
+      }
+    } else {
+      totalHours += getTaskPlannedHours(item);
+    }
+  }
+  return totalHours;
 }
 
 export function getTaskActualHours(itemId: string, workSessions: WorkSession[]): number {
@@ -317,20 +382,23 @@ export function calculateEmployeeScorecard(
     adjustments
   );
 
-  // Active assignments for this user
-  const userAssignments = assignments.filter((a) => a.assigneeUserId === user.id);
+  // Active assignments for this user (assigned, accepted, in_progress)
+  const userAssignments = assignments.filter((a) => a.assigneeUserId === user.id && ACTIVE_ASSIGNMENT_STATUSES.has(a.status));
+  const userAssignmentMap = new Map(userAssignments.map((a) => [a.contentItemId, a]));
   const userItemIds = new Set(userAssignments.map((a) => a.contentItemId));
   const userItems = items.filter((i) => userItemIds.has(i.id) || i.accountableOwnerId === user.id);
 
-  // Filter tasks belonging to this period by deadline or activity
+  // Filter tasks belonging to this period by operational date precedence:
+  // assignment.currentDueAt -> item.finalInternalDeadline -> item.deadlines?.submissionDeadline -> item.submissionDeadline
   const periodTasks = userItems.filter((item) => {
-    const d = item.deadlines?.scheduledPublicationDate || item.finalInternalDeadline || item.deadlines?.submissionDeadline || item.completedAt;
+    const asgn = userAssignmentMap.get(item.id);
+    const d = asgn?.currentDueAt || asgn?.initialDueAt || item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || (item as any).submissionDeadline || item.deadlines?.scheduledPublicationDate || item.completedAt;
     const dStr = typeof d === "string" ? d.split("T")[0] : (d ? getISTDateString(new Date(d)) : "");
     return dStr >= period.startDate && dStr <= period.endDate;
   });
 
-  // Assigned planned hours in period
-  const assignedPlannedHours = periodTasks.reduce((sum, item) => sum + getTaskPlannedHours(item), 0);
+  // Assigned planned hours in period (shared creative effort counted once per ContentGroup, plus platform adaptations)
+  const assignedPlannedHours = calculateItemCollectionPlannedHours(periodTasks);
 
   // Actual hours logged in period
   const userSessionsInPeriod = workSessions.filter((s) => {
@@ -373,12 +441,20 @@ export function calculateEmployeeScorecard(
   });
   const onTimePercent = completedTasks.length > 0 ? (onTimeCount / completedTasks.length) * 100 : null;
 
-  // Efficiency: Planned / Actual on completed tasks
+  // Efficiency: Planned / Actual on completed tasks (Indexed Map to avoid repeated array scans)
+  const itemSessionSeconds = new Map<string, number>();
+  for (let idx = 0; idx < workSessions.length; idx++) {
+    const s = workSessions[idx];
+    if (s.contentItemId) {
+      itemSessionSeconds.set(s.contentItemId, (itemSessionSeconds.get(s.contentItemId) || 0) + (s.accumulatedSeconds || 0));
+    }
+  }
+
   let totalCompletedPlannedHours = 0;
   let totalCompletedActualHours = 0;
   completedTasks.forEach((item) => {
     totalCompletedPlannedHours += getTaskPlannedHours(item);
-    totalCompletedActualHours += getTaskActualHours(item.id, workSessions);
+    totalCompletedActualHours += (itemSessionSeconds.get(item.id) || 0) / 3600;
   });
   const efficiencyPercent =
     totalCompletedActualHours > 0 ? (totalCompletedPlannedHours / totalCompletedActualHours) * 100 : null;
@@ -583,8 +659,17 @@ export function calculateProjectPerformance(
     return deadline ? new Date(deadline).getTime() < nowTime : false;
   }).length;
 
-  const plannedHours = periodItems.reduce((sum, i) => sum + getTaskPlannedHours(i), 0);
-  const actualHours = periodItems.reduce((sum, i) => sum + getTaskActualHours(i.id, workSessions), 0);
+  const plannedHours = calculateItemCollectionPlannedHours(periodItems);
+  
+  // Indexed Map for actual hours per item to eliminate O(N*M) nested scans
+  const projItemSessionSeconds = new Map<string, number>();
+  for (let idx = 0; idx < workSessions.length; idx++) {
+    const s = workSessions[idx];
+    if (s.contentItemId) {
+      projItemSessionSeconds.set(s.contentItemId, (projItemSessionSeconds.get(s.contentItemId) || 0) + (s.accumulatedSeconds || 0));
+    }
+  }
+  const actualHours = periodItems.reduce((sum, i) => sum + ((projItemSessionSeconds.get(i.id) || 0) / 3600), 0);
   const varianceHours = plannedHours - actualHours;
   const adHocHours = periodItems.filter((i) => i.workNature === "ad_hoc").reduce((sum, i) => sum + getTaskPlannedHours(i), 0);
   const goodwillHours = periodItems.filter((i) => i.scopeClassification === "goodwill").reduce((sum, i) => sum + getTaskPlannedHours(i), 0);

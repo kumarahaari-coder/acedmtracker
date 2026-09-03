@@ -46,6 +46,13 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { generateExternalReviewTokenAction } from "@/lib/actions/collaboration";
+import {
+  saveDraftVersionAction,
+  submitVersionAction,
+  createNewVersionDraftAction,
+  toggleClientVisibilityAction,
+} from "@/lib/actions/content";
 import {
   ApprovalComponentType,
   ComponentDecision,
@@ -338,51 +345,81 @@ export default function ContentItemWorkspacePage() {
     respondToChangeRequest(crId, text.trim());
   };
 
-  const handleResubmit = () => {
+  const handleResubmit = async () => {
     if (!canResubmit) {
       alert("Cannot resubmit while open change requests remain without a designer response.");
       return;
     }
 
     try {
-      // Create draft version, update it, and resubmit
-      const draft = createDraftVersion(item.id, currentVersion.id);
-      updateDraftVersion(draft.id, {
-        copy: {
+      // 1. Check if current version is already a draft; if not, create a new version draft for revision
+      let draftVersionId = currentVersion.id;
+      if (!currentVersion.isDraft) {
+        const createRes = await createNewVersionDraftAction({
+          actorUserId: activeUserId,
+          contentItemId: item.id,
+          baseVersionId: currentVersion.id,
+        });
+        if (!createRes.success || !(createRes as any).version) {
+          alert(createRes.error || "Failed to create new revision version draft.");
+          return;
+        }
+        draftVersionId = (createRes as any).version.id;
+      }
+
+      // 2. Save draft copy details in PostgreSQL
+      const saveRes = await saveDraftVersionAction({
+        actorUserId: activeUserId,
+        submissionVersionId: draftVersionId,
+        updates: {
           caption: draftCaption,
           hashtags: draftHashtags.split(" ").filter((h) => h.trim().length > 0),
           cta: draftCTA,
         },
       });
 
-      const res = resubmitItemVersion({
-        contentItemId: item.id,
-        draftVersionId: draft.id,
+      if (!saveRes.success) {
+        alert(saveRes.error || "Failed to save draft version copy.");
+        return;
+      }
+
+      // 3. Freeze version and submit for review in PostgreSQL
+      const submitRes = await submitVersionAction({
         actorUserId: activeUserId,
+        submissionVersionId: draftVersionId,
       });
 
-      if (res.success) {
-        setSelectedVersionId(draft.id);
+      if (submitRes.success) {
+        setSelectedVersionId(draftVersionId);
         setIsEditingDraft(false);
       } else {
-        alert(res.error || "Failed to resubmit.");
+        alert(submitRes.error || "Failed to submit version for review.");
       }
     } catch (e: any) {
       alert(e.message || "Failed to resubmit.");
     }
   };
 
-  const handleGenerateShareLink = () => {
-    const link = generateExternalReviewLink({
-      projectId,
+  const handleGenerateShareLink = async () => {
+    if (!currentVersion?.id) {
+      alert("No valid submitted version available to generate review link.");
+      return;
+    }
+
+    const res = await generateExternalReviewTokenAction({
+      actorUserId: activeUserId,
       contentItemId: item.id,
       submissionVersionId: currentVersion.id,
-      createdByUserId: activeUserId,
       allowDownload,
       expiresInDays: 7,
     });
-    const url = `${window.location.origin}/guest/review/${link.demoToken}`;
-    setGeneratedLinkUrl(url);
+
+    if (res.success && res.reviewUrl) {
+      const url = `${window.location.origin}${res.reviewUrl}`;
+      setGeneratedLinkUrl(url);
+    } else {
+      alert(res.error || "Failed to generate external review link.");
+    }
   };
 
   const handleCreativeFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -447,7 +484,7 @@ export default function ContentItemWorkspacePage() {
     setNewCommentBody("");
   };
 
-  const linkedScript = state.scripts.find((s) => s.projectId === projectId);
+  const linkedScript = state.scripts.find((s) => s.linkedContentItemId === item.id);
 
   const projectMembers = state.projectMemberships
     .filter((m) => m.projectId === projectId)
@@ -499,7 +536,7 @@ export default function ContentItemWorkspacePage() {
               }}
               className="flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[13px] font-medium text-[#1d1d1f] transition"
             >
-              <Share2 className="h-3.5 w-3.5" /> Client Preview Link
+              <Share2 className="h-3.5 w-3.5" /> Client Preview Link (V{currentVersion?.versionNumber})
             </button>
           )}
 
@@ -516,8 +553,8 @@ export default function ContentItemWorkspacePage() {
               Founder Override
             </button>
           ) : (
-            <span className="status-review rounded-full px-3.5 py-1.5 text-[13px] font-medium">
-              In Review ({approvalSummary.approvedCount}/3 Approved)
+            <span className="status-badge status-in-review rounded-full px-3.5 py-1.5 text-[13px] font-semibold flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5" /> Pending Review
             </span>
           )}
         </div>
@@ -646,14 +683,23 @@ export default function ContentItemWorkspacePage() {
                   <span className="text-[13px] font-semibold text-[#1d1d1f]">Client Portal Visibility</span>
                 </div>
                 <button
-                  onClick={() =>
-                    setClientVisibility({
-                      contentItemId: item.id,
-                      clientVisible: !item.clientVisible,
+                  onClick={async () => {
+                    const newVisibility = !item.clientVisible;
+                    const res = await toggleClientVisibilityAction({
                       actorUserId: activeUserId,
-                      reason: `Toggled client visibility to ${!item.clientVisible ? "ON" : "OFF"}`,
-                    })
-                  }
+                      contentItemId: item.id,
+                      clientVisible: newVisibility,
+                    });
+                    if (res.success) {
+                      setClientVisibility({
+                        contentItemId: item.id,
+                        clientVisible: newVisibility,
+                        actorUserId: activeUserId,
+                      });
+                    } else {
+                      alert(res.error || "Failed to update client visibility.");
+                    }
+                  }}
                   className={`px-3 py-1 rounded-full text-[11px] font-bold transition ${
                     item.clientVisible
                       ? "bg-[#eaf6ed] text-[#1f6f32] border border-[#ceead6]"
@@ -1030,18 +1076,34 @@ export default function ContentItemWorkspacePage() {
 
           {/* Linked Script */}
           <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-2">
-            <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
-              <FileCode2 className="h-4 w-4 text-[#0071e3]" /> Linked Script
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-[#1d1d1f] flex items-center gap-1.5">
+                <FileCode2 className="h-4 w-4 text-[#0071e3]" /> Linked Script
+              </h3>
+            </div>
             {linkedScript ? (
-              <Link
-                href={`/projects/${projectId}/scripts`}
-                className="block text-[13px] text-[#0066cc] hover:underline font-medium"
-              >
-                View Structured Video Script →
-              </Link>
+              <div className="space-y-1.5 text-xs">
+                <div className="font-semibold text-[#1d1d1f]">{linkedScript.title}</div>
+                {linkedScript.hook && (
+                  <p className="text-[11px] text-[#86868b] line-clamp-2 italic">"{linkedScript.hook}"</p>
+                )}
+                <Link
+                  href={`/projects/${projectId}/scripts?scriptId=${linkedScript.id}`}
+                  className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#0071e3] hover:underline pt-1"
+                >
+                  View / Edit Script →
+                </Link>
+              </div>
             ) : (
-              <span className="text-[12px] text-[#86868b]">No script attached.</span>
+              <div className="space-y-1.5">
+                <span className="text-[12px] text-[#86868b] block">No script attached to this deliverable.</span>
+                <Link
+                  href={`/projects/${projectId}/scripts?linkDeliverableId=${item.id}`}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-[#0071e3] hover:underline"
+                >
+                  + Create / Link Script in Library
+                </Link>
+              </div>
             )}
           </div>
         </div>
@@ -1523,7 +1585,7 @@ export default function ContentItemWorkspacePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
-              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Generate Guest Review Link</h3>
+              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Generate Guest Review Link — Version {currentVersion?.versionNumber}</h3>
               <button onClick={() => setIsShareModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
                 <X className="h-4 w-4" />
               </button>
@@ -1531,7 +1593,7 @@ export default function ContentItemWorkspacePage() {
 
             <div className="space-y-3 text-[13px] text-[#6e6e73]">
               <p>
-                Creates an isolated client preview token. The guest portal excludes internal comments, prior drafts, other projects, and commercial revenue.
+                Creates an isolated client preview token bound to <strong>Version {currentVersion?.versionNumber}</strong>. The guest portal excludes internal comments, prior drafts, other projects, and commercial revenue.
               </p>
 
               <label className="flex items-center gap-2 text-[#1d1d1f]">
@@ -1549,7 +1611,7 @@ export default function ContentItemWorkspacePage() {
                   onClick={handleGenerateShareLink}
                   className="w-full rounded-full bg-[#0071e3] hover:bg-[#0077ed] py-2 text-[14px] font-medium text-white shadow-sm"
                 >
-                  Generate Shareable Link
+                  Generate Review Link — Version {currentVersion?.versionNumber}
                 </button>
               ) : (
                 <div className="space-y-2 pt-2">
@@ -1804,13 +1866,13 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (!reassignUserId) {
                   alert("Please select a team member.");
                   return;
                 }
-                const res = assignContentItem({
+                const res = await assignContentItem({
                   projectId,
                   contentItemId: item.id,
                   assigneeUserId: reassignUserId,

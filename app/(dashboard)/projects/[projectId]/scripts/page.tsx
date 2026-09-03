@@ -155,17 +155,17 @@ export default function ScriptsEditorPage() {
   };
 
   // Save changes to selected script
-  const handleSaveChanges = () => {
+  const handleSaveChanges = async () => {
     if (!selectedScript) return;
     if (!editTitle.trim()) {
       alert("Please provide a title for the script.");
       return;
     }
 
-    updateScript(selectedScript.id, {
+    await updateScript(selectedScript.id, {
       title: editTitle.trim(),
       platform: editPlatform,
-      status: editStatus,
+      status: editLinkedItemId ? "linked" : editStatus,
       hook: editHook.trim(),
       cta: editCTA.trim(),
       notes: editNotes.trim(),
@@ -213,18 +213,21 @@ export default function ScriptsEditorPage() {
     });
   };
 
+  const [newLinkedItemId, setNewLinkedItemId] = useState<string>("");
+
   // Create new script handler
-  const handleCreateScript = () => {
+  const handleCreateScript = async () => {
     if (!newTitle.trim() || !newHook.trim()) {
       alert("Please provide a title and opening hook.");
       return;
     }
 
-    const created = createScript({
+    const created = await createScript({
       projectId,
       title: newTitle.trim(),
       platform: newPlatform,
-      status: "ready",
+      linkedContentItemId: newLinkedItemId || undefined,
+      status: newLinkedItemId ? "linked" : "ready",
       hook: newHook.trim(),
       cta: newCTA.trim(),
       scenes: newScenes.length > 0 ? newScenes : [
@@ -242,6 +245,7 @@ export default function ScriptsEditorPage() {
     // Reset create fields
     setNewTitle("");
     setNewPlatform("Instagram");
+    setNewLinkedItemId("");
     setNewHook("");
     setNewCTA("");
     setNewNotes("");
@@ -574,6 +578,22 @@ export default function ScriptsEditorPage() {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-[#1d1d1f] font-semibold mb-1">Linked Deliverable</label>
+                    <select
+                      value={editLinkedItemId}
+                      onChange={(e) => setEditLinkedItemId(e.target.value)}
+                      className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                    >
+                      <option value="">-- Unlinked / Standalone Script --</option>
+                      {projectContentItems.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.title} ({item.platform} • {(item as any).workType || item.contentType} • {item.deadlines?.submissionDeadline ? new Date(item.deadlines.submissionDeadline).toLocaleDateString() : "Unscheduled"})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   {/* Hook */}
                   <div>
                     <label className="block text-[#1d1d1f] font-semibold mb-1">
@@ -884,6 +904,22 @@ export default function ScriptsEditorPage() {
                     <option value="Email">Email</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[#1d1d1f] font-semibold mb-1">Linked Deliverable (Optional)</label>
+                <select
+                  value={newLinkedItemId}
+                  onChange={(e) => setNewLinkedItemId(e.target.value)}
+                  className="w-full rounded-xl border border-black/[0.12] p-2.5 text-[#1d1d1f] bg-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]"
+                >
+                  <option value="">-- Unlinked / Standalone Script --</option>
+                  {projectContentItems.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title} ({item.platform} • {(item as any).workType || item.contentType} • {item.deadlines?.submissionDeadline ? new Date(item.deadlines.submissionDeadline).toLocaleDateString() : "Unscheduled"})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>

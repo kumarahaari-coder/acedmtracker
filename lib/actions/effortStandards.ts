@@ -6,6 +6,7 @@ import { getAuthoritativeUser } from "../auth/session";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { EffortStandard } from "../types";
 import { invalidateWorkspaceEntities } from "./revalidation";
+import { invalidateCachedEffortStandards } from "../cache/effortStandardsCache";
 
 export async function getEffortStandardsAction(): Promise<{
   success: boolean;
@@ -81,6 +82,7 @@ export async function createEffortStandardAction(params: {
       .returning();
 
     await invalidateWorkspaceEntities({ orgId: authUser.orgId, tags: ["performance", "effort_standards"] });
+    invalidateCachedEffortStandards(authUser.orgId);
 
     return {
       success: true,
@@ -181,6 +183,7 @@ export async function updateEffortStandardAction(params: {
     }
 
     await invalidateWorkspaceEntities({ orgId: authUser.orgId, tags: ["performance", "effort_standards"] });
+    invalidateCachedEffortStandards(authUser.orgId);
 
     return {
       success: true,

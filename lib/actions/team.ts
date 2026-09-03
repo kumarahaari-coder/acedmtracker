@@ -13,6 +13,7 @@ import {
   founderOverrides,
   changeRequests,
   comments,
+  employeeCapacitySchedules,
 } from "../db/schema";
 import { eq, and, ne, or, sql } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
@@ -364,5 +365,250 @@ export async function permanentlyDeleteTeamMemberAction(params: {
   } catch (err: any) {
     console.error("Failed to permanently delete team member:", err);
     return { success: false, error: err.message || "Failed to permanently delete team member." };
+  }
+}
+
+/**
+ * Role-Scoped Team Directory Action
+ * Designers receive ONLY their own profile and activity.
+ * Founders, Admins, Consultants receive full authorized organization team members.
+ * Clients receive 403 Forbidden.
+ */
+export async function getAuthorizedTeamDirectoryAction(actorUserId?: string): Promise<{
+  success: boolean;
+  members: any[];
+  error?: string;
+}> {
+  try {
+    const authUser = await getAuthoritativeUser(actorUserId);
+    if (!authUser) return { success: false, members: [], error: "Unauthorized" };
+
+    const isDesigner = authUser.organizationRole === "designer";
+    const isClient = authUser.organizationRole === "client";
+
+    if (isClient) {
+      return { success: false, members: [], error: "Forbidden: Clients do not have team directory access." };
+    }
+
+    if (isDesigner) {
+      // Designers ONLY get their own user record / profile / workload info
+      const [self] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.id, authUser.id), eq(users.orgId, authUser.orgId)))
+        .limit(1);
+
+      if (!self) return { success: false, members: [], error: "User profile not found." };
+
+      return {
+        success: true,
+        members: [
+          {
+            id: self.id,
+            fullName: self.fullName,
+            email: self.email,
+            organizationRole: self.organizationRole,
+            status: self.status,
+            avatarUrl: self.avatarUrl,
+            createdAt: self.createdAt ? self.createdAt.toISOString() : new Date().toISOString(),
+          },
+        ],
+      };
+    }
+
+    // Founders, Admins, Consultants get organization team members
+    const allOrgMembers = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.orgId, authUser.orgId), ne(users.status, "deleted")));
+
+    const mapped = allOrgMembers.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+      organizationRole: u.organizationRole,
+      status: u.status,
+      avatarUrl: u.avatarUrl,
+      createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString(),
+    }));
+
+    return { success: true, members: mapped };
+  } catch (err: any) {
+    return { success: false, members: [], error: err.message };
+  }
+}
+
+/**
+ * 5. Update Team Member Profile Action (Authoritative PostgreSQL Persistence)
+ * Safely updates profile fields across users and employee_capacity_schedules.
+ * Blocks login email edits for accounts already linked to Auth.js/Google.
+ */
+export async function updateTeamMemberAction(params: {
+  actorUserId?: string;
+  targetUserId: string;
+  fullName?: string;
+  email?: string;
+  organizationRole?: OrganizationRole;
+  status?: UserStatus;
+  primaryFunction?: string;
+  creativeEligibility?: "primary" | "backup" | "not_eligible";
+  workingHoursPerDay?: number;
+}): Promise<{
+  success: boolean;
+  user?: {
+    id: string;
+    fullName: string;
+    email: string;
+    organizationRole: string;
+    status: string;
+  };
+  error?: string;
+}> {
+  try {
+    const authUser = await getAuthoritativeUser(params.actorUserId);
+    if (!authUser) return { success: false, error: "Unauthorized." };
+
+    if (authUser.organizationRole !== "founder" && authUser.organizationRole !== "admin") {
+      return { success: false, error: "Unauthorized: Only founders and admins can update team member profiles." };
+    }
+
+    const resolvedTargetId = await resolveUserId(params.targetUserId);
+    if (!resolvedTargetId) return { success: false, error: "Team member not found." };
+
+    const [targetUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, resolvedTargetId))
+      .limit(1);
+
+    if (!targetUser) return { success: false, error: "Team member not found." };
+    if (targetUser.orgId !== authUser.orgId) return { success: false, error: "Unauthorized." };
+
+    const userUpdates: Record<string, any> = { updatedAt: sql`NOW()` };
+
+    if (params.fullName && params.fullName.trim()) {
+      userUpdates.fullName = params.fullName.trim();
+    }
+
+    if (params.organizationRole) {
+      userUpdates.organizationRole = params.organizationRole;
+    }
+
+    if (params.status) {
+      userUpdates.status = params.status;
+    }
+
+    // Email / Auth.js Safeguard:
+    // If target user already has a linked Auth.js OAuth identity (authUserId IS NOT NULL),
+    // email changes are blocked to prevent breaking authentication.
+    if (params.email && params.email.trim().toLowerCase() !== targetUser.normalizedEmail) {
+      if (targetUser.authUserId) {
+        return {
+          success: false,
+          error: "Login email cannot be changed because this account is already linked to a Google/OAuth identity.",
+        };
+      }
+
+      const cleanEmail = params.email.trim();
+      const normalizedEmail = cleanEmail.toLowerCase();
+
+      // Validate email uniqueness across the platform
+      const [existingUser] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.normalizedEmail, normalizedEmail), ne(users.id, targetUser.id)))
+        .limit(1);
+
+      if (existingUser) {
+        return { success: false, error: "A team member with this email address already exists." };
+      }
+
+      userUpdates.email = cleanEmail;
+      userUpdates.normalizedEmail = normalizedEmail;
+    }
+
+    const [updatedUser] = await db
+      .update(users)
+      .set(userUpdates)
+      .where(eq(users.id, targetUser.id))
+      .returning();
+
+    // Capacity schedule fields: primaryFunction, creativeEligibility, workingHoursPerDay
+    const hasCapacityUpdates =
+      params.primaryFunction !== undefined ||
+      params.creativeEligibility !== undefined ||
+      params.workingHoursPerDay !== undefined;
+
+    if (hasCapacityUpdates) {
+      const [currentSchedule] = await db
+        .select()
+        .from(employeeCapacitySchedules)
+        .where(
+          and(
+            eq(employeeCapacitySchedules.userId, targetUser.id),
+            sql`${employeeCapacitySchedules.effectiveTo} IS NULL`
+          )
+        )
+        .limit(1);
+
+      const hoursStr =
+        params.workingHoursPerDay !== undefined
+          ? Number(params.workingHoursPerDay).toFixed(2)
+          : undefined;
+
+      if (currentSchedule) {
+        const scheduleUpdates: Record<string, any> = {};
+        if (params.primaryFunction) scheduleUpdates.primaryFunction = params.primaryFunction;
+        if (params.creativeEligibility) scheduleUpdates.creativeEligibility = params.creativeEligibility;
+        if (hoursStr) {
+          scheduleUpdates.mondayHours = hoursStr;
+          scheduleUpdates.tuesdayHours = hoursStr;
+          scheduleUpdates.wednesdayHours = hoursStr;
+          scheduleUpdates.thursdayHours = hoursStr;
+          scheduleUpdates.fridayHours = hoursStr;
+        }
+
+        if (Object.keys(scheduleUpdates).length > 0) {
+          await db
+            .update(employeeCapacitySchedules)
+            .set(scheduleUpdates)
+            .where(eq(employeeCapacitySchedules.id, currentSchedule.id));
+        }
+      } else {
+        // Insert new active schedule
+        await db.insert(employeeCapacitySchedules).values({
+          orgId: targetUser.orgId,
+          userId: targetUser.id,
+          effectiveFrom: sql`CURRENT_DATE`,
+          mondayHours: hoursStr || "8.00",
+          tuesdayHours: hoursStr || "8.00",
+          wednesdayHours: hoursStr || "8.00",
+          thursdayHours: hoursStr || "8.00",
+          fridayHours: hoursStr || "8.00",
+          saturdayHours: "0.00",
+          sundayHours: "0.00",
+          primaryFunction: params.primaryFunction || "Creative",
+          creativeEligibility: params.creativeEligibility || "primary",
+        });
+      }
+    }
+
+    await invalidateWorkspaceEntities({
+      userId: authUser.id,
+      orgId: authUser.orgId,
+    });
+
+    return {
+      success: true,
+      user: {
+        id: updatedUser.id,
+        fullName: updatedUser.fullName,
+        email: updatedUser.email,
+        organizationRole: updatedUser.organizationRole,
+        status: updatedUser.status,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
 }

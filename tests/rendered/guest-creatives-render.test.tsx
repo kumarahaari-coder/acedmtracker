@@ -7,9 +7,36 @@ import { AppStateProvider } from "@/lib/context/AppStateContext";
 import { RoleProvider } from "@/lib/context/RoleContext";
 import GuestReviewPage from "@/app/guest/review/[token]/page";
 
-// Mock useParams for Next.js
+// Mock useParams & collaboration action for Next.js
 vi.mock("next/navigation", () => ({
   useParams: () => ({ token: "token_demo_acme_guest_7721" }),
+}));
+
+vi.mock("@/lib/actions/collaboration", () => ({
+  verifyExternalReviewTokenAction: vi.fn(async () => ({
+    success: true,
+    contentItem: {
+      id: "item-1",
+      title: "Acme Healthcare Campaign",
+      platform: "Instagram",
+      contentType: "Carousel",
+      scheduledPublicationDate: "2026-09-10T10:00:00Z",
+    },
+    submissionVersion: {
+      versionNumber: 1,
+      caption: "Acme Healthcare Pvt Ltd - 5 Critical Touchpoints",
+      cta: "Book Consultation Today",
+      hashtags: ["acme", "healthcare"],
+      creativeAssets: [
+        { assetId: "a1", filename: "acme_hero_carousel_slide1.png", previewUrl: "data:image/svg+xml;utf8,<svg></svg>" },
+        { assetId: "a2", filename: "acme_carousel_slide2.png", previewUrl: "data:image/svg+xml;utf8,<svg></svg>" },
+      ],
+    },
+    tokenRecord: { expiresAt: null },
+    projectName: "Acme Healthcare Pvt Ltd",
+    comments: [],
+  })),
+  postExternalReviewCommentAction: vi.fn(async () => ({ success: true })),
 }));
 
 describe("Rendered Guest Creatives & SafeImage Resilience", () => {
@@ -73,7 +100,7 @@ describe("Rendered Guest Creatives & SafeImage Resilience", () => {
     expect(screen.getByText("prehydration_failure.png")).toBeDefined();
   });
 
-  it("renders GuestReviewPage and displays all seeded creative assets cleanly", () => {
+  it("renders GuestReviewPage and displays all seeded creative assets cleanly", async () => {
     const { container } = render(
       <AppStateProvider>
         <RoleProvider>
@@ -83,8 +110,8 @@ describe("Rendered Guest Creatives & SafeImage Resilience", () => {
     );
 
     // Verify client portal header
+    await screen.findByText("Client Preview Mode");
     expect(screen.getByText("Acme Healthcare Pvt Ltd")).toBeDefined();
-    expect(screen.getByText("Client Preview Mode")).toBeDefined();
 
     // Verify both creative slide assets are rendered
     expect(screen.getByText("acme_hero_carousel_slide1.png")).toBeDefined();

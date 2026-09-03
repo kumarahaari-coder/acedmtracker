@@ -11,18 +11,27 @@ export function getDatabaseUrl(): string {
   return url;
 }
 
+let cachedNeonClient: ReturnType<typeof neon> | null = null;
+let cachedUrl = "";
+
+function getNeonClient() {
+  const url = getDatabaseUrl();
+  if (!cachedNeonClient || cachedUrl !== url) {
+    cachedNeonClient = neon(url);
+    cachedUrl = url;
+  }
+  return cachedNeonClient;
+}
+
 // 1. Dynamic Stateless HTTP driver with per-query URL resolution for edge/worker resilience
 const dynamicSql: any = (strings: any, ...values: any[]) => {
-  const client = neon(getDatabaseUrl());
-  return client(strings, ...values);
+  return getNeonClient()(strings, ...values);
 };
 dynamicSql.query = (queryText: string, params: any[], options: any) => {
-  const client = neon(getDatabaseUrl());
-  return client.query(queryText, params, options);
+  return getNeonClient().query(queryText, params, options);
 };
 dynamicSql.transaction = (...args: any[]) => {
-  const client = neon(getDatabaseUrl());
-  return (client.transaction as any)(...args);
+  return (getNeonClient().transaction as any)(...args);
 };
 
 export const db = drizzleHttp(dynamicSql, { schema });

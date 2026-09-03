@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:worker": "npx @opennextjs/cloudflare build",
+    "deploy": "npx @opennextjs/cloudflare build && npx wrangler deploy",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run"

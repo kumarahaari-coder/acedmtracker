@@ -9,16 +9,20 @@ import {
   assignmentDeadlineHistory,
   auditRecords,
   projects,
+  projectMemberships,
+  users,
   ContentPlatform,
   ContentType,
   ScopeClassification,
 } from "../db/schema";
 import { effortStandards } from "../db/schema/operational";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveProjectId, resolveContentItemId, resolveUserId } from "../compat/resolver";
-import { calculateInternalDeadline } from "../calculations/operationalEngine";
+import { calculateInternalDeadline, resolveDeliverableLeadTimeWorkdays } from "../calculations/operationalEngine";
+import { ContentStage } from "../types";
 import { invalidateWorkspaceEntities } from "./revalidation";
+import { getCachedEffortStandards } from "../cache/effortStandardsCache";
 
 // Helper for computing fingerprints
 function computeFingerprints(copy: { caption: string; hashtags: string[]; cta: string; destinationUrl?: string }, scheduledDate?: string) {
@@ -106,12 +110,48 @@ export async function createContentItemAction(params: {
     resolvedAssigneeId = (await resolveUserId(effectiveAssigneeId)) || undefined;
   }
 
-  // Standard Effort and Lead Time Calculation
-  let standardContentSeconds = 0;
-  let standardProductionSeconds = 0;
-  let leadTimeWorkdays = 2;
-  let matchedWorkType = workType;
+  // Server-Side Project Membership & Role Enforcement for Assignee
+  if (resolvedAssigneeId) {
+    const [membership] = await db
+      .select()
+      .from(projectMemberships)
+      .where(
+        and(
+          eq(projectMemberships.projectId, resolvedProjId),
+          eq(projectMemberships.userId, resolvedAssigneeId),
+          eq(projectMemberships.status, "active")
+        )
+      )
+      .limit(1);
 
+    if (!membership) {
+      return { success: false, error: "Assignee is not an active member of this project." };
+    }
+
+    const eligibleRoles = ["designer", "video_editor", "collaborator", "consultant"];
+    if (!eligibleRoles.includes(membership.membershipRole)) {
+      return { success: false, error: `Assignee role (${membership.membershipRole}) is not eligible for production ownership.` };
+    }
+
+    const [userRow] = await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.id, resolvedAssigneeId),
+          eq(users.orgId, actor.orgId),
+          eq(users.status, "active")
+        )
+      )
+      .limit(1);
+
+    if (!userRow || userRow.organizationRole === "client") {
+      return { success: false, error: "Assignee is not an active internal user." };
+    }
+  }
+
+  // Standard Effort Resolution from Master Standards (Cached)
+  let matchedWorkType = workType;
   if (!matchedWorkType) {
     if (contentType === "post") matchedWorkType = "Simple Static Poster";
     else if (contentType === "carousel") matchedWorkType = "Simple Carousel";
@@ -120,35 +160,21 @@ export async function createContentItemAction(params: {
     else matchedWorkType = "Simple Static Poster";
   }
 
-  const [standard] = await db
-    .select()
-    .from(effortStandards)
-    .where(
-      and(
-        eq(effortStandards.orgId, actor.orgId),
-        eq(effortStandards.workType, matchedWorkType),
-        eq(effortStandards.active, true)
-      )
-    )
-    .limit(1);
+  const allStandards = await getCachedEffortStandards(actor.orgId);
+  let standard = workTypeId ? allStandards.find((s) => s.id === workTypeId) || null : null;
 
-  if (standard) {
-    standardContentSeconds = standard.contentSeconds;
-    standardProductionSeconds = standard.productionSeconds;
-    leadTimeWorkdays = standard.leadTimeWorkdays;
-  } else {
-    if (matchedWorkType.includes("Reel")) {
-      standardContentSeconds = 2700;
-      standardProductionSeconds = 10800;
-    } else if (matchedWorkType.includes("Carousel")) {
-      standardContentSeconds = 2700;
-      standardProductionSeconds = 9000;
-    } else {
-      standardContentSeconds = 1800;
-      standardProductionSeconds = 3600;
-    }
+  if (!standard && matchedWorkType) {
+    standard =
+      allStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) || null;
   }
 
+  if (!standard) {
+    return { success: false, error: `No active Effort Standard found for work type '${matchedWorkType}'. Data integrity requires a valid standard.` };
+  }
+
+  const standardContentSeconds = standard.contentSeconds;
+  const standardProductionSeconds = standard.productionSeconds;
+  const leadTimeWorkdays = standard.leadTimeWorkdays;
   const contentAdjSeconds = Math.round((contentEffortAdjustmentHours || 0) * 3600);
   const prodAdjSeconds = Math.round((productionEffortAdjustmentHours || 0) * 3600);
   const finalPlannedSeconds = standardContentSeconds + standardProductionSeconds + contentAdjSeconds + prodAdjSeconds;
@@ -169,7 +195,7 @@ export async function createContentItemAction(params: {
 
   try {
     const result = await runTransaction(async (tx) => {
-      // 1. Insert ContentItem
+      // 1. Insert ContentItem with full operational & effort snapshot
       const [item] = await tx
         .insert(contentItems)
         .values({
@@ -179,11 +205,28 @@ export async function createContentItemAction(params: {
           title,
           platform,
           contentType,
+          workType: standard.workType,
+          workTypeId: standard.id,
+          campaignId: campaignId || null,
+          contentPillar: contentPillar || null,
+          topic: topic || title,
+          brief: brief || null,
+          referenceLink: referenceLink || null,
+          priority: priority || "normal",
+          workNature: workNature || "planned",
+          accountOwnerId: accountOwnerId || null,
           stage: "draft",
           scopeClassification: scopeClassification || "contracted",
           clientVisible: false,
           scheduledPublicationDate: schedDate,
           submissionDeadline: subDeadline,
+          calculatedInternalDeadline: calculatedDeadline,
+          finalInternalDeadline: finalDeadline,
+          deadlineOverrideReason: finalInternalDeadlineOverride ? (deadlineOverrideReason || "Manual deadline override") : null,
+          standardContentSeconds,
+          standardProductionSeconds,
+          finalPlannedSeconds,
+          isEffortAnchor: true,
           currentVersionNumber: 1,
         })
         .returning();
@@ -243,7 +286,7 @@ export async function createContentItemAction(params: {
           action: "create_content_item",
           entityType: "content_item",
           entityId: item.id,
-          summary: `Created content item '${title}' (${platform} • ${contentType})`,
+          summary: `Created content item '${title}' (${platform} • ${contentType} • ${standard.workType}) with planned effort ${(finalPlannedSeconds / 3600).toFixed(2)}h`,
           reason: "Created in workspace",
         });
 
@@ -266,6 +309,11 @@ export async function createContentItemAction(params: {
 
 /**
  * 2. Create Multi-Platform Content Group + N Content Items + N V1 Drafts (Atomic Transaction)
+ * Enforces:
+ * - ContentGroup shared creative production effort = Effort Standard (e.g. 3.75h)
+ * - Explicit isEffortAnchor = true on primary creative item, false on sibling distributions
+ * - Sibling items record adaptation effort (default 0s)
+ * - Assignee must be active member of project with eligible operational role
  */
 export async function createContentGroupAction(params: {
   actorUserId: string;
@@ -273,6 +321,10 @@ export async function createContentGroupAction(params: {
   title: string;
   description?: string;
   conceptNotes?: string;
+  workType?: string;
+  workTypeId?: string;
+  scopeClassification?: ScopeClassification;
+  workNature?: "planned" | "ad_hoc";
   platforms: Array<{
     platform: ContentPlatform;
     contentType: ContentType;
@@ -280,10 +332,11 @@ export async function createContentGroupAction(params: {
     submissionDeadline?: string;
     accountableOwnerId?: string;
     scopeClassification?: ScopeClassification;
+    adaptationSeconds?: number;
   }>;
   sharedInitialCopy?: { caption: string; hashtags: string[]; cta: string; destinationUrl?: string };
 }) {
-  const { actorUserId, projectId, title, description, conceptNotes, platforms, sharedInitialCopy } = params;
+  const { actorUserId, projectId, title, description, conceptNotes, workType, workTypeId, scopeClassification, workNature, platforms, sharedInitialCopy } = params;
 
   if (!platforms || platforms.length === 0) {
     return { success: false, error: "At least one platform item must be specified." };
@@ -299,6 +352,64 @@ export async function createContentGroupAction(params: {
 
   const actor = await getAuthoritativeUser(actorUserId);
   if (!actor) return { success: false, error: "Actor not found." };
+
+  // Resolve Master Effort Standard for the Content Group (Cached)
+  let matchedWorkType = workType;
+  if (!matchedWorkType) {
+    const firstType = platforms[0].contentType;
+    if (firstType === "post") matchedWorkType = "Simple Static Poster";
+    else if (firstType === "carousel") matchedWorkType = "Simple Carousel";
+    else if (firstType === "reel") matchedWorkType = "Short-form Reel";
+    else if (firstType === "trial_reel") matchedWorkType = "Trial Reel Concept";
+    else matchedWorkType = "Simple Static Poster";
+  }
+
+  const allGroupStandards = await getCachedEffortStandards(actor.orgId);
+  let standard = workTypeId ? allGroupStandards.find((s) => s.id === workTypeId) || null : null;
+
+  if (!standard && matchedWorkType) {
+    standard =
+      allGroupStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) || null;
+  }
+
+  if (!standard) {
+    return { success: false, error: `No active Effort Standard found for work type '${matchedWorkType}'. Data integrity requires a valid standard.` };
+  }
+
+  // Pre-validate all assignees against project membership
+  const resolvedAssigneeMap: Record<number, string> = {};
+  for (let i = 0; i < platforms.length; i++) {
+    const p = platforms[i];
+    if (p.accountableOwnerId) {
+      const resolvedAssigneeId = await resolveUserId(p.accountableOwnerId);
+      if (!resolvedAssigneeId) {
+        return { success: false, error: `Assignee not found for platform ${p.platform}.` };
+      }
+
+      const [membership] = await db
+        .select()
+        .from(projectMemberships)
+        .where(
+          and(
+            eq(projectMemberships.projectId, resolvedProjId),
+            eq(projectMemberships.userId, resolvedAssigneeId),
+            eq(projectMemberships.status, "active")
+          )
+        )
+        .limit(1);
+
+      if (!membership) {
+        return { success: false, error: `Assignee for ${p.platform} is not an active member of this project.` };
+      }
+
+      const eligibleRoles = ["designer", "video_editor", "collaborator", "consultant"];
+      if (!eligibleRoles.includes(membership.membershipRole)) {
+        return { success: false, error: `Assignee role (${membership.membershipRole}) on ${p.platform} is not eligible for production ownership.` };
+      }
+
+      resolvedAssigneeMap[i] = resolvedAssigneeId;
+    }
+  }
 
   const legacyGroupId = generateLegacyId("grp");
   const copy = sharedInitialCopy || { caption: "", hashtags: [], cta: "" };
@@ -324,15 +435,23 @@ export async function createContentGroupAction(params: {
       const createdVersions = [];
       const createdAssignments = [];
 
-      // 2. Insert child items and V1 drafts
-      for (const p of platforms) {
+      // 2. Insert child items with explicit effort anchor semantics
+      for (let i = 0; i < platforms.length; i++) {
+        const p = platforms[i];
+        const isAnchor = i === 0;
         const legacyItemId = generateLegacyId("item");
         const legacyVerId = generateLegacyId("ver");
         const legacyAsgnId = generateLegacyId("asgn");
         const fingerprints = computeFingerprints(copy, p.scheduledPublicationDate);
 
         const schedDate = p.scheduledPublicationDate ? new Date(p.scheduledPublicationDate) : null;
-        const subDeadline = p.submissionDeadline ? new Date(p.submissionDeadline) : (schedDate || new Date());
+        const calculatedDeadline = schedDate ? calculateInternalDeadline(schedDate, standard.leadTimeWorkdays) : null;
+        const subDeadline = p.submissionDeadline ? new Date(p.submissionDeadline) : (calculatedDeadline || schedDate || new Date());
+
+        // Primary Anchor item snapshots full shared creative standard effort. Sibling platforms snapshot adaptation effort (default 0).
+        const itemPlannedSeconds = isAnchor
+          ? standard.totalSeconds + (p.adaptationSeconds || 0)
+          : (p.adaptationSeconds || 0);
 
         const [item] = await tx
           .insert(contentItems)
@@ -344,11 +463,21 @@ export async function createContentGroupAction(params: {
             title: `${title} (${p.platform})`,
             platform: p.platform,
             contentType: p.contentType,
+            workType: standard.workType,
+            workTypeId: standard.id,
+            topic: title,
             stage: "draft",
-            scopeClassification: p.scopeClassification || "contracted",
+            scopeClassification: p.scopeClassification || scopeClassification || "contracted",
+            workNature: workNature || "planned",
             clientVisible: false,
             scheduledPublicationDate: schedDate,
             submissionDeadline: subDeadline,
+            calculatedInternalDeadline: calculatedDeadline,
+            finalInternalDeadline: calculatedDeadline || subDeadline,
+            standardContentSeconds: isAnchor ? standard.contentSeconds : 0,
+            standardProductionSeconds: isAnchor ? standard.productionSeconds : 0,
+            finalPlannedSeconds: itemPlannedSeconds,
+            isEffortAnchor: isAnchor,
             currentVersionNumber: 1,
           })
           .returning();
@@ -378,7 +507,7 @@ export async function createContentGroupAction(params: {
         createdVersions.push(version);
 
         if (p.accountableOwnerId) {
-          const resolvedAssigneeId = await resolveUserId(p.accountableOwnerId);
+          const resolvedAssigneeId = resolvedAssigneeMap[i];
           if (resolvedAssigneeId) {
             const [asgn] = await tx
               .insert(contentAssignments)
@@ -436,6 +565,97 @@ export async function createContentGroupAction(params: {
 /**
  * 3. Save Draft Submission Version (Designer/Internal action)
  */
+/**
+ * Resolves active draft version for a content item directly from PostgreSQL
+ */
+export async function getAuthoritativeActiveDraftAction(params: {
+  actorUserId: string;
+  contentItemId: string;
+}) {
+  const { actorUserId, contentItemId } = params;
+  const resolvedItemId = await resolveContentItemId(contentItemId);
+  if (!resolvedItemId) return { success: false, error: "Content item not found." };
+
+  const [item] = await db
+    .select()
+    .from(contentItems)
+    .where(eq(contentItems.id, resolvedItemId))
+    .limit(1);
+
+  if (!item) return { success: false, error: "Content item not found." };
+
+  const access = await requireProjectAccess(actorUserId, item.projectId);
+  if (!access.allowed) return { success: false, error: "Unauthorized access to content item." };
+
+  // Find active draft version
+  let [draft] = await db
+    .select()
+    .from(submissionVersions)
+    .where(and(eq(submissionVersions.contentItemId, item.id), eq(submissionVersions.isDraft, true)))
+    .limit(1);
+
+  if (draft) {
+    return { success: true, item, draft };
+  }
+
+  // No active draft exists. Check if item lifecycle allows auto-creating an initial draft or revision draft.
+  const [existingVersionsCount] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(submissionVersions)
+    .where(eq(submissionVersions.contentItemId, item.id));
+
+  const count = Number(existingVersionsCount?.count || 0);
+
+  if (item.stage === "draft" && count === 0) {
+    // Initial creation: Item is in initial editable draft stage and has NO existing versions
+    const createRes = await createNewVersionDraftAction({ actorUserId, contentItemId: item.id });
+    if (createRes.success && (createRes as any).version) {
+      return { success: true, item, draft: (createRes as any).version };
+    }
+    return { success: false, code: "DRAFT_CREATION_FAILED", error: createRes.error || "Failed to create initial draft." };
+  }
+
+  if (item.stage === "changes_requested") {
+    // Explicit revision state: auto-create revision draft if not already present
+    const createRes = await createNewVersionDraftAction({ actorUserId, contentItemId: item.id });
+    if (createRes.success && (createRes as any).version) {
+      return { success: true, item, draft: (createRes as any).version };
+    }
+    return { success: false, code: "REVISION_DRAFT_CREATION_FAILED", error: createRes.error || "Failed to create revision draft." };
+  }
+
+  // Classified lifecycle error returns when content is locked or in review
+  if (item.stage === "submitted" || item.stage === "in_review") {
+    return {
+      success: false,
+      code: "LIFECYCLE_SUBMITTED_LOCKED",
+      error: "Version has been submitted for review and cannot be edited until feedback or changes are requested.",
+    };
+  }
+
+  if (item.stage === "approved") {
+    return {
+      success: false,
+      code: "LIFECYCLE_APPROVED_LOCKED",
+      error: "Content item is approved and locked. Create a revision request to make changes.",
+    };
+  }
+
+  if (item.stage === "scheduled" || item.stage === "published") {
+    return {
+      success: false,
+      code: "LIFECYCLE_PUBLISHED_LOCKED",
+      error: "Content item is scheduled or published and cannot be edited directly.",
+    };
+  }
+
+  return {
+    success: false,
+    code: "LIFECYCLE_NO_ACTIVE_DRAFT",
+    error: `No active draft exists for content item in stage '${item.stage}'.`,
+  };
+}
+
 export async function saveDraftVersionAction(params: {
   actorUserId: string;
   submissionVersionId: string;
@@ -607,7 +827,8 @@ export async function createNewVersionDraftAction(params: {
       .from(submissionVersions)
       .where(eq(submissionVersions.contentItemId, item.id));
 
-    const nextVerNum = (maxVersionResult[0]?.maxVer || item.currentVersionNumber || 0) + 1;
+    const maxVer = Number(maxVersionResult[0]?.maxVer || 0);
+    const nextVerNum = maxVer > 0 ? maxVer + 1 : 1;
 
     // 4. Retrieve base copy if specified
     let copy = { caption: "", hashtags: [] as string[], cta: "", destinationUrl: undefined as string | undefined };
@@ -671,6 +892,105 @@ export async function createNewVersionDraftAction(params: {
   }
 
   return result;
+}
+
+/**
+ * Canonical Reschedule Deliverable Action
+ * Updates target publication date and recalculates operational internal deadline
+ * using lead-time workdays (skipping weekends) unless manually overridden.
+ * Updates content_items and active content_assignments atomically in PostgreSQL.
+ */
+export async function rescheduleContentItemAction(params: {
+  actorUserId?: string;
+  contentItemId: string;
+  scheduledPublicationDate: string;
+  reason?: string;
+  forceRecalculateInternalDeadline?: boolean;
+}): Promise<{ success: boolean; item?: any; assignment?: any; error?: string }> {
+  try {
+    const authUser = await getAuthoritativeUser(params.actorUserId);
+    if (!authUser) return { success: false, error: "Unauthorized" };
+
+    const resolvedItemId = await resolveContentItemId(params.contentItemId);
+    if (!resolvedItemId) return { success: false, error: "Content item not found" };
+
+    const [item] = await db
+      .select()
+      .from(contentItems)
+      .where(eq(contentItems.id, resolvedItemId))
+      .limit(1);
+
+    if (!item) return { success: false, error: "Content item not found" };
+
+    const access = await requireProjectAccess(authUser.id, item.projectId);
+    if (!access.allowed || access.role === "client" || access.role === "designer" || access.role === "video_editor") {
+      return { success: false, error: "Unauthorized: Designers and clients cannot reschedule publication dates." };
+    }
+
+    const newPubDate = new Date(params.scheduledPublicationDate);
+
+    // Fetch active effort standards for org to resolve lead time
+    const orgStandards = await db
+      .select()
+      .from(effortStandards)
+      .where(and(eq(effortStandards.orgId, item.orgId), eq(effortStandards.active, true)));
+
+    const { leadTimeWorkdays } = resolveDeliverableLeadTimeWorkdays(item as any, orgStandards as any);
+
+    // Check if internal deadline has been manually overridden
+    const isManuallyOverridden = !!(item as any).deadlineOverrideReason && !params.forceRecalculateInternalDeadline;
+
+    let newInternalDeadline = (item as any).finalInternalDeadline || item.submissionDeadline || newPubDate;
+    if (!isManuallyOverridden) {
+      newInternalDeadline = calculateInternalDeadline(newPubDate, leadTimeWorkdays);
+    }
+
+    // Execute atomic update in PostgreSQL
+    const itemUpdates: Record<string, any> = {
+      scheduledPublicationDate: newPubDate,
+      updatedAt: sql`NOW()`,
+    };
+
+    if (!isManuallyOverridden) {
+      itemUpdates.submissionDeadline = newInternalDeadline;
+    }
+
+    const [updatedItem] = await db
+      .update(contentItems)
+      .set(itemUpdates)
+      .where(eq(contentItems.id, item.id))
+      .returning();
+
+    // Update active assignment current_due_at to match new internal deadline
+    const [activeAssignment] = await db
+      .select()
+      .from(contentAssignments)
+      .where(and(eq(contentAssignments.contentItemId, item.id), sql`status != 'reassigned'`))
+      .limit(1);
+
+    let updatedAssignment = null;
+    if (activeAssignment && !isManuallyOverridden) {
+      const [asgn] = await db
+        .update(contentAssignments)
+        .set({
+          currentDueAt: newInternalDeadline,
+          updatedAt: sql`NOW()`,
+        })
+        .where(eq(contentAssignments.id, activeAssignment.id))
+        .returning();
+      updatedAssignment = asgn;
+    }
+
+    await invalidateWorkspaceEntities({
+      projectId: item.projectId,
+      userId: authUser.id,
+      orgId: item.orgId,
+    });
+
+    return { success: true, item: updatedItem, assignment: updatedAssignment };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }
 
 /**
@@ -836,7 +1156,7 @@ export async function updatePublicationDetailsAction(params: {
  * 9. Set Client Visibility (Restricted: Founder, Admin, Consultant)
  */
 export async function setClientVisibilityAction(params: {
-  actorUserId: string;
+  actorUserId?: string;
   contentItemId: string;
   clientVisible: boolean;
 }) {
@@ -853,9 +1173,12 @@ export async function setClientVisibilityAction(params: {
 
   if (!item) return { success: false, error: "Content item not found." };
 
-  const access = await requireProjectAccess(actorUserId, item.projectId);
+  const authUser = await getAuthoritativeUser(actorUserId);
+  if (!authUser) return { success: false, error: "Unauthorized." };
+
+  const access = await requireProjectAccess(authUser.id, item.projectId);
   if (!access.allowed || access.role === "client" || access.role === "designer" || access.role === "video_editor") {
-    return { success: false, error: "Unauthorized: Designers cannot modify client visibility." };
+    return { success: false, error: "Unauthorized: Management authorization required to modify client visibility." };
   }
 
   const [updated] = await db
@@ -869,11 +1192,123 @@ export async function setClientVisibilityAction(params: {
 
   await invalidateWorkspaceEntities({
     projectId: item.projectId,
-    userId: actorUserId,
+    userId: authUser.id,
     orgId: item.orgId,
   });
 
   return { success: true, item: updated };
+}
+
+export { setClientVisibilityAction as toggleClientVisibilityAction };
+
+/**
+ * Update Content Item Workflow Stage (Kanban Drag & Drop / Stage Select)
+ * Explicitly updates content_items.stage in PostgreSQL.
+ * Validates legal stage transitions (or permits Founder/Admin override).
+ */
+export async function updateContentItemStageAction(params: {
+  actorUserId?: string;
+  contentItemId: string;
+  stage: ContentStage;
+  reason?: string;
+}): Promise<{ success: boolean; item?: any; error?: string }> {
+  try {
+    const authUser = await getAuthoritativeUser(params.actorUserId);
+    if (!authUser) return { success: false, error: "Unauthorized" };
+
+    const resolvedItemId = await resolveContentItemId(params.contentItemId);
+    if (!resolvedItemId) return { success: false, error: "Content item not found" };
+
+    const [item] = await db
+      .select()
+      .from(contentItems)
+      .where(eq(contentItems.id, resolvedItemId))
+      .limit(1);
+
+    if (!item) return { success: false, error: "Content item not found" };
+
+    const isDesigner = authUser.organizationRole === "designer";
+    const isFounderOrAdmin = authUser.organizationRole === "founder" || authUser.organizationRole === "admin";
+    const currentStage = item.stage;
+    const targetStage = params.stage;
+
+    if (isDesigner) {
+      // Designers can ONLY modify stage on deliverables assigned to them
+      const [activeAssignment] = await db
+        .select()
+        .from(contentAssignments)
+        .where(
+          and(
+            eq(contentAssignments.contentItemId, item.id),
+            eq(contentAssignments.assigneeUserId, authUser.id),
+            inArray(contentAssignments.status, ["assigned", "accepted", "in_progress"])
+          )
+        )
+        .limit(1);
+
+      if (!activeAssignment && (item as any).accountableOwnerId !== authUser.id) {
+        return {
+          success: false,
+          error: "Unauthorized: Designers can only update stage on deliverables assigned to themselves.",
+        };
+      }
+
+      if (targetStage === "submitted") {
+        if (currentStage !== "draft" && currentStage !== "changes_requested") {
+          return {
+            success: false,
+            error: `Unauthorized: Cannot submit for review when item stage is '${currentStage}'. Must be 'draft' or 'changes_requested'.`,
+          };
+        }
+      }
+    }
+
+    const allowedTransitions: Record<string, string[]> = {
+      idea: ["draft", "submitted"],
+      draft: ["submitted", "in_review"],
+      submitted: ["in_review", "changes_requested", "approved", "draft"],
+      in_review: ["changes_requested", "approved", "submitted"],
+      changes_requested: ["submitted", "in_review", "draft"],
+      approved: ["scheduled", "published", "in_review"],
+      scheduled: ["published", "approved"],
+      published: ["reported", "insights_pending"],
+    };
+
+    if (!isFounderOrAdmin && currentStage !== targetStage) {
+      const legalNext = allowedTransitions[currentStage] || [];
+      if (!legalNext.includes(targetStage)) {
+        return {
+          success: false,
+          error: `Illegal workflow transition from '${currentStage}' to '${targetStage}'.`,
+        };
+      }
+    }
+
+    const updates: Record<string, any> = {
+      stage: targetStage,
+      updatedAt: sql`NOW()`,
+    };
+
+    if (targetStage === "published" && !item.publishedAt) {
+      updates.publishedAt = sql`NOW()`;
+    }
+
+    const [updated] = await db
+      .update(contentItems)
+      .set(updates)
+      .where(eq(contentItems.id, item.id))
+      .returning();
+
+    await invalidateWorkspaceEntities({
+      projectId: item.projectId,
+      userId: authUser.id,
+      orgId: item.orgId,
+    });
+
+    return { success: true, item: updated };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }
 
 /**

@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { useAppState } from "@/lib/context/AppStateContext";
 import {
   CheckCircle2,
+  Clock,
   Download,
   FileText,
   Image as ImageIcon,
@@ -12,6 +12,7 @@ import {
   MessageSquare,
   ShieldCheck,
 } from "lucide-react";
+import { verifyExternalReviewTokenAction, postExternalReviewCommentAction } from "@/lib/actions/collaboration";
 import { SafeImage } from "@/components/ui/SafeImage";
 import { formatDate, formatTime } from "@/lib/formatters";
 import { productConfig, organizationConfig } from "@/lib/config/branding";
@@ -19,16 +20,47 @@ import { productConfig, organizationConfig } from "@/lib/config/branding";
 export default function GuestReviewPage() {
   const params = useParams();
   const token = (params?.token as string) || "";
-  const { state, addComment } = useAppState();
+
+  const [reviewData, setReviewData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const [guestName, setGuestName] = useState("");
   const [commentText, setCommentText] = useState("");
   const [isCommentSubmitted, setIsCommentSubmitted] = useState(false);
+  const [comments, setComments] = useState<any[]>([]);
 
-  // Locate the external review link matching this token
-  const reviewLink = state.externalReviewLinks.find((l) => l.demoToken === token && !l.revokedAt);
+  useEffect(() => {
+    let isMounted = true;
+    async function resolveToken() {
+      if (!token) return;
+      setLoading(true);
+      const res = await verifyExternalReviewTokenAction(token);
+      if (!isMounted) return;
+      if (res.success) {
+        setReviewData(res);
+        setComments(res.comments || []);
+        setError(null);
+      } else {
+        setError(res.error || "Review Link Invalid or Expired");
+      }
+      setLoading(false);
+    }
+    resolveToken();
+    return () => { isMounted = false; };
+  }, [token]);
 
-  if (!reviewLink) {
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-6 text-center">
+        <div className="text-[15px] font-medium text-[#6e6e73] flex items-center gap-2">
+          <Clock className="h-5 w-5 animate-spin text-[#0071e3]" /> Validating External Review Link...
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !reviewData) {
     return (
       <div className="min-h-screen bg-[#f5f5f7] text-[#1d1d1f] flex items-center justify-center p-6">
         <div className="max-w-md w-full rounded-[22px] border border-black/[0.08] bg-white p-8 text-center space-y-4 shadow-xl">
@@ -37,43 +69,39 @@ export default function GuestReviewPage() {
           </div>
           <h2 className="text-[20px] font-semibold text-[#1d1d1f]">Review Link Invalid or Expired</h2>
           <p className="text-[14px] text-[#6e6e73] leading-relaxed">
-            This external preview link has either expired, been revoked, or does not exist. Please contact your {organizationConfig.name} representative.
+            {error || "This external preview link has either expired, been revoked, or does not exist. Please contact your representative."}
           </p>
         </div>
       </div>
     );
   }
 
-  const project = state.projects.find((p) => p.id === reviewLink.projectId);
-  const contentItem = state.contentItems.find((i) => i.id === reviewLink.contentItemId);
-  const version = state.submissionVersions.find((v) => v.id === reviewLink.submissionVersionId);
+  const { tokenRecord, contentItem, submissionVersion, allowDownload } = reviewData;
+  const project = { clientBrand: reviewData.projectName || "Client Project" };
+  const version = submissionVersion;
+  const reviewLink = tokenRecord || {};
+  const externalComments = comments || [];
 
-  // External comments ONLY for this version
-  const externalComments = state.comments.filter(
-    (c) =>
-      c.contentItemId === reviewLink.contentItemId &&
-      c.submissionVersionId === reviewLink.submissionVersionId &&
-      c.visibility === "external"
-  );
-
-  const handlePostGuestComment = () => {
+  const handlePostGuestComment = async () => {
     if (!commentText.trim() || !guestName.trim()) {
       alert("Please provide your name and comment.");
       return;
     }
 
-    addComment({
-      projectId: reviewLink.projectId,
-      contentItemId: reviewLink.contentItemId,
-      submissionVersionId: reviewLink.submissionVersionId,
-      externalReviewerName: guestName.trim(),
-      visibility: "external",
-      body: commentText.trim(),
+    const res = await postExternalReviewCommentAction({
+      rawToken: token,
+      guestName: guestName.trim(),
+      commentBody: commentText.trim(),
     });
 
-    setCommentText("");
-    setIsCommentSubmitted(true);
-    setTimeout(() => setIsCommentSubmitted(false), 3000);
+    if (res.success && res.comment) {
+      setComments((prev) => [res.comment, ...prev]);
+      setCommentText("");
+      setIsCommentSubmitted(true);
+      setTimeout(() => setIsCommentSubmitted(false), 3000);
+    } else {
+      alert(res.error || "Failed to post comment.");
+    }
   };
 
   return (
@@ -125,48 +153,121 @@ export default function GuestReviewPage() {
               </div>
 
               <div className="space-y-3">
-                {version?.creativeAssets.map((asset) => (
-                  <div key={asset.assetId} className="rounded-2xl border border-black/[0.06] bg-[#f5f5f7] p-2 space-y-2">
-                    <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06]">
-                      <SafeImage
-                        src={asset.previewUrl}
-                        alt={asset.filename}
-                        fallbackTitle={asset.filename || "Creative Preview"}
-                        className="w-full h-full object-contain"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-[12px] px-2 py-1">
-                      <span className="font-medium text-[#1d1d1f] truncate max-w-xs">{asset.filename}</span>
-                      {reviewLink.allowDownload && asset.previewUrl && (
-                        <a
-                          href={asset.previewUrl}
-                          download={asset.filename}
-                          className="font-medium text-[#0066cc] hover:underline flex items-center gap-1"
-                        >
-                          <Download className="h-3.5 w-3.5" /> Download
-                        </a>
-                      )}
-                    </div>
+                {(!version?.creativeAssets || version.creativeAssets.length === 0) ? (
+                  <div className="py-8 text-center text-[13px] text-[#86868b] border border-dashed border-black/[0.1] rounded-2xl p-6 bg-[#fbfbfd]">
+                    No creative media attachments for this version.
                   </div>
-                ))}
+                ) : (
+                  version.creativeAssets.map((asset: any) => {
+                    const isVideo = asset.mimeType?.startsWith("video/") || /\.(mp4|mov|webm)$/i.test(asset.filename || "");
+                    const isPdf = asset.mimeType === "application/pdf" || (asset.filename || "").toLowerCase().endsWith(".pdf");
+
+                    return (
+                      <div key={asset.assetId} className="rounded-2xl border border-black/[0.06] bg-[#f5f5f7] p-2 space-y-2">
+                        <div className="overflow-hidden rounded-xl bg-white aspect-video flex items-center justify-center border border-black/[0.06]">
+                          {isVideo ? (
+                            <video
+                              src={asset.previewUrl}
+                              controls
+                              playsInline
+                              preload="metadata"
+                              className="w-full h-full object-contain bg-black"
+                            />
+                          ) : isPdf ? (
+                            <div className="flex flex-col items-center justify-center gap-3 p-6 text-center">
+                              <div className="h-12 w-12 rounded-2xl bg-[#fff0ee] text-[#b42318] flex items-center justify-center font-bold text-[14px] border border-[#ffd5d0]">
+                                PDF
+                              </div>
+                              <span className="text-[13px] font-medium text-[#1d1d1f]">{asset.filename}</span>
+                              <a
+                                href={asset.previewUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="rounded-full bg-[#1d1d1f] text-white px-4 py-1.5 text-[12px] font-medium hover:bg-black transition inline-flex items-center gap-1.5"
+                              >
+                                View PDF Document →
+                              </a>
+                            </div>
+                          ) : (
+                            <SafeImage
+                              src={asset.previewUrl}
+                              alt={asset.filename}
+                              fallbackTitle={asset.filename || "Creative Preview"}
+                              className="w-full h-full object-contain"
+                            />
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between text-[12px] px-2 py-1">
+                          <span className="font-medium text-[#1d1d1f] truncate max-w-xs">{asset.filename}</span>
+                          {reviewLink.allowDownload && asset.previewUrl && (
+                            <a
+                              href={asset.previewUrl}
+                              download={asset.filename}
+                              className="font-medium text-[#0066cc] hover:underline flex items-center gap-1"
+                            >
+                              <Download className="h-3.5 w-3.5" /> Download
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 
             {/* Copy & Captions */}
-            <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-3">
+            <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
               <h3 className="font-semibold text-[#1d1d1f] text-[15px]">
                 Caption & Call to Action
               </h3>
-              <div className="p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] text-[15px] text-[#1d1d1f] whitespace-pre-wrap leading-relaxed">
-                {version?.copy.caption}
+              
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">Caption</span>
+                <div className="p-4 rounded-xl bg-[#fbfbfd] border border-black/[0.06] text-[15px] text-[#1d1d1f] whitespace-pre-wrap leading-relaxed">
+                  {(version?.copy?.caption || version?.caption) ? (
+                    version?.copy?.caption || version?.caption
+                  ) : (
+                    <span className="text-[#86868b] italic">No caption provided for this version.</span>
+                  )}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {version?.copy.hashtags.map((h) => (
-                  <span key={h} className="rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[12px] text-[#0066cc] font-medium">
-                    #{h}
-                  </span>
-                ))}
-              </div>
+
+              {(version?.copy?.cta || version?.cta) && (
+                <div className="space-y-1">
+                  <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">Call to Action (CTA)</span>
+                  <div className="p-3 rounded-xl bg-[#f0f7ff] border border-[#d0e5ff] text-[14px] font-medium text-[#0071e3]">
+                    {version?.copy?.cta || version?.cta}
+                  </div>
+                </div>
+              )}
+
+              {(version?.copy?.destinationUrl || version?.destinationUrl) && (
+                <div className="space-y-1">
+                  <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">Destination Link</span>
+                  <a
+                    href={version?.copy?.destinationUrl || version?.destinationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[13px] text-[#0066cc] hover:underline block truncate"
+                  >
+                    {version?.copy?.destinationUrl || version?.destinationUrl}
+                  </a>
+                </div>
+              )}
+
+              {((version?.copy?.hashtags && version.copy.hashtags.length > 0) || (version?.hashtags && version.hashtags.length > 0)) && (
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider block">Hashtags</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(version?.copy?.hashtags || version?.hashtags || []).map((h: string) => (
+                      <span key={h} className="rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[12px] text-[#0066cc] font-medium">
+                        #{h.replace(/^#/, "")}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -185,7 +286,7 @@ export default function GuestReviewPage() {
                     No client feedback yet. Share your thoughts below.
                   </div>
                 ) : (
-                  externalComments.map((comm) => (
+                  externalComments.map((comm: any) => (
                     <div key={comm.id} className="rounded-xl border border-black/[0.06] bg-[#fbfbfd] p-3.5 text-[13px] space-y-1">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="font-semibold text-[#1d1d1f]">

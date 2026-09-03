@@ -67,11 +67,14 @@ export default function ProjectPerformancePage() {
 
   const { overview, scorecards, workload } = perfResult.data;
 
-  // Find designers assigned to this project
-  const projectMembers = state.projectMemberships.filter((m) => m.projectId === projectId && m.status === "active");
+  // Find eligible internal contributors assigned to this project
+  const eligibleContributorRoles = new Set(["consultant", "designer", "video_editor", "collaborator"]);
+  const projectMembers = state.projectMemberships.filter(
+    (m) => m.projectId === projectId && m.status === "active" && m.membershipRole && eligibleContributorRoles.has(m.membershipRole)
+  );
   const projectMemberUserIds = new Set(projectMembers.map((m) => m.userId));
   const projectDesigners = state.users.filter(
-    (u) => projectMemberUserIds.has(u.id) && (u.role === "designer" || u.jobTitle?.toLowerCase().includes("designer") || u.jobTitle?.toLowerCase().includes("editor"))
+    (u) => projectMemberUserIds.has(u.id) && u.role !== "client"
   );
 
   return (
@@ -123,7 +126,7 @@ export default function ProjectPerformancePage() {
             onChange={(e) => setSelectedDesignerId(e.target.value)}
             className="bg-[#f5f5f7] border border-black/[0.08] rounded-xl px-3 py-1.5 text-[#1d1d1f] font-medium focus:outline-none max-w-[180px]"
           >
-            <option value="all">All Project Designers ({projectDesigners.length})</option>
+            <option value="all">All Project Contributors ({projectDesigners.length})</option>
             {projectDesigners.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name} {d.status === "inactive" ? "(Inactive)" : ""}
@@ -256,8 +259,8 @@ export default function ProjectPerformancePage() {
             <tbody className="divide-y divide-black/[0.06]">
               {scorecards.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-[#86868b]">
-                    No team performance records match the current filter selection for this project.
+                  <td colSpan={8} className="p-8 text-center text-[#86868b] font-medium text-[14px]">
+                    No active team members assigned to this project.
                   </td>
                 </tr>
               ) : (
@@ -266,7 +269,9 @@ export default function ProjectPerformancePage() {
                     <td className="p-3 pl-4 font-semibold text-[#1d1d1f]">
                       <div className="flex items-center gap-2">
                         <span>{sc.name}</span>
-                        <span className="text-[11px] text-[#86868b] font-normal">({sc.jobTitle || sc.role})</span>
+                        <span className="text-[11px] text-[#86868b] font-normal">
+                          ({sc.isFormerContributor ? "Former Contributor" : (sc.jobTitle || sc.role)})
+                        </span>
                       </div>
                     </td>
                     <td className="p-3 font-medium">{sc.completedDeliverablesCount}</td>

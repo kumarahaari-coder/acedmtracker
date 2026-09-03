@@ -31,6 +31,7 @@ import {
   recordCapacityAdjustmentAction,
   deleteCapacityAdjustmentAction,
 } from "@/lib/actions/capacity";
+import { updateTeamMemberAction } from "@/lib/actions/team";
 import { UserRole, ProjectMembership, EmployeeCapacitySchedule, CapacityAdjustment } from "@/lib/types";
 import { formatDate, formatDateTime, formatTime } from "@/lib/formatters";
 
@@ -238,20 +239,33 @@ export default function TeamMemberProfilePage() {
   const totalTrackedSeconds = userWorkSessions.reduce((acc, ws) => acc + ws.accumulatedSeconds, 0);
   const totalTrackedHours = (totalTrackedSeconds / 3600).toFixed(1);
 
-  const handleEditSave = (e: React.FormEvent) => {
+  const handleEditSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateTeamMember(
-      user.id,
-      {
-        name: editName.trim() || user.name,
-        email: editEmail.trim() || user.email,
-        role: editRole,
-        jobTitle: editJobTitle.trim() || undefined,
-        workingHoursPerDay: editHours,
-      },
-      activeUserId
-    );
-    setIsEditModalOpen(false);
+    const res = await updateTeamMemberAction({
+      actorUserId: activeUserId,
+      targetUserId: user.id,
+      fullName: editName.trim() || user.name,
+      email: editEmail.trim() || user.email,
+      organizationRole: editRole as any,
+      workingHoursPerDay: editHours,
+    });
+
+    if (res.success) {
+      updateTeamMember(
+        user.id,
+        {
+          name: editName.trim() || user.name,
+          email: editEmail.trim() || user.email,
+          role: editRole,
+          jobTitle: editJobTitle.trim() || undefined,
+          workingHoursPerDay: editHours,
+        },
+        activeUserId
+      );
+      setIsEditModalOpen(false);
+    } else {
+      alert(res.error || "Failed to update profile.");
+    }
   };
 
   const handleAddProject = async (e: React.FormEvent) => {

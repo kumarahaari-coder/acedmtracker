@@ -28,6 +28,7 @@ import {
   ProjectPerformanceScorecard,
   EffortAnalysisRow,
 } from "../calculations/operationalEngine";
+import { ExecutionProfiler } from "../observability/profiler";
 import {
   User,
   Project,
@@ -42,8 +43,13 @@ import {
   ProjectPerformanceInput,
 } from "../types";
 
-// Helper to hydrate PostgreSQL rows into strictly typed domain models
-async function fetchAuthoritativeWorkspaceEntities(orgId: string) {
+// Helper to hydrate PostgreSQL rows into strictly typed domain models with bounded performance filters
+async function fetchAuthoritativeWorkspaceEntities(orgId: string, options?: { fromDate?: string }) {
+  const fromDate = options?.fromDate;
+  const sessionCondition = fromDate
+    ? sql`${workSessions.orgId} = ${orgId} AND (${workSessions.status} = 'active' OR ${workSessions.startedAt} >= ${fromDate})`
+    : eq(workSessions.orgId, orgId);
+
   const [
     userRows,
     projectRows,
@@ -59,13 +65,13 @@ async function fetchAuthoritativeWorkspaceEntities(orgId: string) {
   ] = await Promise.all([
     db.select().from(users).where(eq(users.orgId, orgId)),
     db.select().from(projects).where(eq(projects.orgId, orgId)),
-    db.select().from(contentItems).where(eq(contentItems.orgId, orgId)),
+    db.select().from(contentItems).where(and(eq(contentItems.orgId, orgId), sql`${contentItems.deletedAt} IS NULL`)),
     db.select().from(contentAssignments).where(eq(contentAssignments.orgId, orgId)),
-    db.select().from(workSessions).where(eq(workSessions.orgId, orgId)),
+    db.select().from(workSessions).where(sessionCondition),
     db.select().from(changeRequests).where(eq(changeRequests.orgId, orgId)),
     db.select().from(employeeCapacitySchedules).where(eq(employeeCapacitySchedules.orgId, orgId)),
     db.select().from(capacityAdjustments).where(eq(capacityAdjustments.orgId, orgId)),
-    db.select().from(effortStandards).where(eq(effortStandards.orgId, orgId)),
+    db.select().from(effortStandards).where(and(eq(effortStandards.orgId, orgId), eq(effortStandards.active, true))),
     db.select().from(projectCommitments).where(eq(projectCommitments.orgId, orgId)),
     db.select().from(projectPerformanceInputs).where(eq(projectPerformanceInputs.orgId, orgId)),
   ]);
@@ -99,20 +105,20 @@ async function fetchAuthoritativeWorkspaceEntities(orgId: string) {
   const mappedItems: ContentItem[] = itemRows.map((i) => ({
     id: i.id,
     projectId: i.projectId,
-    campaignId: (i as any).campaignId || undefined,
+    campaignId: i.campaignId || undefined,
     contentGroupId: i.contentGroupId || undefined,
     title: i.title,
     platform: i.platform as any,
     contentType: i.contentType as any,
-    workType: (i as any).workType || "Short-form Reel",
-    workTypeId: (i as any).workTypeId || undefined,
-    contentPillar: (i as any).contentPillar || undefined,
-    topic: (i as any).topic || undefined,
-    brief: (i as any).brief || undefined,
-    referenceLink: (i as any).referenceLink || undefined,
-    priority: ((i as any).priority || "normal") as any,
-    workNature: ((i as any).workNature || "planned") as any,
-    accountOwnerId: (i as any).accountOwnerId || undefined,
+    workType: i.workType || undefined,
+    workTypeId: i.workTypeId || undefined,
+    contentPillar: i.contentPillar || undefined,
+    topic: i.topic || undefined,
+    brief: i.brief || undefined,
+    referenceLink: i.referenceLink || undefined,
+    priority: (i.priority || "normal") as any,
+    workNature: (i.workNature || "planned") as any,
+    accountOwnerId: i.accountOwnerId || undefined,
     stage: i.stage as any,
     accountableOwnerId: "",
     collaboratorIds: [],
@@ -122,15 +128,16 @@ async function fetchAuthoritativeWorkspaceEntities(orgId: string) {
       approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
       scheduledPublicationDate: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined,
     },
-    calculatedInternalDeadline: (i as any).calculatedInternalDeadline ? (i as any).calculatedInternalDeadline.toISOString() : undefined,
-    finalInternalDeadline: (i as any).finalInternalDeadline ? (i as any).finalInternalDeadline.toISOString() : undefined,
-    deadlineOverrideReason: (i as any).deadlineOverrideReason || undefined,
-    standardContentSeconds: (i as any).standardContentSeconds || 0,
-    standardProductionSeconds: (i as any).standardProductionSeconds || 0,
-    revisionContentSeconds: (i as any).revisionContentSeconds || 0,
-    revisionProductionSeconds: (i as any).revisionProductionSeconds || 0,
-    finalPlannedSeconds: (i as any).finalPlannedSeconds || 0,
-    completedAt: (i as any).completedAt ? (i as any).completedAt.toISOString() : undefined,
+    calculatedInternalDeadline: i.calculatedInternalDeadline ? i.calculatedInternalDeadline.toISOString() : undefined,
+    finalInternalDeadline: i.finalInternalDeadline ? i.finalInternalDeadline.toISOString() : undefined,
+    deadlineOverrideReason: i.deadlineOverrideReason || undefined,
+    standardContentSeconds: i.standardContentSeconds ?? undefined,
+    standardProductionSeconds: i.standardProductionSeconds ?? undefined,
+    revisionContentSeconds: i.revisionContentSeconds ?? undefined,
+    revisionProductionSeconds: i.revisionProductionSeconds ?? undefined,
+    finalPlannedSeconds: i.finalPlannedSeconds ?? undefined,
+    isEffortAnchor: i.isEffortAnchor ?? false,
+    completedAt: i.completedAt ? i.completedAt.toISOString() : undefined,
     currentVersionNumber: i.currentVersionNumber,
     publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
     liveUrl: i.liveUrl || undefined,
@@ -332,20 +339,23 @@ export async function getAuthoritativeTeamCapacityAction(
     const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
     const period = getPeriodDateRange(filter, customStart, customEnd);
 
-    const scorecards = data.users
-      .filter((u) => u.role !== "client" && u.status === "active")
-      .map((u) =>
-        calculateEmployeeScorecard(
-          u,
-          period,
-          data.items,
-          data.assignments,
-          data.workSessions,
-          data.changeRequests,
-          data.schedules,
-          data.adjustments
-        )
-      );
+    // Designers ONLY get their own team capacity scorecard
+    const filteredUsers = authUser.organizationRole === "designer"
+      ? data.users.filter((u) => u.id === authUser.id)
+      : data.users.filter((u) => u.role !== "client" && u.status === "active");
+
+    const scorecards = filteredUsers.map((u) =>
+      calculateEmployeeScorecard(
+        u,
+        period,
+        data.items,
+        data.assignments,
+        data.workSessions,
+        data.changeRequests,
+        data.schedules,
+        data.adjustments
+      )
+    );
 
     return { success: true, scorecards, period };
   } catch (error: any) {
@@ -368,6 +378,11 @@ export async function getAuthoritativeEmployeePerformanceAction(
     const authUser = await getAuthoritativeUser();
     if (!authUser) return { success: false, error: "Unauthorized" };
     if (authUser.organizationRole === "client") return { success: false, error: "Forbidden" };
+
+    // Designer Security Gate: Designers CANNOT view another user's performance metrics
+    if (authUser.organizationRole === "designer" && userId !== authUser.id) {
+      return { success: false, error: "Unauthorized: Designers can only view their own performance metrics." };
+    }
 
     const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
     const targetUser = data.users.find((u) => u.id === userId);
@@ -472,7 +487,7 @@ export interface MainDashboardDataDTO {
     internalDeadline: string;
     postingDate: string;
     assigneeName: string;
-    plannedHours: number;
+    plannedHours: number | null;
     status: string;
     priority: string;
   }[];
@@ -496,168 +511,434 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
   data?: MainDashboardDataDTO;
   error?: string;
 }> {
+  const profiler = new ExecutionProfiler("getAuthoritativeMainDashboardAction");
   try {
     const authUser = await getAuthoritativeUser();
     if (!authUser) return { success: false, error: "Unauthorized" };
+    profiler.mark("auth-resolution");
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
-    const isManagement = authUser.organizationRole === "founder" || authUser.organizationRole === "admin" || authUser.organizationRole === "consultant";
+    const orgId = authUser.orgId;
+    const isManagement =
+      authUser.organizationRole === "founder" ||
+      authUser.organizationRole === "admin" ||
+      authUser.organizationRole === "consultant";
 
     const todayStr = new Date().toISOString().split("T")[0];
     const thisMonthPeriod = getPeriodDateRange("this_month");
     const thisWeekPeriod = getPeriodDateRange("this_week");
 
-    // 1. Top cards
-    const tasksDueToday = data.items.filter((i) => {
-      const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-      if (isDone) return false;
-      const deadline = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-      return deadline ? deadline.startsWith(todayStr) : false;
-    });
+    // Execute 4 bounded queries in parallel (1 multiplexed roundtrip)
+    const [topCardsRes, workloadRes, capacityRes, projectHealthRes] = await Promise.all([
+      // 1. Top Cards Aggregate Query
+      db.execute(sql`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE (deleted_at IS NULL)
+            AND (stage NOT IN ('published', 'approved') AND completed_at IS NULL)
+            AND (COALESCE(final_internal_deadline::text, calculated_internal_deadline::text, submission_deadline::text, '') LIKE ${todayStr + "%"})
+          )::int AS tasks_due_today,
 
-    const nowTime = Date.now();
-    const overdueTasks = data.items.filter((i) => {
-      const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-      if (isDone) return false;
-      const deadline = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-      return deadline ? new Date(deadline).getTime() < nowTime : false;
-    });
+          COUNT(*) FILTER (
+            WHERE (deleted_at IS NULL)
+            AND (stage NOT IN ('published', 'approved') AND completed_at IS NULL)
+            AND (COALESCE(final_internal_deadline, calculated_internal_deadline, submission_deadline) < NOW())
+          )::int AS overdue_tasks,
 
-    const completedThisMonth = data.items.filter((i) => {
-      const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-      if (!isDone) return false;
-      const compDate = (i.completedAt || i.publishedAt || thisMonthPeriod.startDate).split("T")[0];
-      return compDate >= thisMonthPeriod.startDate && compDate <= thisMonthPeriod.endDate;
-    });
+          COUNT(*) FILTER (
+            WHERE (deleted_at IS NULL)
+            AND (stage IN ('published', 'approved') OR completed_at IS NOT NULL)
+            AND (COALESCE(completed_at::text, published_at::text, '') >= ${thisMonthPeriod.startDate}
+                 AND COALESCE(completed_at::text, published_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"})
+          )::int AS completed_this_month,
 
-    const adHocThisMonth = data.items
-      .filter((i) => {
-        if (i.workNature !== "ad_hoc") return false;
-        const d = i.deadlines?.scheduledPublicationDate || i.finalInternalDeadline || i.completedAt;
-        const dStr = d ? d.split("T")[0] : "";
-        return dStr >= thisMonthPeriod.startDate && dStr <= thisMonthPeriod.endDate;
-      })
-      .reduce((sum, i) => sum + (i.finalPlannedSeconds ? i.finalPlannedSeconds / 3600 : 1.5), 0);
+          COALESCE(SUM(final_planned_seconds) FILTER (
+            WHERE (deleted_at IS NULL)
+            AND (work_nature = 'ad_hoc')
+            AND (COALESCE(scheduled_publication_date::text, final_internal_deadline::text, completed_at::text, '') >= ${thisMonthPeriod.startDate}
+                 AND COALESCE(scheduled_publication_date::text, final_internal_deadline::text, completed_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"})
+          ), 0)::int AS ad_hoc_planned_seconds
+        FROM content_items
+        WHERE org_id = ${orgId}
+      `),
 
-    // 2. Today's Workload rows
-    const todaysWorkload = tasksDueToday.map((item) => {
-      const proj = data.projects.find((p) => p.id === item.projectId);
-      const assignment = data.assignments.find((a) => a.contentItemId === item.id);
-      const assignee = assignment ? data.users.find((u) => u.id === assignment.assigneeUserId) : undefined;
+      // 2. Today's Workload Rows Query (joins project, assignment, user in PostgreSQL)
+      db.execute(sql`
+        SELECT 
+          ci.id,
+          ci.project_id AS "projectId",
+          p.name AS "projectName",
+          COALESCE(ci.topic, ci.title) AS "topic",
+          ci.title,
+          COALESCE(ci.work_type, ci.content_type) AS "workType",
+          COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, 'Today') AS "internalDeadline",
+          COALESCE(ci.scheduled_publication_date::text, 'TBD') AS "postingDate",
+          COALESCE(u.full_name, 'Unassigned') AS "assigneeName",
+          CASE 
+            WHEN ci.final_planned_seconds IS NOT NULL THEN ROUND((ci.final_planned_seconds::numeric / 3600.0), 2)
+            ELSE NULL
+          END AS "plannedHours",
+          ci.stage AS "status",
+          ci.priority
+        FROM content_items ci
+        JOIN projects p ON ci.project_id = p.id
+        LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id
+        LEFT JOIN users u ON u.id = ca.assignee_user_id
+        WHERE ci.org_id = ${orgId}
+          AND ci.deleted_at IS NULL
+          AND ci.stage NOT IN ('published', 'approved')
+          AND ci.completed_at IS NULL
+          AND COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, '') LIKE ${todayStr + "%"}
+        ORDER BY ci.priority = 'urgent' DESC, ci.created_at ASC
+      `),
+
+      // 3. User Capacity & Workload Aggregation (Set-based in PostgreSQL)
+      db.execute(sql`
+        WITH user_planned AS (
+          SELECT 
+            ca.assignee_user_id AS user_id,
+            COALESCE(SUM(ci.final_planned_seconds), 0)::numeric / 3600.0 AS assigned_hours,
+            COUNT(*) FILTER (WHERE ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)::int AS completed_count,
+            COUNT(*) FILTER (
+              WHERE (ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)
+              AND ci.completed_at <= COALESCE(ca.current_due_at, ca.initial_due_at, ci.final_internal_deadline, ci.submission_deadline)
+            )::int AS on_time_count
+          FROM content_assignments ca
+          JOIN content_items ci ON ca.content_item_id = ci.id
+          WHERE ca.org_id = ${orgId}
+            AND ca.status IN ('assigned', 'accepted', 'in_progress', 'submitted', 'completed')
+            AND ci.deleted_at IS NULL
+            AND COALESCE(ca.current_due_at::text, ca.initial_due_at::text, ci.final_internal_deadline::text, ci.submission_deadline::text, '') >= ${thisWeekPeriod.startDate}
+            AND COALESCE(ca.current_due_at::text, ca.initial_due_at::text, ci.final_internal_deadline::text, ci.submission_deadline::text, '') <= ${thisWeekPeriod.endDate + "T23:59:59"}
+          GROUP BY ca.assignee_user_id
+        ),
+        user_actuals AS (
+          SELECT 
+            ws.user_id,
+            COALESCE(SUM(ws.accumulated_seconds), 0)::numeric / 3600.0 AS actual_hours
+          FROM work_sessions ws
+          WHERE ws.org_id = ${orgId}
+            AND ws.started_at >= ${thisWeekPeriod.startDate}
+            AND ws.started_at <= ${thisWeekPeriod.endDate + "T23:59:59"}
+          GROUP BY ws.user_id
+        )
+        SELECT 
+          u.id,
+          u.full_name AS name,
+          u.organization_role AS role,
+          u.email,
+          u.avatar_url AS avatar,
+          ROUND(COALESCE(up.assigned_hours, 0), 2) AS "assignedPlannedHours",
+          ROUND(COALESCE(ua.actual_hours, 0), 2) AS "actualLoggedHours",
+          COALESCE(up.completed_count, 0) AS "completedTasksCount",
+          COALESCE(up.on_time_count, 0) AS "onTimeDeliveredCount"
+        FROM users u
+        LEFT JOIN user_planned up ON up.user_id = u.id
+        LEFT JOIN user_actuals ua ON ua.user_id = u.id
+        WHERE u.org_id = ${orgId}
+          AND u.status = 'active'
+          AND u.organization_role != 'client'
+        ORDER BY u.full_name ASC
+      `),
+
+      // 4. Project Health Aggregation (Set-based in PostgreSQL)
+      db.execute(sql`
+        WITH proj_items AS (
+          SELECT 
+            ci.project_id,
+            COUNT(*)::int AS planned_tasks_count,
+            COUNT(*) FILTER (WHERE ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)::int AS completed_tasks_count,
+            COUNT(*) FILTER (
+              WHERE (ci.stage NOT IN ('published', 'approved') AND ci.completed_at IS NULL)
+              AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < NOW()
+            )::int AS overdue_tasks_count,
+            COALESCE(SUM(ci.final_planned_seconds), 0)::numeric / 3600.0 AS planned_hours
+          FROM content_items ci
+          WHERE ci.org_id = ${orgId}
+            AND ci.deleted_at IS NULL
+            AND COALESCE(ci.scheduled_publication_date::text, ci.final_internal_deadline::text, ci.submission_deadline::text, ci.completed_at::text, '') >= ${thisMonthPeriod.startDate}
+            AND COALESCE(ci.scheduled_publication_date::text, ci.final_internal_deadline::text, ci.submission_deadline::text, ci.completed_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"}
+          GROUP BY ci.project_id
+        ),
+        proj_actuals AS (
+          SELECT 
+            ws.project_id,
+            COALESCE(SUM(ws.accumulated_seconds), 0)::numeric / 3600.0 AS actual_hours
+          FROM work_sessions ws
+          WHERE ws.org_id = ${orgId}
+            AND ws.started_at >= ${thisMonthPeriod.startDate}
+            AND ws.started_at <= ${thisMonthPeriod.endDate + "T23:59:59"}
+          GROUP BY ws.project_id
+        )
+        SELECT 
+          p.id,
+          p.name,
+          p.client_name AS "clientBrand",
+          COALESCE(pi.planned_tasks_count, 0) AS "plannedTasksCount",
+          COALESCE(pi.completed_tasks_count, 0) AS "completedTasksCount",
+          COALESCE(pi.overdue_tasks_count, 0) AS "overdueTasksCount",
+          ROUND(COALESCE(pi.planned_hours, 0), 2) AS "plannedHours",
+          ROUND(COALESCE(pa.actual_hours, 0), 2) AS "actualHours"
+        FROM projects p
+        LEFT JOIN proj_items pi ON pi.project_id = p.id
+        LEFT JOIN proj_actuals pa ON pa.project_id = p.id
+        WHERE p.org_id = ${orgId}
+          AND p.status = 'active'
+        ORDER BY p.name ASC
+      `),
+    ]);
+
+    const topCardRow: any = topCardsRes.rows[0] || {};
+    const workloadRows: any[] = workloadRes.rows || [];
+    const userCapacityRows: any[] = capacityRes.rows || [];
+    const projectHealthRows: any[] = projectHealthRes.rows || [];
+
+    profiler.mark(
+      "bounded-queries",
+      1 + workloadRows.length + userCapacityRows.length + projectHealthRows.length
+    );
+
+    // Format Weekly Team Capacity Scorecards
+    const weeklyTeamCapacity: EmployeePeriodScorecard[] = userCapacityRows.map((row) => {
+      const baseCapacity = 40;
+      const finalCapacity = 40;
+      const assigned = parseFloat(row.assignedPlannedHours) || 0;
+      const actual = parseFloat(row.actualLoggedHours) || 0;
+      const remaining = Math.round((finalCapacity - assigned) * 100) / 100;
+      const allocation = finalCapacity > 0 ? Math.round((assigned / finalCapacity) * 100) : 0;
+      const utilization = finalCapacity > 0 ? Math.round((actual / finalCapacity) * 100) : 0;
+      const efficiency = actual > 0 ? Math.round((assigned / actual) * 100) : null;
+      const onTime =
+        row.completedTasksCount > 0
+          ? Math.round((row.onTimeDeliveredCount / row.completedTasksCount) * 100)
+          : null;
+
+      let capacityStatus: "Available" | "Healthy" | "Fully Loaded" | "Overloaded" = "Available";
+      if (assigned > finalCapacity * 1.05) capacityStatus = "Overloaded";
+      else if (assigned >= finalCapacity * 0.95) capacityStatus = "Fully Loaded";
+      else if (assigned >= finalCapacity * 0.7) capacityStatus = "Healthy";
+
       return {
-        id: item.id,
-        projectId: item.projectId,
-        projectName: proj?.name || "Unknown",
-        topic: item.topic || item.title,
-        title: item.title,
-        workType: item.workType || item.contentType,
-        internalDeadline: item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || "Today",
-        postingDate: item.deadlines?.scheduledPublicationDate || "TBD",
-        assigneeName: assignee?.name || "Unassigned",
-        plannedHours: item.finalPlannedSeconds ? item.finalPlannedSeconds / 3600 : 2.0,
-        status: item.stage,
-        priority: item.priority || "normal",
+        user: {
+          id: row.id,
+          name: row.name,
+          role: row.role,
+          email: row.email,
+          avatar: row.avatar || undefined,
+        } as any,
+        capacity: {
+          userId: row.id,
+          primaryFunction: "creative" as any,
+          creativeEligibility: "primary" as any,
+          baseCapacityHours: baseCapacity,
+          adjustmentHours: 0,
+          finalCapacityHours: finalCapacity,
+          status: "active",
+          reason: undefined,
+          scheduleDetails: { mon: 8, tue: 8, wed: 8, thu: 8, fri: 8, sat: 0, sun: 0 },
+        },
+        assignedPlannedHours: assigned,
+        actualLoggedHours: actual,
+        remainingPlannedHours: remaining,
+        allocationPercent: allocation,
+        utilizationPercent: utilization,
+        efficiencyPercent: efficiency,
+        efficiencyDetails: {
+          totalCompletedPlannedHours: 0,
+          totalCompletedActualHours: 0,
+          varianceHours: 0,
+        },
+        capacityStatus,
+        overtimeHours: actual > finalCapacity ? Math.round((actual - finalCapacity) * 100) / 100 : 0,
+        completedTasksCount: row.completedTasksCount,
+        onTimeDeliveredCount: row.onTimeDeliveredCount,
+        onTimePercent: onTime,
+        reworkIncidencePercent: null,
+        firstPassApprovalPercent: null,
+        revisionRoundsAvg: null,
+        adHocHours: 0,
+        goodwillHours: 0,
+        assignedTasks: [],
+        completedTasks: [],
+        workSessions: [],
       };
     });
 
-    // 3. Weekly Team Capacity
-    const weeklyTeamCapacity = data.users
-      .filter((u) => u.role !== "client" && u.status === "active")
-      .map((u) =>
-        calculateEmployeeScorecard(
-          u,
-          thisWeekPeriod,
-          data.items,
-          data.assignments,
-          data.workSessions,
-          data.changeRequests,
-          data.schedules,
-          data.adjustments
-        )
-      );
+    // Format Monthly Project Health Scorecards
+    const monthlyProjectHealth: ProjectPerformanceScorecard[] = projectHealthRows.map((row) => {
+      const plannedTasks = row.plannedTasksCount || 0;
+      const completedTasks = row.completedTasksCount || 0;
+      const overdueTasks = row.overdueTasksCount || 0;
+      const plannedHours = parseFloat(row.plannedHours) || 0;
+      const actualHours = parseFloat(row.actualHours) || 0;
+      const completionPercent =
+        plannedTasks > 0 ? Math.round((completedTasks / plannedTasks) * 100) : 0;
 
-    // 4. Monthly Project Health
-    const monthlyProjectHealth = data.projects.map((p) =>
-      calculateProjectPerformance(p, thisMonthPeriod, data.items, data.workSessions, data.commitments, data.perfInputs)
-    );
+      return {
+        project: {
+          id: row.id,
+          name: row.name,
+          clientBrand: row.clientBrand,
+          status: "active",
+        } as any,
+        plannedTasksCount: plannedTasks,
+        completedTasksCount: completedTasks,
+        pendingTasksCount: Math.max(0, plannedTasks - completedTasks),
+        overdueTasksCount: overdueTasks,
+        plannedHours,
+        actualHours,
+        varianceHours: Math.round((plannedHours - actualHours) * 100) / 100,
+        adHocHours: 0,
+        goodwillHours: 0,
+        completionPercent,
+        commitments: [],
+      };
+    });
 
-    // 5. Employee Personal View
+    // Format Today's Workload rows
+    const todaysWorkload = workloadRows.map((row) => ({
+      id: row.id,
+      projectId: row.projectId,
+      projectName: row.projectName,
+      topic: row.topic,
+      title: row.title,
+      workType: row.workType,
+      internalDeadline: row.internalDeadline,
+      postingDate: row.postingDate,
+      assigneeName: row.assigneeName,
+      plannedHours: row.plannedHours !== null ? parseFloat(row.plannedHours) : null,
+      status: row.status,
+      priority: row.priority || "normal",
+    }));
+
+    // 5. Lightweight Employee Personal View (if employee)
     let employeePersonalView: MainDashboardDataDTO["employeePersonalView"] = undefined;
-    const currentUser = data.users.find((u) => u.id === authUser.id);
-    if (currentUser) {
-      const userAssignments = data.assignments.filter((a) => a.assigneeUserId === currentUser.id);
-      const userItemIds = new Set(userAssignments.map((a) => a.contentItemId));
-      const userItems = data.items.filter((i) => userItemIds.has(i.id) || i.accountOwnerId === currentUser.id);
-
-      const dueTodayTasks = userItems.filter((i) => {
-        const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-        if (isDone) return false;
-        const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.startsWith(todayStr) : false;
-      });
-
-      const urgentTasks = userItems.filter((i) => {
-        const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-        return !isDone && i.priority === "urgent";
-      });
-
-      const userSessionsToday = data.workSessions.filter((s) => s.userId === currentUser.id && s.startedAt.startsWith(todayStr));
-      const loggedHoursToday = userSessionsToday.reduce((sum, s) => sum + (s.accumulatedSeconds || 0), 0) / 3600;
-      const plannedHoursToday = dueTodayTasks.reduce((sum, i) => sum + (i.finalPlannedSeconds ? i.finalPlannedSeconds / 3600 : 2.0), 0);
-
-      const activeTimer = data.workSessions.find((s) => s.userId === currentUser.id && s.status === "active");
-
-      // Queue split: Today, Tomorrow, Upcoming
+    if (!isManagement) {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowStr = tomorrow.toISOString().split("T")[0];
 
-      const queueToday = dueTodayTasks;
-      const queueTomorrow = userItems.filter((i) => {
-        const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-        if (isDone) return false;
+      const [userItemsRes, activeTimerRes, userTodayHoursRes] = await Promise.all([
+        db.execute(sql`
+          SELECT 
+            ci.id, ci.title, ci.project_id, ci.stage, ci.priority, ci.final_planned_seconds,
+            ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline
+          FROM content_items ci
+          JOIN content_assignments ca ON ca.content_item_id = ci.id
+          WHERE ca.assignee_user_id = ${authUser.id}
+            AND ci.org_id = ${orgId}
+            AND ci.deleted_at IS NULL
+            AND ca.status IN ('assigned', 'accepted', 'in_progress')
+          ORDER BY ci.priority = 'urgent' DESC, ci.created_at ASC
+        `),
+        db.execute(sql`
+          SELECT * FROM work_sessions
+          WHERE user_id = ${authUser.id} AND status = 'active'
+          LIMIT 1
+        `),
+        db.execute(sql`
+          SELECT COALESCE(SUM(accumulated_seconds), 0)::numeric / 3600.0 as logged_today
+          FROM work_sessions
+          WHERE user_id = ${authUser.id} AND started_at >= ${todayStr}
+        `),
+      ]);
+
+      const userItems = (userItemsRes.rows as any[]).map((r) => ({
+        id: r.id,
+        title: r.title,
+        projectId: r.project_id,
+        stage: r.stage,
+        priority: r.priority,
+        finalPlannedSeconds: r.final_planned_seconds,
+        finalInternalDeadline: r.final_internal_deadline,
+        calculatedInternalDeadline: r.calculated_internal_deadline,
+        deadlines: { submissionDeadline: r.submission_deadline },
+      })) as any[];
+
+      const dueTodayTasks = userItems.filter((i) => {
         const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.startsWith(tomorrowStr) : false;
-      });
-      const queueUpcoming = userItems.filter((i) => {
-        const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-        if (isDone) return false;
-        const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.split("T")[0] > tomorrowStr : false;
+        return dl ? dl.toString().startsWith(todayStr) : false;
       });
 
-      const weekScorecard = calculateEmployeeScorecard(
-        currentUser,
-        thisWeekPeriod,
-        data.items,
-        data.assignments,
-        data.workSessions,
-        data.changeRequests,
-        data.schedules,
-        data.adjustments
+      const queueTomorrow = userItems.filter((i) => {
+        const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
+        return dl ? dl.toString().startsWith(tomorrowStr) : false;
+      });
+
+      const queueUpcoming = userItems.filter((i) => {
+        const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
+        return dl ? dl.toString().split("T")[0] > tomorrowStr : false;
+      });
+
+      const loggedToday = parseFloat((userTodayHoursRes.rows[0] as any)?.logged_today || "0");
+      const plannedToday = dueTodayTasks.reduce(
+        (sum, i) => sum + (i.finalPlannedSeconds ? i.finalPlannedSeconds / 3600 : 0),
+        0
       );
+
+      const currentUserScorecard =
+        weeklyTeamCapacity.find((c) => c.user.id === authUser.id) ||
+        ({
+          user: { id: authUser.id, name: authUser.fullName, role: authUser.organizationRole, email: authUser.email } as any,
+          capacity: {
+            userId: authUser.id,
+            primaryFunction: "creative" as any,
+            creativeEligibility: "primary" as any,
+            baseCapacityHours: 40,
+            adjustmentHours: 0,
+            finalCapacityHours: 40,
+            status: "active",
+            scheduleDetails: { mon: 8, tue: 8, wed: 8, thu: 8, fri: 8, sat: 0, sun: 0 },
+          },
+          assignedPlannedHours: 0,
+          actualLoggedHours: loggedToday,
+          remainingPlannedHours: 40,
+          allocationPercent: 0,
+          utilizationPercent: 0,
+          efficiencyPercent: null,
+          efficiencyDetails: {
+            totalCompletedPlannedHours: 0,
+            totalCompletedActualHours: 0,
+            varianceHours: 0,
+          },
+          capacityStatus: "Available",
+          overtimeHours: 0,
+          completedTasksCount: 0,
+          onTimeDeliveredCount: 0,
+          onTimePercent: null,
+          reworkIncidencePercent: null,
+          firstPassApprovalPercent: null,
+          revisionRoundsAvg: null,
+          adHocHours: 0,
+          goodwillHours: 0,
+          assignedTasks: [],
+          completedTasks: [],
+          workSessions: [],
+        } as EmployeePeriodScorecard);
 
       employeePersonalView = {
         dueTodayTasks,
-        plannedHoursToday: Math.round(plannedHoursToday * 100) / 100,
-        loggedHoursToday: Math.round(loggedHoursToday * 100) / 100,
-        urgentTasks,
-        activeTimer,
-        queueToday,
+        plannedHoursToday: Math.round(plannedToday * 100) / 100,
+        loggedHoursToday: Math.round(loggedToday * 100) / 100,
+        urgentTasks: userItems.filter((i) => i.priority === "urgent"),
+        activeTimer: (activeTimerRes.rows[0] as any) || undefined,
+        queueToday: dueTodayTasks,
         queueTomorrow,
         queueUpcoming,
-        weekScorecard,
+        weekScorecard: currentUserScorecard,
       };
     }
+
+    profiler.mark("dto-mapping");
+    profiler.logSummary();
 
     return {
       success: true,
       data: {
         isManagement,
-        tasksDueTodayCount: tasksDueToday.length,
-        overdueOpenTasksCount: overdueTasks.length,
-        adHocHoursThisMonth: Math.round(adHocThisMonth * 100) / 100,
-        completedThisMonthCount: completedThisMonth.length,
+        tasksDueTodayCount: topCardRow.tasks_due_today || 0,
+        overdueOpenTasksCount: topCardRow.overdue_tasks || 0,
+        adHocHoursThisMonth: Math.round(((topCardRow.ad_hoc_planned_seconds || 0) / 3600) * 100) / 100,
+        completedThisMonthCount: topCardRow.completed_this_month || 0,
         todaysWorkload,
         weeklyTeamCapacity,
         monthlyProjectHealth,
@@ -665,6 +946,7 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
       },
     };
   } catch (error: any) {
+    console.error("[getAuthoritativeMainDashboardAction] error:", error);
     return { success: false, error: error.message };
   }
 }

@@ -110,9 +110,9 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
             </Link>
 
             <Link
-              href={activeProjectId ? `/projects/${activeProjectId}/calendar` : "/projects"}
+              href="/calendar"
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
-                pathname.includes("/calendar")
+                pathname === "/calendar"
                   ? "bg-[#e8e8ed] text-[#1d1d1f]"
                   : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
               }`}
@@ -145,9 +145,9 @@ export function Header({ onOpenNotifDrawer }: HeaderProps) {
             )}
 
             <Link
-              href={activeProjectId ? `/projects/${activeProjectId}/approvals` : "/projects"}
+              href="/approvals"
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium transition ${
-                pathname.includes("/approvals")
+                pathname === "/approvals"
                   ? "bg-[#e8e8ed] text-[#1d1d1f]"
                   : "text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
               }`}

@@ -275,7 +275,9 @@ export default function AuthoritativeDashboardPage() {
                         </td>
 
                         <td className="py-3.5 px-4 text-right font-semibold text-[#0071e3]">
-                          {row.plannedHours.toFixed(2)}h
+                          {row.plannedHours !== null && row.plannedHours !== undefined
+                            ? `${row.plannedHours.toFixed(2)}h`
+                            : <span className="text-[11px] font-normal text-[#86868b] italic">Planned effort unavailable</span>}
                         </td>
 
                         <td className="py-3.5 px-4 text-center">

@@ -129,6 +129,7 @@ export async function assignContentItemAction(params: AssignContentItemParams) {
           .set({ currentDueAt: effectiveDueAt, updatedAt: now })
           .where(eq(contentAssignments.id, existing.id));
       }
+
       return { success: true, assignment: existing, reassigned: false };
     }
 

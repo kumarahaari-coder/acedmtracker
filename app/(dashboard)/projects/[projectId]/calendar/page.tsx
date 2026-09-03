@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { ContentItem, ContentPlatform, ContentType, DeadlineKind, ScopeClassification } from "@/lib/types";
 import { formatDate, getCurrentISTDate } from "@/lib/formatters";
+import { getAuthoritativeCalendarDataAction, CalendarDataDTO } from "@/lib/actions/calendar";
 
 export default function CalendarPage() {
   const params = useParams();
@@ -51,6 +52,32 @@ export default function CalendarPage() {
     () => new Date(todayIST.year, todayIST.month, todayIST.day)
   );
 
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+
+  // Bounded authoritative calendar data state
+  const [calendarData, setCalendarData] = useState<CalendarDataDTO | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(true);
+
+  const loadCalendarData = async () => {
+    if (!projectId) return;
+    setCalendarLoading(true);
+    try {
+      const res = await getAuthoritativeCalendarDataAction(projectId, year, month);
+      if (res.success && res.data) {
+        setCalendarData(res.data);
+      }
+    } catch (err) {
+      console.error("[CalendarPage] Failed to fetch bounded calendar data:", err);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCalendarData();
+  }, [projectId, year, month]);
+
   // Reschedule Modal
   const [selectedItemForReschedule, setSelectedItemForReschedule] = useState<ContentItem | null>(null);
   const [newDateVal, setNewDateVal] = useState("");
@@ -69,17 +96,15 @@ export default function CalendarPage() {
   const [quickWorkNature, setQuickWorkNature] = useState<"planned" | "ad_hoc">("planned");
   const [quickDeadlineOverride, setQuickDeadlineOverride] = useState("");
 
-  const project = state.projects.find((p) => p.id === projectId);
-  const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
-  const effortStandardsList = state.effortStandards || [];
+  const project = calendarData?.project || state.projects.find((p) => p.id === projectId);
+  const projectItems = calendarData?.items || state.contentItems.filter((i) => i.projectId === projectId);
+  const effortStandardsList = calendarData?.effortStandards || state.effortStandards || [];
+  const eligibleProjectMembers = calendarData?.eligibleProjectMembers || [];
 
   const monthNames = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
   ];
-
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
 
   const getItemLayerDate = (item: ContentItem): string | undefined => {
     if (dateLayer === "internal_deadline") {
@@ -184,6 +209,7 @@ export default function CalendarPage() {
       });
     }
 
+    await loadCalendarData();
     setSelectedItemForReschedule(null);
     setRescheduleReason("");
   };
@@ -203,18 +229,25 @@ export default function CalendarPage() {
       return;
     }
 
+    const matchedStd = effortStandardsList.find((s) => s.workType === quickWorkType);
+
     if (quickPlatforms.length > 1) {
-      // Multi-Platform: 1 ContentGroup + N platform-specific ContentItems + N ContentAssignments
+      // Multi-Platform: 1 ContentGroup + N platform-specific ContentItems with explicit Anchor semantics
       await createContentGroupWithItems({
         projectId,
         title: quickTitle.trim(),
         actorUserId: activeUserId,
+        workType: quickWorkType,
+        workTypeId: matchedStd?.id,
+        scopeClassification: quickScope,
+        workNature: quickWorkNature,
         platforms: quickPlatforms.map((p) => ({
           platform: p,
           contentType: quickType,
           accountableOwnerId: quickAssigneeId,
           submissionDeadline: quickDate,
           scheduledPublicationDate: quickDate,
+          scopeClassification: quickScope,
         })),
       });
     } else {
@@ -224,6 +257,8 @@ export default function CalendarPage() {
         title: quickTitle.trim(),
         platform: quickPlatforms[0],
         contentType: quickType,
+        workType: quickWorkType,
+        workTypeId: matchedStd?.id,
         stage: "draft",
         accountableOwnerId: quickAssigneeId,
         collaboratorIds: [],
@@ -232,9 +267,11 @@ export default function CalendarPage() {
           scheduledPublicationDate: quickDate,
         },
         scopeClassification: quickScope,
+        workNature: quickWorkNature,
       }, undefined, [], activeUserId);
     }
 
+    await loadCalendarData();
     setIsQuickCreateOpen(false);
     setQuickTitle("");
     setQuickPlatforms(["Instagram"]);
@@ -827,13 +864,17 @@ export default function CalendarPage() {
                   className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none"
                 >
                   <option value="">Unassigned</option>
-                  {state.users
-                    .filter((u) => u.role !== "client" && u.status === "active")
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.role})
+                  {eligibleProjectMembers.length > 0 ? (
+                    eligibleProjectMembers.map(({ user, membership }) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} — {membership.membershipRole} ({user.role})
                       </option>
-                    ))}
+                    ))
+                  ) : (
+                    <option value="" disabled>
+                      No active production members on this project
+                    </option>
+                  )}
                 </select>
               </div>
 

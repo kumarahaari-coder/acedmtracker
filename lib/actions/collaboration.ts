@@ -1,11 +1,12 @@
 "use server";
 
 import { db, runTransaction } from "../db";
-import { comments, annotations, externalReviewTokens, auditRecords, notifications, submissionVersions, contentItems, projects, creativeAssets, campaigns } from "../db/schema";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { comments, annotations, externalReviewTokens, auditRecords, notifications, submissionVersions, contentItems, projects, creativeAssets, submissionAssets, campaigns } from "../db/schema";
+import { eq, and, sql, desc, asc } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveSubmissionVersionId, resolveContentItemId, resolveProjectId, resolveUserId } from "../compat/resolver";
 import { invalidateWorkspaceEntities } from "./revalidation";
+import { generatePresignedDownloadUrl } from "../storage/r2";
 import crypto from "node:crypto";
 
 /**
@@ -151,6 +152,8 @@ export async function createExternalReviewTokenAction(params: {
   };
 }
 
+export { createExternalReviewTokenAction as generateExternalReviewTokenAction };
+
 /**
  * 4. Verify External Review Token Action
  * Scoped sandbox resolution without exposing internal users, assignments, or comments.
@@ -172,12 +175,14 @@ export async function verifyExternalReviewTokenAction(rawToken: string) {
 
   if (!record) return { success: false, error: "Review link is invalid, expired, or revoked." };
 
-  // Fetch only the explicitly shared submission version & assets
+  // Fetch only the explicitly shared submission version
   const [version] = await db
     .select()
     .from(submissionVersions)
     .where(eq(submissionVersions.id, record.submissionVersionId))
     .limit(1);
+
+  if (!version) return { success: false, error: "Shared submission version no longer exists." };
 
   const [item] = await db
     .select({
@@ -190,13 +195,228 @@ export async function verifyExternalReviewTokenAction(rawToken: string) {
     .where(eq(contentItems.id, record.contentItemId))
     .limit(1);
 
+  // Fetch attached creative assets strictly scoped to this token-bound submission version
+  const rawAttachedAssets = await db
+    .select({
+      id: creativeAssets.id,
+      r2ObjectKey: creativeAssets.r2ObjectKey,
+      originalFilename: creativeAssets.originalFilename,
+      fileSizeBytes: creativeAssets.fileSizeBytes,
+      mimeType: creativeAssets.mimeType,
+      status: creativeAssets.status,
+      sortOrder: submissionAssets.sortOrder,
+    })
+    .from(submissionAssets)
+    .innerJoin(creativeAssets, eq(submissionAssets.creativeAssetId, creativeAssets.id))
+    .where(eq(submissionAssets.submissionVersionId, record.submissionVersionId))
+    .orderBy(asc(submissionAssets.sortOrder));
+
+  const eligibleAssets = rawAttachedAssets.filter((a) => a.status === "ready");
+
+  const mappedAssets = await Promise.all(
+    eligibleAssets.map(async (asset) => {
+      const isPdf = asset.mimeType === "application/pdf" || asset.originalFilename.toLowerCase().endsWith(".pdf");
+      const previewUrl = await generatePresignedDownloadUrl({
+        objectKey: asset.r2ObjectKey,
+        filename: asset.originalFilename,
+        mimeType: asset.mimeType,
+        inline: true,
+      });
+
+      return {
+        assetId: asset.id,
+        filename: asset.originalFilename,
+        mimeType: asset.mimeType,
+        fileSizeBytes: asset.fileSizeBytes,
+        previewUrl,
+        sortOrder: asset.sortOrder,
+        isPdf,
+      };
+    })
+  );
+
+  // Fetch external comments for this version
+  const versionComments = await db
+    .select()
+    .from(comments)
+    .where(
+      and(
+        eq(comments.submissionVersionId, record.submissionVersionId),
+        eq(comments.visibility, "external")
+      )
+    )
+    .orderBy(desc(comments.createdAt));
+
+  const mappedVersion = {
+    id: version.id,
+    contentItemId: version.contentItemId,
+    projectId: version.projectId,
+    versionNumber: version.versionNumber,
+    isDraft: version.isDraft,
+    submittedAt: version.submittedAt ? version.submittedAt.toISOString() : null,
+    caption: version.caption || "",
+    hashtags: version.hashtags || [],
+    cta: version.cta || "",
+    destinationUrl: version.destinationUrl || null,
+    copy: {
+      caption: version.caption || "",
+      hashtags: version.hashtags || [],
+      cta: version.cta || "",
+      destinationUrl: version.destinationUrl || null,
+    },
+    creativeAssets: mappedAssets,
+  };
+
   return {
     success: true,
     tokenRecord: record,
     contentItem: item,
-    submissionVersion: version,
+    submissionVersion: mappedVersion,
     allowDownload: record.allowDownload,
+    comments: versionComments,
   };
+}
+
+/**
+ * 4b. Guest Authorized Asset Download URL Action
+ * Verifies token validity and proves asset is attached to the token-bound submission version.
+ * Does not require Auth.js login.
+ */
+export async function getGuestAuthorizedAssetDownloadUrlAction(params: {
+  rawToken: string;
+  assetId: string;
+  inline?: boolean;
+}) {
+  const { rawToken, assetId, inline = false } = params;
+  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+  const [record] = await db
+    .select()
+    .from(externalReviewTokens)
+    .where(
+      and(
+        eq(externalReviewTokens.tokenHash, tokenHash),
+        sql`${externalReviewTokens.revokedAt} IS NULL`,
+        sql`${externalReviewTokens.expiresAt} > NOW()`
+      )
+    )
+    .limit(1);
+
+  if (!record) return { success: false, error: "Review link is invalid, expired, or revoked." };
+
+  // Verify that the requested asset is attached to the exact submission version bound to this token
+  const [attached] = await db
+    .select({ id: submissionAssets.id })
+    .from(submissionAssets)
+    .where(
+      and(
+        eq(submissionAssets.submissionVersionId, record.submissionVersionId),
+        eq(submissionAssets.creativeAssetId, assetId)
+      )
+    )
+    .limit(1);
+
+  if (!attached) {
+    return { success: false, error: "Unauthorized: Asset not attached to this review version." };
+  }
+
+  const [asset] = await db
+    .select()
+    .from(creativeAssets)
+    .where(eq(creativeAssets.id, assetId))
+    .limit(1);
+
+  if (!asset || asset.status !== "ready") {
+    return { success: false, error: "Asset not found or not ready." };
+  }
+
+  const downloadUrl = await generatePresignedDownloadUrl({
+    objectKey: asset.r2ObjectKey,
+    filename: asset.originalFilename,
+    mimeType: asset.mimeType,
+    inline,
+  });
+
+  return {
+    success: true,
+    downloadUrl,
+    filename: asset.originalFilename,
+    mimeType: asset.mimeType,
+  };
+}
+
+/**
+ * Allows guest reviewer to post external comment
+ */
+export async function postExternalReviewCommentAction(params: {
+  rawToken: string;
+  guestName: string;
+  commentBody: string;
+}) {
+  const { rawToken, guestName, commentBody } = params;
+  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+  const [record] = await db
+    .select()
+    .from(externalReviewTokens)
+    .where(
+      and(
+        eq(externalReviewTokens.tokenHash, tokenHash),
+        sql`${externalReviewTokens.revokedAt} IS NULL`,
+        sql`${externalReviewTokens.expiresAt} > NOW()`
+      )
+    )
+    .limit(1);
+
+  if (!record) return { success: false, error: "Review link is invalid, expired, or revoked." };
+
+  const [newComment] = await db
+    .insert(comments)
+    .values({
+      legacyId: generateLegacyId("comm"),
+      orgId: record.orgId,
+      projectId: record.projectId,
+      contentItemId: record.contentItemId,
+      submissionVersionId: record.submissionVersionId,
+      externalReviewerName: guestName,
+      visibility: "external",
+      body: commentBody,
+    })
+    .returning();
+
+  return { success: true, comment: newComment };
+}
+
+/**
+ * Revokes an external review token
+ */
+export async function revokeExternalReviewTokenAction(params: {
+  actorUserId: string;
+  tokenId: string;
+}) {
+  const { actorUserId, tokenId } = params;
+  const [record] = await db
+    .select()
+    .from(externalReviewTokens)
+    .where(eq(externalReviewTokens.id, tokenId))
+    .limit(1);
+
+  if (!record) return { success: false, error: "Token record not found." };
+
+  const access = await requireProjectAccess(actorUserId, record.projectId);
+  if (!access.allowed || access.role === "client") {
+    return { success: false, error: "Unauthorized to revoke review token." };
+  }
+
+  const [updated] = await db
+    .update(externalReviewTokens)
+    .set({
+      revokedAt: sql`NOW()`,
+    })
+    .where(eq(externalReviewTokens.id, record.id))
+    .returning();
+
+  return { success: true, tokenRecord: updated };
 }
 
 /**
