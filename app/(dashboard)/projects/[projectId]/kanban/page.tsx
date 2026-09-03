@@ -1,39 +1,66 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import {
   AlertTriangle,
-  ArrowRight,
-  CheckCircle2,
-  ChevronRight,
-  Clock,
   GanttChart,
   Trello,
-  X,
+  Loader2,
+  RefreshCw,
+  User as UserIcon,
 } from "lucide-react";
-import { ContentItem, ContentStage } from "@/lib/types";
-import { getItemApprovalMatrixSummary } from "@/lib/derived";
+import { ContentStage } from "@/lib/types";
 import { formatDate } from "@/lib/formatters";
+import {
+  getAuthoritativeProjectKanbanAction,
+  ProjectKanbanDTO,
+  KanbanCardDTO,
+} from "@/lib/actions/kanban";
+import { updateContentItemStageAction } from "@/lib/actions/content";
 
 export default function KanbanBoardPage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state, updateContentItem, updateContentItemStage } = useAppState();
-  const { activeRole, canManageWorkflow, canApprove } = useRole();
+  const { activeRole, activeUserId } = useRole();
 
+  const [loading, setLoading] = useState(true);
+  const [kanbanData, setKanbanData] = useState<ProjectKanbanDTO | null>(null);
   const [viewMode, setViewMode] = useState<"kanban" | "timeline">("kanban");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [isUpdatingStage, setIsUpdatingStage] = useState(false);
 
-  const projectItems = state.contentItems.filter((i) => {
-    const matchesProj = i.projectId === projectId;
+  // Authoritative project-scoped data loader
+  const loadKanbanData = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      setLoading(true);
+      const res = await getAuthoritativeProjectKanbanAction(projectId, activeUserId);
+      if (res.success && res.data) {
+        setKanbanData(res.data);
+      } else {
+        setTransitionError(res.error || "Failed to load project Kanban data");
+      }
+    } catch (err: any) {
+      console.error("[KanbanBoardPage] Fetch error:", err);
+      setTransitionError("Network error while loading Kanban board");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, activeUserId]);
+
+  useEffect(() => {
+    loadKanbanData();
+  }, [loadKanbanData]);
+
+  const cards = kanbanData?.cards || [];
+  const projectItems = cards.filter((i) => {
     const matchesPlatform = platformFilter === "all" || i.platform === platformFilter;
-    return matchesProj && matchesPlatform;
+    return matchesPlatform;
   });
 
   const columns: { stage: ContentStage; title: string }[] = [
@@ -48,39 +75,87 @@ export default function KanbanBoardPage() {
 
   const handleStageTransition = async (itemId: string, targetStage: ContentStage) => {
     setTransitionError(null);
-    const item = state.contentItems.find((i) => i.id === itemId);
-    if (!item) return;
+    const card = cards.find((i) => i.id === itemId);
+    if (!card) return;
 
-    if (item.stage === targetStage) return;
-
-    const latestVersion = state.submissionVersions.find(
-      (v) => v.id === item.latestSubmittedVersionId || v.id === item.activeDraftVersionId
-    );
-    const approvalSummary = getItemApprovalMatrixSummary(
-      item,
-      latestVersion,
-      state.approvalDecisions,
-      state.founderOverrides
-    );
+    if (card.stage === targetStage) return;
 
     // Approval gate checks
-    if ((targetStage === "approved" || targetStage === "scheduled" || targetStage === "published") && !approvalSummary.allComponentsApproved) {
+    const isApprovedOrBeyond = targetStage === "approved" || targetStage === "scheduled" || targetStage === "published";
+    if (isApprovedOrBeyond && !card.approvalSummary.allComponentsApproved && !card.approvalSummary.isOverridden) {
       setTransitionError(
-        `Cannot move '${item.title}' to ${targetStage.toUpperCase()}: Gated by approval workflow. All 3 components (Copy, Creative, Posting Date) must be approved by both Consultant and Founder, or Founder Override must be applied.`
+        `Cannot move '${card.title}' to ${targetStage.toUpperCase()}: Gated by approval workflow. All 3 components (Copy, Creative, Posting Date) must be approved by both Consultant and Founder, or Founder Override must be applied.`
       );
       return;
     }
 
-    if (targetStage === "published" && !item.liveUrl) {
+    if (targetStage === "published" && !card.liveUrl) {
       setTransitionError(
-        `Cannot mark '${item.title}' as Published: A valid Live Post URL is required.`
+        `Cannot mark '${card.title}' as Published: A valid Live Post URL is required.`
       );
       return;
     }
 
-    const res = await updateContentItemStage(itemId, targetStage, undefined, `Stage moved to ${targetStage.toUpperCase()}`);
-    if (!res.success) {
-      setTransitionError(res.error || `Failed to update stage for '${item.title}' in database.`);
+    // Optimistic UI update
+    const previousStage = card.stage;
+    setKanbanData((prev) => {
+      if (!prev) return prev;
+      const nextCards = prev.cards.map((c) => (c.id === itemId ? { ...c, stage: targetStage } : c));
+      const nextColumns = prev.columns.map((col) => ({
+        ...col,
+        cardCount: nextCards.filter((c) => c.stage === col.stage).length,
+      }));
+      return {
+        ...prev,
+        cards: nextCards,
+        columns: nextColumns,
+      };
+    });
+
+    setIsUpdatingStage(true);
+    try {
+      const res = await updateContentItemStageAction({
+        actorUserId: activeUserId,
+        contentItemId: itemId,
+        stage: targetStage,
+        reason: `Stage moved to ${targetStage.toUpperCase()} in Kanban`,
+      });
+
+      if (!res.success) {
+        // Rollback optimistic update
+        setKanbanData((prev) => {
+          if (!prev) return prev;
+          const revertedCards = prev.cards.map((c) => (c.id === itemId ? { ...c, stage: previousStage } : c));
+          const revertedColumns = prev.columns.map((col) => ({
+            ...col,
+            cardCount: revertedCards.filter((c) => c.stage === col.stage).length,
+          }));
+          return {
+            ...prev,
+            cards: revertedCards,
+            columns: revertedColumns,
+          };
+        });
+        setTransitionError(res.error || `Failed to update stage for '${card.title}'.`);
+      }
+    } catch (err: any) {
+      // Rollback optimistic update
+      setKanbanData((prev) => {
+        if (!prev) return prev;
+        const revertedCards = prev.cards.map((c) => (c.id === itemId ? { ...c, stage: previousStage } : c));
+        const revertedColumns = prev.columns.map((col) => ({
+          ...col,
+          cardCount: revertedCards.filter((c) => c.stage === col.stage).length,
+        }));
+        return {
+          ...prev,
+          cards: revertedCards,
+          columns: revertedColumns,
+        };
+      });
+      setTransitionError("Server error while updating deliverable stage.");
+    } finally {
+      setIsUpdatingStage(false);
     }
   };
 
@@ -111,11 +186,22 @@ export default function KanbanBoardPage() {
             Workflow Pipeline
           </h1>
           <p className="text-[14px] text-[#6e6e73]">
+            {kanbanData?.project.name ? `${kanbanData.project.name} · ` : ""}
             Track delivery stages, drag-and-drop workflow updates, and milestone timeline.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          {/* Refresh Button */}
+          <button
+            onClick={() => loadKanbanData()}
+            disabled={loading}
+            title="Refresh Kanban"
+            className="p-2 rounded-full border border-black/[0.08] bg-white text-[#6e6e73] hover:text-[#1d1d1f] transition shadow-xs disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+
           {/* View Mode Toggle */}
           <div className="flex items-center bg-[#ffffff] border border-black/[0.08] rounded-full p-1 shadow-sm text-[13px]">
             <button
@@ -172,8 +258,14 @@ export default function KanbanBoardPage() {
         </div>
       )}
 
-      {/* View Mode: Kanban Board */}
-      {viewMode === "kanban" ? (
+      {/* Loading State */}
+      {loading && !kanbanData ? (
+        <div className="min-h-[400px] flex flex-col items-center justify-center gap-3">
+          <Loader2 className="h-8 w-8 text-[#0071e3] animate-spin" />
+          <p className="text-[13px] text-[#86868b]">Loading workflow pipeline...</p>
+        </div>
+      ) : viewMode === "kanban" ? (
+        /* View Mode: Kanban Board */
         <div className="flex gap-4 overflow-x-auto pb-6 items-start min-h-[calc(100vh-16rem)]">
           {columns.map((col) => {
             const colItems = projectItems.filter((i) => i.stage === col.stage);
@@ -203,15 +295,7 @@ export default function KanbanBoardPage() {
                     </div>
                   ) : (
                     colItems.map((item) => {
-                      const latestVersion = state.submissionVersions.find(
-                        (v) => v.id === item.latestSubmittedVersionId || v.id === item.activeDraftVersionId
-                      );
-                      const approvalSummary = getItemApprovalMatrixSummary(
-                        item,
-                        latestVersion,
-                        state.approvalDecisions,
-                        state.founderOverrides
-                      );
+                      const approvalSummary = item.approvalSummary;
 
                       return (
                         <div
@@ -242,6 +326,21 @@ export default function KanbanBoardPage() {
                             {item.title}
                           </Link>
 
+                          {/* Production Owner & Planned Hours */}
+                          <div className="flex items-center justify-between text-[11px] text-[#86868b]">
+                            <div className="flex items-center gap-1.5 truncate">
+                              <UserIcon className="h-3 w-3 shrink-0 text-[#86868b]" />
+                              <span className="truncate">
+                                {item.productionOwner?.name || "Unassigned"}
+                              </span>
+                            </div>
+                            {item.plannedEffortSeconds > 0 && (
+                              <span className="shrink-0 font-medium text-[#1d1d1f]">
+                                {(item.plannedEffortSeconds / 3600).toFixed(1)}h
+                              </span>
+                            )}
+                          </div>
+
                           {/* Approval Status Chip */}
                           <div className="flex items-center justify-between text-[11px]">
                             {approvalSummary.isOverridden ? (
@@ -268,8 +367,9 @@ export default function KanbanBoardPage() {
                             <span className="text-[#86868b]">Move:</span>
                             <select
                               value={item.stage}
+                              disabled={isUpdatingStage}
                               onChange={(e) => handleStageTransition(item.id, e.target.value as ContentStage)}
-                              className="bg-[#f5f5f7] border border-black/[0.08] text-[#1d1d1f] rounded-lg px-2 py-0.5 text-[11px] focus:outline-none"
+                              className="bg-[#f5f5f7] border border-black/[0.08] text-[#1d1d1f] rounded-lg px-2 py-0.5 text-[11px] focus:outline-none disabled:opacity-50"
                             >
                               <option value="draft">Draft</option>
                               <option value="submitted">Submitted</option>
@@ -294,53 +394,59 @@ export default function KanbanBoardPage() {
         <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
           <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
             <h3 className="font-semibold text-[#1d1d1f] text-[16px]">Quarterly Delivery Timeline</h3>
-            <span className="text-[13px] text-[#86868b]">August – September 2026</span>
+            <span className="text-[13px] text-[#86868b]">Active Milestones</span>
           </div>
 
           <div className="space-y-3">
-            {projectItems.map((item) => {
-              const deadline = item.deadlines.scheduledPublicationDate || item.deadlines.submissionDeadline;
-              return (
-                <div key={item.id} className="rounded-xl border border-black/[0.06] bg-[#fbfbfd] p-4 text-[13px] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#1d1d1f]">
-                        {item.platform}
+            {projectItems.length === 0 ? (
+              <div className="text-center py-10 text-[13px] text-[#86868b]">
+                No deliverables found for the selected platform filter.
+              </div>
+            ) : (
+              projectItems.map((item) => {
+                const deadline = item.deadlines.scheduledPublicationDate || item.deadlines.submissionDeadline;
+                return (
+                  <div key={item.id} className="rounded-xl border border-black/[0.06] bg-[#fbfbfd] p-4 text-[13px] space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#1d1d1f]">
+                          {item.platform}
+                        </span>
+                        <Link
+                          href={`/projects/${projectId}/content/${item.id}`}
+                          className="font-semibold text-[#1d1d1f] hover:text-[#0066cc] transition"
+                        >
+                          {item.title}
+                        </Link>
+                      </div>
+                      <span className="status-review rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize">
+                        {item.stage.replace("_", " ")}
                       </span>
-                      <Link
-                        href={`/projects/${projectId}/content/${item.id}`}
-                        className="font-semibold text-[#1d1d1f] hover:text-[#0066cc] transition"
-                      >
-                        {item.title}
-                      </Link>
                     </div>
-                    <span className="status-review rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize">
-                      {item.stage.replace("_", " ")}
-                    </span>
-                  </div>
 
-                  <div className="space-y-1 pt-1">
-                    <div className="flex justify-between text-[11px] text-[#86868b]">
-                      <span>Draft Stage</span>
-                      <span>Target: {deadline ? formatDate(deadline) : "Unset"}</span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-[#f2f2f7] overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          item.stage === "published"
-                            ? "bg-[#248a3d] w-full"
-                            : item.stage === "approved"
-                            ? "bg-[#0071e3] w-4/5"
-                            : item.stage === "in_review"
-                            ? "bg-[#9a6700] w-3/5"
-                            : "bg-[#86868b] w-1/3"
-                        }`}
-                      />
+                    <div className="space-y-1 pt-1">
+                      <div className="flex justify-between text-[11px] text-[#86868b]">
+                        <span>Target: {deadline ? formatDate(deadline) : "Unset"}</span>
+                        <span>{item.productionOwner?.name ? `Owner: ${item.productionOwner.name}` : ""}</span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-[#f2f2f7] overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            item.stage === "published"
+                              ? "bg-[#248a3d] w-full"
+                              : item.stage === "approved"
+                              ? "bg-[#0071e3] w-4/5"
+                              : item.stage === "in_review"
+                              ? "bg-[#9a6700] w-3/5"
+                              : "bg-[#86868b] w-1/3"
+                          }`}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       )}

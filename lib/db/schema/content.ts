@@ -37,6 +37,9 @@ export const contentGroups = pgTable(
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedByUserId: uuid("deleted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    deletionReason: text("deletion_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -83,6 +86,8 @@ export const contentItems = pgTable(
     scheduledPublicationDate: timestamp("scheduled_publication_date", { withTimezone: true }),
     status: varchar("status", { length: 50 }).notNull().default("active").$type<ContentStatus>(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedByUserId: uuid("deleted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    deletionReason: text("deletion_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     workType: varchar("work_type", { length: 100 }),

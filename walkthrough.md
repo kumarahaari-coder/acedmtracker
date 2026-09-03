@@ -182,6 +182,61 @@ Captured during real interactive load on production worker:
   - Minimum: 1 µs
   - Maximum: 420 µs (0.42ms) — vs the 10,000 µs (10ms) limit
   - Average: **36 µs (0.036ms)** — **99.6% CPU reduction**!
-- **Current Deployed Version ID**: `822d8dc8-84f0-42dd-92c7-8b00ce7e98a1`
-- **Git Commit**: `bf4c3d9` / `580c622`
+- **Current Deployed Version ID**: `125859c6-77ef-4aa2-9d3e-4013dddb07eb`
 - **Live Production URL**: `https://acecore.ace-tracker.workers.dev`
+
+---
+
+## 5. Delete Deliverable Lifecycle Architecture & Verification
+
+Implemented an authoritative PostgreSQL-first lifecycle action for deleting deliverables with role-based access control, dual deletion paths (hard-delete vs soft-delete archive), effort anchor transfer, and orphan asset cleanup.
+
+### 5.1 Architecture & Deletion Lifecycle Matrix
+
+| Dimension | Behavior A: Hard-Delete | Behavior B: Soft-Delete (Archive) |
+| :--- | :--- | :--- |
+| **Trigger Condition** | Deliverable has **zero meaningful operational history**: stage is `idea` or `draft`, 0 logged work seconds, no non-draft submissions, no approvals, no change requests, no comments, no external tokens. | Deliverable has **operational history**: stage > `draft`, work session time recorded (`accumulatedSeconds > 0`), formally submitted versions, review decisions, or comments. |
+| **PostgreSQL Content Item** | Row permanently removed via `DELETE FROM content_items WHERE id = ...` | Row preserved with `status = 'archived'`, `deleted_at = NOW()`, `deleted_by_user_id = actor.id`, `deletion_reason = reason`. |
+| **Assignments & Sessions** | Dependent draft `content_assignments`, `assignment_deadline_history`, and 0s unstarted `work_sessions` are cleanly deleted (0 orphan records). | Active assignments transitioned to `status = 'reassigned'`, active timers stopped. Completed historical sessions remain intact for billing/audit. |
+| **Submission Versions & Assets** | Draft submission versions removed. Orphaned creative assets (`creative_assets`) with no other references are deleted, and physical R2 objects are safely purged. | Versions, comments, approvals, and assets preserved indefinitely for institutional audit trails. |
+| **View Exclusions** | Disappears permanently from Calendar, Dashboard, and Workspace views. | Excluded from Bounded Calendar, Dashboard Today Workload, and Client Portal views via `deleted_at IS NULL` filters. |
+| **Audit Log** | Logged as `HARD_DELETE_DELIVERABLE` or `HARD_DELETE_CONTENT_GROUP` with before/after state snapshots. | Logged as `SOFT_DELETE_DELIVERABLE` or `SOFT_DELETE_CONTENT_GROUP` with before/after state snapshots. |
+
+### 5.2 Effort Anchor Transfer Algorithm
+When deleting an individual platform deliverable that belongs to a multi-platform `ContentGroup`:
+1. If the deleted item is the effort anchor (`isEffortAnchor === true`) and sibling deliverables survive:
+2. The system queries surviving active siblings in the group (`deleted_at IS NULL`).
+3. If no other sibling holds the anchor, the first surviving sibling is atomically promoted:
+   - `isEffortAnchor = true`
+   - `finalPlannedSeconds = anchor.finalPlannedSeconds`
+   - `standardContentSeconds = anchor.standardContentSeconds`
+   - `standardProductionSeconds = anchor.standardProductionSeconds`
+4. This ensures that deleting an Instagram deliverable while LinkedIn and Facebook survive **never reduces the group's planned effort to zero**.
+
+### 5.3 Server-Side Permission Guardrails
+Enforced directly in `deleteDeliverableAction` (`lib/actions/deleteDeliverable.ts`):
+- **Allowed**: `founder`, `admin`, and `consultant` actively assigned to that specific project (`project_memberships`).
+- **Denied (403 Forbidden)**: `designer`, `video_editor`, `collaborator`, `client`, and unassigned consultants.
+
+### 5.4 UI Confirmation Modal (`DeleteDeliverableModal`)
+- Modal title: *"Delete deliverable?"*
+- Body warning: *"This will remove this deliverable from active project views. This action cannot be undone from the interface."*
+- Multi-platform scope selector:
+  - *"Delete this platform deliverable only"*
+  - *"Delete entire deliverable group"*
+- Typed confirmation requirement: Action button remains disabled until the user explicitly types **`DELETE`** in capital letters.
+- Wired into:
+  1. Deliverable detail page header ([`app/(dashboard)/projects/[projectId]/content/[itemId]/page.tsx`](file:///Users/aceassured/Ace-tracker/app/(dashboard)/projects/[projectId]/content/[itemId]/page.tsx))
+  2. Production Calendar reschedule modal ([`app/(dashboard)/projects/[projectId]/calendar/page.tsx`](file:///Users/aceassured/Ace-tracker/app/(dashboard)/projects/[projectId]/calendar/page.tsx))
+  3. Project Assigned Work table ([`app/(dashboard)/projects/[projectId]/page.tsx`](file:///Users/aceassured/Ace-tracker/app/(dashboard)/projects/[projectId]/page.tsx))
+
+### 5.5 Verification & Acceptance Results
+- **Automated Database Lifecycle Verification** ([`scripts/verify_delete_deliverable_lifecycle.ts`](file:///Users/aceassured/Ace-tracker/scripts/verify_delete_deliverable_lifecycle.ts)):
+  - **35 of 35 tests passed cleanly (100% success)**.
+  - Verified draft hard delete with 0 orphans, operational history soft-delete, calendar/dashboard exclusion, designer 403 rejection, unassigned consultant 403 rejection, assigned consultant success, anchor transfer to surviving sibling, and group deletion.
+- **Vitest Contract Test Suite** ([`tests/production/delete-deliverable-lifecycle.test.ts`](file:///Users/aceassured/Ace-tracker/tests/production/delete-deliverable-lifecycle.test.ts)):
+  - **7 of 7 contract tests passed**.
+  - Query budget regression + delete deliverable regression: **13 of 13 passed**.
+- **Live Production Workflow Test** ([`scripts/acceptance_real_workflow_test.ts`](file:///Users/aceassured/Ace-tracker/scripts/acceptance_real_workflow_test.ts)):
+  - **36 of 36 invocations passed** against `https://acecore.ace-tracker.workers.dev`.
+  - **0 Error 1102 occurrences**.

@@ -25,11 +25,13 @@ import {
   User,
   Users,
   X,
+  Trash2,
 } from "lucide-react";
 import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate, formatDurationHuman } from "@/lib/formatters";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
+import { DeleteDeliverableModal } from "@/components/content/DeleteDeliverableModal";
 
 export default function ProjectDashboardPage() {
   const params = useParams();
@@ -66,6 +68,7 @@ export default function ProjectDashboardPage() {
   const [newObjectiveValue, setNewObjectiveValue] = useState<number>(
     project.objectiveConfig?.currentValue || 0
   );
+  const [itemToDelete, setItemToDelete] = useState<any | null>(null);
 
   // Deliverables by stage
   const publishedItems = projectItems.filter((i) => i.stage === "published");
@@ -529,12 +532,23 @@ export default function ProjectDashboardPage() {
 
                       {/* Action */}
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          href={`/projects/${projectId}/content/${item.id}`}
-                          className="inline-flex items-center gap-1 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3 py-1 text-[12px] font-medium text-[#0066cc] transition"
-                        >
-                          Workspace <ArrowRight className="h-3 w-3" />
-                        </Link>
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <Link
+                            href={`/projects/${projectId}/content/${item.id}`}
+                            className="inline-flex items-center gap-1 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3 py-1 text-[12px] font-medium text-[#0066cc] transition"
+                          >
+                            Workspace <ArrowRight className="h-3 w-3" />
+                          </Link>
+                          {isManagement && (
+                            <button
+                              onClick={() => setItemToDelete(item)}
+                              className="p-1.5 rounded-full text-[#86868b] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition"
+                              title="Delete Deliverable"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -602,6 +616,29 @@ export default function ProjectDashboardPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Delete Deliverable Modal */}
+      {itemToDelete && (
+        <DeleteDeliverableModal
+          isOpen={Boolean(itemToDelete)}
+          onClose={() => setItemToDelete(null)}
+          item={{
+            id: itemToDelete.id,
+            title: itemToDelete.title,
+            platform: itemToDelete.platform,
+            contentGroupId: itemToDelete.contentGroupId,
+            stage: itemToDelete.stage,
+          }}
+          hasSiblings={Boolean(
+            itemToDelete.contentGroupId &&
+            projectItems.filter((i) => i.contentGroupId === itemToDelete.contentGroupId && i.id !== itemToDelete.id && !i.deletedAt).length > 0
+          )}
+          onDeleted={() => {
+            setItemToDelete(null);
+            window.location.reload();
+          }}
+        />
       )}
     </div>
   );

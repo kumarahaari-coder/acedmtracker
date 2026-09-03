@@ -238,6 +238,10 @@ export interface ContentItem {
   publishedByUserId?: string;
   clientVisible?: boolean; // True when authorized for Client Portal rendering
   scopeClassification?: ScopeClassification; // 'contracted' (default), 'goodwill', or 'additional_billable'
+  deletedAt?: string;
+  deletedByUserId?: string;
+  deletionReason?: string;
+  status?: string;
   // Note: Derived commercial metrics are computed from AnalyticsSnapshot[]
 }
 

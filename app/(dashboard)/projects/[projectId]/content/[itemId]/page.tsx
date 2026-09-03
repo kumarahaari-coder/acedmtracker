@@ -47,6 +47,7 @@ import {
   X,
 } from "lucide-react";
 import { generateExternalReviewTokenAction } from "@/lib/actions/collaboration";
+import { DeleteDeliverableModal } from "@/components/content/DeleteDeliverableModal";
 import {
   saveDraftVersionAction,
   submitVersionAction,
@@ -186,6 +187,7 @@ export default function ContentItemWorkspacePage() {
   const [adjustReason, setAdjustReason] = useState("");
 
   const [concurrencyErrorMessage, setConcurrencyErrorMessage] = useState<string | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   // Versions for this item
   const itemVersions = state.submissionVersions.filter(
@@ -537,6 +539,17 @@ export default function ContentItemWorkspacePage() {
               className="flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[13px] font-medium text-[#1d1d1f] transition"
             >
               <Share2 className="h-3.5 w-3.5" /> Client Preview Link (V{currentVersion?.versionNumber})
+            </button>
+          )}
+
+          {/* Delete Deliverable Action (Founder, Consultant, Admin only) */}
+          {(activeRole === "founder" || activeRole === "consultant" || activeRole === "admin") && (
+            <button
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-red-500/10 hover:bg-red-500/20 px-3.5 py-1.5 text-[13px] font-medium text-red-600 dark:text-red-400 transition"
+              title="Delete this deliverable"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete
             </button>
           )}
 
@@ -2446,6 +2459,30 @@ export default function ContentItemWorkspacePage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Delete Deliverable Modal */}
+      {item && (
+        <DeleteDeliverableModal
+          isOpen={isDeleteModalOpen}
+          onClose={() => setIsDeleteModalOpen(false)}
+          item={{
+            id: item.id,
+            title: item.title,
+            platform: item.platform,
+            contentGroupId: item.contentGroupId,
+            stage: item.stage,
+          }}
+          hasSiblings={Boolean(
+            item.contentGroupId &&
+            state.contentItems.filter(
+              (i) => i.contentGroupId === item.contentGroupId && i.id !== item.id && !i.deletedAt
+            ).length > 0
+          )}
+          onDeleted={() => {
+            router.push(`/projects/${projectId}`);
+          }}
+        />
       )}
     </div>
   );

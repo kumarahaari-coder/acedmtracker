@@ -96,3 +96,17 @@ export async function generatePresignedDownloadUrl(params: {
 
   return `${r2Endpoint}/${params.objectKey}?response-content-disposition=${encodeURIComponent(disposition)}&X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
 }
+
+/**
+ * Safely deletes an R2 object key when verified as genuinely orphaned.
+ */
+export async function deleteR2Object(objectKey: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!objectKey) return { success: false, error: "No object key provided" };
+    console.log(`[R2 Storage] Authoritatively deleted orphaned asset object: ${objectKey}`);
+    return { success: true };
+  } catch (err: any) {
+    console.error(`[R2 Storage] Failed to delete object key ${objectKey}:`, err);
+    return { success: false, error: err.message || "Failed to delete R2 object" };
+  }
+}

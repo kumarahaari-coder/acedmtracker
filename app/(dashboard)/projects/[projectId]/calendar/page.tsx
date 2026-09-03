@@ -15,10 +15,12 @@ import {
   Layers,
   Sparkles,
   Lock,
+  Trash2,
 } from "lucide-react";
 import { ContentItem, ContentPlatform, ContentType, DeadlineKind, ScopeClassification } from "@/lib/types";
 import { formatDate, getCurrentISTDate } from "@/lib/formatters";
 import { getAuthoritativeCalendarDataAction, CalendarDataDTO } from "@/lib/actions/calendar";
+import { DeleteDeliverableModal } from "@/components/content/DeleteDeliverableModal";
 
 export default function CalendarPage() {
   const params = useParams();
@@ -80,6 +82,7 @@ export default function CalendarPage() {
 
   // Reschedule Modal
   const [selectedItemForReschedule, setSelectedItemForReschedule] = useState<ContentItem | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<ContentItem | null>(null);
   const [newDateVal, setNewDateVal] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
 
@@ -673,20 +676,33 @@ export default function CalendarPage() {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-2">
+              <div className="flex items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedItemForReschedule(null)}
-                  className="rounded-full px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7]"
+                  onClick={() => {
+                    const itm = selectedItemForReschedule;
+                    setSelectedItemForReschedule(null);
+                    setItemToDelete(itm);
+                  }}
+                  className="rounded-full px-3.5 py-2 text-[13px] font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center gap-1.5 transition"
                 >
-                  Cancel
+                  <Trash2 className="h-3.5 w-3.5" /> Delete Deliverable
                 </button>
-                <button
-                  type="submit"
-                  className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
-                >
-                  Save Schedule Update
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItemForReschedule(null)}
+                    className="rounded-full px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-5 py-2 text-[13px] font-semibold shadow-sm transition"
+                  >
+                    Save Schedule Update
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -896,6 +912,29 @@ export default function CalendarPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Delete Deliverable Modal */}
+      {itemToDelete && (
+        <DeleteDeliverableModal
+          isOpen={Boolean(itemToDelete)}
+          onClose={() => setItemToDelete(null)}
+          item={{
+            id: itemToDelete.id,
+            title: itemToDelete.title,
+            platform: itemToDelete.platform,
+            contentGroupId: itemToDelete.contentGroupId,
+            stage: itemToDelete.stage,
+          }}
+          hasSiblings={Boolean(
+            itemToDelete.contentGroupId &&
+            projectItems.filter((i) => i.contentGroupId === itemToDelete.contentGroupId && i.id !== itemToDelete.id).length > 0
+          )}
+          onDeleted={() => {
+            setItemToDelete(null);
+            loadCalendarData();
+          }}
+        />
       )}
     </div>
   );

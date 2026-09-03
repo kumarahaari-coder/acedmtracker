@@ -111,6 +111,7 @@ export function Sidebar({ projectId }: SidebarProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={false}
                 title={item.label}
                 className={`flex items-center ${
                   isCollapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
@@ -132,6 +133,7 @@ export function Sidebar({ projectId }: SidebarProps) {
       <div className="pt-3 border-t border-black/[0.06] space-y-1">
         <Link
           href="/projects"
+          prefetch={false}
           title="All Projects Portfolio"
           className={`flex items-center ${
             isCollapsed ? "justify-center p-2" : "gap-2 px-3.5 py-2"
