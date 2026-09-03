@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
-import { createTeamMemberAction } from "@/lib/actions/team";
+import { createTeamMemberAction, getAuthorizedTeamDirectoryAction } from "@/lib/actions/team";
 import {
   Users,
   Plus,
@@ -19,6 +19,7 @@ import {
   X,
   Timer,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { User, UserRole } from "@/lib/types";
 import { formatDate, formatTime } from "@/lib/formatters";
@@ -32,6 +33,41 @@ export default function GlobalTeamPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Authoritative Team Directory State
+  const [directoryUsers, setDirectoryUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadTeamMembers = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await getAuthorizedTeamDirectoryAction(activeUserId);
+      if (res.success && res.members) {
+        setDirectoryUsers(
+          res.members.map((m: any) => ({
+            id: m.id,
+            name: m.fullName,
+            email: m.email,
+            avatar: m.avatarUrl || "",
+            role: m.organizationRole as any,
+            status: m.status as any,
+            workingHoursPerDay: 8,
+            dateJoined: m.createdAt,
+            createdAt: m.createdAt,
+            updatedAt: m.createdAt,
+          }))
+        );
+      }
+    } catch (err) {
+      console.error("[GlobalTeamPage] Failed to fetch directory:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeUserId]);
+
+  React.useEffect(() => {
+    loadTeamMembers();
+  }, [loadTeamMembers]);
 
   // Add Employee Modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -72,7 +108,8 @@ export default function GlobalTeamPage() {
 
   // Internal agency members (For Designers, expose ONLY self profile to prevent directory leakage)
   const isDesignerRole = activeRole === "designer";
-  const internalUsers = state.users.filter((u) => {
+  const effectiveUsers = directoryUsers.length > 0 ? directoryUsers : state.users;
+  const internalUsers = effectiveUsers.filter((u) => {
     if (u.role === "client" || u.status === "deleted") return false;
     if (isDesignerRole) return u.id === activeUserId;
     return true;
@@ -172,7 +209,7 @@ export default function GlobalTeamPage() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {state.users
+          {effectiveUsers
             .filter((u) => u.status === "active")
             .map((user) => {
               const todayAtt = state.attendanceRecords.find(

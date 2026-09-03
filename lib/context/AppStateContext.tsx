@@ -54,6 +54,7 @@ interface AppStateContextType {
   hydrateLayoutContext: (context: {
     projects: any[];
     projectMemberships: any[];
+    users?: any[];
     unreadNotificationsCount?: number;
   }) => void;
   // Project & Campaign Actions
@@ -358,6 +359,7 @@ export function AppStateProvider({
   const hydrateLayoutContext = (context: {
     projects: any[];
     projectMemberships: any[];
+    users?: any[];
     unreadNotificationsCount?: number;
   }) => {
     setState((prev) => ({
@@ -391,6 +393,25 @@ export function AppStateProvider({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })),
+      users: context.users
+        ? context.users.map((u) => {
+            const existing = prev.users.find((eu) => eu.id === u.id);
+            return (
+              existing || {
+                id: u.id,
+                name: u.name,
+                email: u.email,
+                avatar: u.avatarUrl || "",
+                role: (u.role as any) || "designer",
+                status: (u.status as any) || "active",
+                workingHoursPerDay: 8,
+                dateJoined: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              }
+            );
+          })
+        : prev.users,
       notifications: Array(context.unreadNotificationsCount || 0)
         .fill(null)
         .map((_, i) => ({

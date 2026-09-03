@@ -98,7 +98,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r1.status}, Wall: ${r1.durationMs}ms`);
 
     const tLayout = Date.now();
-    const layoutRes = await getAuthoritativeLayoutContextAction(founder.id);
+    const layoutRes = await getAuthoritativeLayoutContextAction();
     console.log(`  -> Layout Action: Success=${layoutRes.success}, Projects=${layoutRes.context?.projects.length}, Wall: ${Date.now() - tLayout}ms`);
 
     // 2. Open Swarnika Project Page
@@ -112,7 +112,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r3.status}, Wall: ${r3.durationMs}ms`);
 
     const tCal = Date.now();
-    const calRes = await getAuthoritativeCalendarDataAction(SWARNIKA_PROJECT_ID, 2026, 9, founder.id);
+    const calRes = await getAuthoritativeCalendarDataAction(SWARNIKA_PROJECT_ID, 2026, 9);
     console.log(`  -> Calendar Action: Success=${calRes.success}, Items=${calRes.data?.items.length}, Wall: ${Date.now() - tCal}ms`);
 
     // 4. Open Kanban
@@ -121,7 +121,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r4.status}, Wall: ${r4.durationMs}ms`);
 
     const tKanban = Date.now();
-    const kanbanRes = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID, founder.id);
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID);
     console.log(`  -> Kanban Action: Success=${kanbanRes.success}, Cards=${kanbanRes.data?.cards.length}, Columns=${kanbanRes.data?.columns.length}, Wall: ${Date.now() - tKanban}ms`);
 
     // 5. Refresh Kanban directly
@@ -130,7 +130,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r5.status}, Wall: ${r5.durationMs}ms`);
 
     const tKanbanRef = Date.now();
-    const kanbanRefRes = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID, founder.id);
+    const kanbanRefRes = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID);
     console.log(`  -> Kanban Direct Action: Success=${kanbanRefRes.success}, Cards=${kanbanRefRes.data?.cards.length}, Wall: ${Date.now() - tKanbanRef}ms`);
 
     // 6. Create Deliverable & Move between Kanban columns
@@ -146,10 +146,10 @@ async function runReproduction() {
       submissionDeadline: "2026-09-20T00:00:00.000Z",
       scheduledPublicationDate: "2026-09-25T00:00:00.000Z",
     });
-    if (!createRes.success || !createRes.item) {
-      throw new Error(`Failed to create test item: ${createRes.error}`);
+    if (!createRes.success || !("item" in createRes) || !createRes.item) {
+      throw new Error(`Failed to create test item: ${(createRes as any).error}`);
     }
-    const testItemId = createRes.item.id;
+    const testItemId = (createRes as any).item.id;
     console.log(`  -> Created Item ID: ${testItemId}`);
 
     // Move to submitted
@@ -183,7 +183,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r8.status}, Wall: ${r8.durationMs}ms`);
 
     const tKanbanBack = Date.now();
-    const kanbanBack = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID, founder.id);
+    const kanbanBack = await getAuthoritativeProjectKanbanAction(SWARNIKA_PROJECT_ID);
     const foundCard = kanbanBack.data?.cards.find((c) => c.id === testItemId);
     console.log(`  -> Verified Card in Kanban: Found=${!!foundCard}, CurrentStage=${foundCard?.stage}, Wall: ${Date.now() - tKanbanBack}ms`);
 
@@ -192,10 +192,10 @@ async function runReproduction() {
     const delRes = await deleteDeliverableAction({
       actorUserId: founder.id,
       contentItemId: testItemId,
-      deletionScope: "item_only",
+      deleteEntireGroup: false,
       reason: "Acceptance test automated cleanup",
     });
-    console.log(`  -> Delete Deliverable: Success=${delRes.success}, Behavior=${delRes.behavior}`);
+    console.log(`  -> Delete Deliverable: Success=${delRes.success}, DeletionType=${delRes.deletionType}`);
 
     // 10. Return to Dashboard
     console.log(`[${cycle}.10] Returning to Dashboard (SSR + Action)...`);
@@ -203,7 +203,7 @@ async function runReproduction() {
     console.log(`  -> Status: ${r10.status}, Wall: ${r10.durationMs}ms`);
 
     const tDash = Date.now();
-    const dashRes = await getAuthoritativeMainDashboardAction(founder.id);
+    const dashRes = await getAuthoritativeMainDashboardAction();
     console.log(`  -> Main Dashboard Action: Success=${dashRes.success}, TasksDueToday=${dashRes.data?.tasksDueTodayCount}, Wall: ${Date.now() - tDash}ms\n`);
   }
 

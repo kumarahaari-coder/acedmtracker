@@ -18,7 +18,7 @@ import {
   scripts,
 } from "../db/schema";
 import { effortStandards } from "../db/schema/operational";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, ne, sql } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
 import { AppState, Campaign } from "../types";
 import { getEmptyAppState } from "../state/empty";
@@ -45,6 +45,14 @@ export interface LayoutContextDTO {
     userId: string;
     membershipRole: string;
     status: string;
+  }>;
+  users: Array<{
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    status: string;
+    avatarUrl?: string | null;
   }>;
   unreadNotificationsCount: number;
 }
@@ -84,6 +92,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
           user: null,
           projects: [],
           projectMemberships: [],
+          users: [],
           unreadNotificationsCount: 0,
         },
       };
@@ -92,8 +101,8 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
     const orgId = authoritativeUser.orgId;
     const isClient = authoritativeUser.organizationRole === "client";
 
-    // 3 small indexed queries
-    const [projectRows, membershipRows, [notifCountRow]] = await Promise.all([
+    // 4 small indexed queries
+    const [projectRows, membershipRows, userRows, [notifCountRow]] = await Promise.all([
       db
         .select({
           id: projects.id,
@@ -121,6 +130,17 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
         ),
       db
         .select({
+          id: users.id,
+          name: users.fullName,
+          email: users.email,
+          role: users.organizationRole,
+          status: users.status,
+          avatarUrl: users.avatarUrl,
+        })
+        .from(users)
+        .where(and(eq(users.orgId, orgId), ne(users.status, "deleted"))),
+      db
+        .select({
           count: sql<number>`count(*)::int`,
         })
         .from(notifications)
@@ -133,12 +153,18 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
         ),
     ]);
 
-    profiler.mark("queries", projectRows.length + membershipRows.length);
+    profiler.mark("queries", projectRows.length + membershipRows.length + userRows.length);
 
     let accessibleProjects = projectRows;
+    let accessibleUsers = userRows;
+
     if (isClient) {
       const allowedProjIds = new Set(membershipRows.map((m) => m.projectId));
       accessibleProjects = projectRows.filter((p) => allowedProjIds.has(p.id));
+
+      const allowedUserIds = new Set(membershipRows.map((m) => m.userId));
+      allowedUserIds.add(authoritativeUser.id);
+      accessibleUsers = userRows.filter((u) => allowedUserIds.has(u.id));
     }
 
     const context: LayoutContextDTO = {
@@ -152,6 +178,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
       },
       projects: accessibleProjects,
       projectMemberships: membershipRows,
+      users: accessibleUsers,
       unreadNotificationsCount: notifCountRow?.count || 0,
     };
 
