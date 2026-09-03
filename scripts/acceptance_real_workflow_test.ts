@@ -148,6 +148,7 @@ async function runAcceptanceTest() {
     const start6 = Date.now();
     const title = `Acceptance Test Deliverable Cycle ${iter} - ${Date.now()}`;
     const createRes = await createContentItemAction({
+      actorUserId: selectedMember.user.id,
       projectId: CRAFTX_PROJECT_ID,
       title,
       platform: "Instagram",
@@ -167,14 +168,15 @@ async function runAcceptanceTest() {
       error: createRes.error,
     };
     results.push(r6);
-    if (!createRes.success || !createRes.item) {
-      throw new Error("Failed to create deliverable: " + createRes.error);
+    if (!createRes.success) {
+      throw new Error("Failed to create deliverable: " + (createRes as any).error);
     }
-    const createdItemId = createRes.item.id;
+    const createdItem = (createRes as any).item;
+    const createdItemId = createdItem.id;
     createdItemIds.push(createdItemId);
     console.log(`  -> Created Item ID: ${createdItemId}`);
-    console.log(`  -> Persisted finalPlannedSeconds: ${createRes.item.finalPlannedSeconds} (Exact: 5400s / 1.50h)`);
-    console.log(`  -> isEffortAnchor: ${createRes.item.isEffortAnchor}`);
+    console.log(`  -> Persisted finalPlannedSeconds: ${createdItem.finalPlannedSeconds} (Exact: 5400s / 1.50h)`);
+    console.log(`  -> isEffortAnchor: ${createdItem.isEffortAnchor}`);
 
     // 7. Refresh Calendar (Immediately visible without stale-state confusion)
     console.log(`[${iter}.7] Refreshing Bounded Calendar (Immediate Visibility Check)...`);
