@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, integer, foreignKey, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, timestamp, integer, foreignKey, unique, index } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { projects } from "./projects";
 import { users } from "./users";
@@ -35,6 +35,8 @@ export const workSessions = pgTable(
   },
   (table) => [
     unique("uq_work_sessions_project_id").on(table.projectId, table.id),
+    index("idx_work_sessions_org_started").on(table.orgId, table.startedAt),
+    index("idx_work_sessions_item_id").on(table.contentItemId),
     foreignKey({
       columns: [table.projectId, table.orgId],
       foreignColumns: [projects.id, projects.orgId],

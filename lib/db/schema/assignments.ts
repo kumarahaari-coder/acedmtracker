@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, foreignKey, unique, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, timestamp, foreignKey, unique, jsonb, index } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { projects } from "./projects";
 import { users } from "./users";
@@ -44,6 +44,8 @@ export const contentAssignments = pgTable(
   },
   (table) => [
     unique("uq_content_assignments_project_id").on(table.projectId, table.id),
+    index("idx_content_assignments_user_status").on(table.assigneeUserId, table.status),
+    index("idx_content_assignments_item_id").on(table.contentItemId),
     foreignKey({
       columns: [table.projectId, table.orgId],
       foreignColumns: [projects.id, projects.orgId],

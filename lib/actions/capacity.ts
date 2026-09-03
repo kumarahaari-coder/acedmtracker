@@ -4,7 +4,7 @@ import { db } from "../db";
 import { employeeCapacitySchedules, capacityAdjustments } from "../db/schema/operational";
 import { users, contentAssignments, contentItems, projects } from "../db/schema";
 import { getAuthoritativeUser } from "../auth/session";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, or, inArray, gte, lte, desc, sql } from "drizzle-orm";
 import {
   EmployeeCapacitySchedule,
   CapacityAdjustment,
@@ -225,9 +225,36 @@ export async function getEligibleAssigneesWithCapacityAction(
     const schedules = await db.select().from(employeeCapacitySchedules).where(eq(employeeCapacitySchedules.orgId, authUser.orgId));
     const adjustments = await db.select().from(capacityAdjustments).where(eq(capacityAdjustments.orgId, authUser.orgId));
 
-    // 3. Fetch active content items and assignments in period
-    const items = await db.select().from(contentItems).where(eq(contentItems.orgId, authUser.orgId));
-    const assignments = await db.select().from(contentAssignments).where(eq(contentAssignments.orgId, authUser.orgId));
+    // 3. Fetch active content items and assignments strictly bounded to the target period
+    const periodStart = new Date(period.startDate + "T00:00:00.000Z");
+    const periodEnd = new Date(period.endDate + "T23:59:59.999Z");
+
+    const [items, assignments] = await Promise.all([
+      db
+        .select()
+        .from(contentItems)
+        .where(
+          and(
+            eq(contentItems.orgId, authUser.orgId),
+            sql`${contentItems.deletedAt} IS NULL`,
+            or(
+              and(gte(contentItems.scheduledPublicationDate, periodStart), lte(contentItems.scheduledPublicationDate, periodEnd)),
+              and(gte(contentItems.finalInternalDeadline, periodStart), lte(contentItems.finalInternalDeadline, periodEnd)),
+              and(gte(contentItems.submissionDeadline, periodStart), lte(contentItems.submissionDeadline, periodEnd)),
+              and(gte(contentItems.createdAt, periodStart), lte(contentItems.createdAt, periodEnd))
+            )
+          )
+        ),
+      db
+        .select()
+        .from(contentAssignments)
+        .where(
+          and(
+            eq(contentAssignments.orgId, authUser.orgId),
+            inArray(contentAssignments.status, ["assigned", "accepted", "in_progress", "submitted", "approved"])
+          )
+        ),
+    ]);
 
     const mappedSchedules: EmployeeCapacitySchedule[] = schedules.map((s) => ({
       id: s.id,
