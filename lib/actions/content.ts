@@ -16,7 +16,7 @@ import {
   ScopeClassification,
 } from "../db/schema";
 import { effortStandards } from "../db/schema/operational";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql, inArray, isNotNull } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveProjectId, resolveContentItemId, resolveUserId } from "../compat/resolver";
 import { calculateInternalDeadline, resolveDeliverableLeadTimeWorkdays } from "../calculations/operationalEngine";
@@ -1280,6 +1280,28 @@ export async function updateContentItemStageAction(params: {
         return {
           success: false,
           error: `Illegal workflow transition from '${currentStage}' to '${targetStage}'.`,
+        };
+      }
+    }
+
+    // Invariant: Cannot move to 'submitted' or 'in_review' without an immutable submitted version
+    if (targetStage === "submitted" || targetStage === "in_review") {
+      const [submittedVer] = await db
+        .select({ id: submissionVersions.id })
+        .from(submissionVersions)
+        .where(
+          and(
+            eq(submissionVersions.contentItemId, item.id),
+            eq(submissionVersions.isDraft, false),
+            isNotNull(submissionVersions.submittedAt)
+          )
+        )
+        .limit(1);
+
+      if (!submittedVer) {
+        return {
+          success: false,
+          error: "Cannot move deliverable to Submitted or In Review without an immutable submitted version. The designer must submit the deliverable for review.",
         };
       }
     }

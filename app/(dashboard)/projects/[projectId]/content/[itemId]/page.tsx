@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
@@ -54,6 +54,19 @@ import {
   createNewVersionDraftAction,
   toggleClientVisibilityAction,
 } from "@/lib/actions/content";
+import {
+  getAuthoritativeContentItemDetailAction,
+  ContentItemDetailDTO,
+} from "@/lib/actions/contentDetail";
+import {
+  recordApprovalDecisionAction,
+  recordFounderOverrideAction,
+  revokeApprovalDecisionAction,
+} from "@/lib/actions/approvals";
+import {
+  createChangeRequestAction,
+  respondToChangeRequestAction,
+} from "@/lib/actions/changes";
 import {
   ApprovalComponentType,
   ComponentDecision,
@@ -117,16 +130,39 @@ export default function ContentItemWorkspacePage() {
     canAdmin,
   } = useRole();
 
-  const project = state.projects.find((p) => p.id === projectId);
-  const item = state.contentItems.find((i) => i.id === itemId);
+  // 1. Dedicated Authoritative Single-Item Query (PostgreSQL direct)
+  const [detailData, setDetailData] = useState<ContentItemDetailDTO | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadDetail = useCallback(async () => {
+    if (!projectId || !itemId) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const res = await getAuthoritativeContentItemDetailAction(projectId, itemId, activeUserId);
+      if (res.success && res.data) {
+        setDetailData(res.data);
+      } else {
+        setLoadError(res.error || "Content deliverable not found.");
+      }
+    } catch (err: any) {
+      setLoadError(err.message || "Failed to load content deliverable.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectId, itemId, activeUserId]);
+
+  useEffect(() => {
+    loadDetail();
+  }, [loadDetail]);
+
+  const project = detailData?.project || state.projects.find((p) => p.id === projectId);
+  const item = detailData?.item || state.contentItems.find((i) => i.id === itemId);
 
   // Multi-Platform Content Group (Phase 3)
-  const contentGroup = item?.contentGroupId
-    ? state.contentGroups.find((g) => g.id === item.contentGroupId)
-    : undefined;
-  const siblingGroupItems = item?.contentGroupId
-    ? state.contentItems.filter((i) => i.contentGroupId === item.contentGroupId)
-    : [];
+  const contentGroup = detailData?.contentGroup || (item?.contentGroupId ? state.contentGroups.find((g) => g.id === item.contentGroupId) : undefined);
+  const siblingGroupItems = detailData?.siblingGroupItems || (item?.contentGroupId ? state.contentItems.filter((i) => i.contentGroupId === item.contentGroupId) : []);
 
   // Phase 3 Modals State
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -149,10 +185,10 @@ export default function ContentItemWorkspacePage() {
   const [editPublicationReason, setEditPublicationReason] = useState("");
 
   // Active Assignment & Work Sessions (Phase 2)
-  const activeAssignment = state.contentAssignments.find(
+  const activeAssignment = detailData?.activeAssignment || state.contentAssignments.find(
     (a) => a.contentItemId === itemId && a.status !== "reassigned"
   );
-  const itemWorkSessions = state.workSessions.filter((ws) => ws.contentItemId === itemId);
+  const itemWorkSessions = detailData?.itemWorkSessions || state.workSessions.filter((ws) => ws.contentItemId === itemId);
   const currentActiveSession = itemWorkSessions.find(
     (ws) => ws.userId === activeUserId && ws.status === "active"
   );
@@ -162,7 +198,7 @@ export default function ContentItemWorkspacePage() {
 
   // Live timer tick state
   const [ticker, setTicker] = useState(0);
-  React.useEffect(() => {
+  useEffect(() => {
     if (!currentActiveSession) return;
     const interval = setInterval(() => {
       setTicker((prev) => prev + 1);
@@ -190,13 +226,22 @@ export default function ContentItemWorkspacePage() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   // Versions for this item
-  const itemVersions = state.submissionVersions.filter(
+  const itemVersions = detailData?.itemVersions || state.submissionVersions.filter(
     (v) => v.contentItemId === itemId
   );
 
-  const [selectedVersionId, setSelectedVersionId] = useState<string>(() => {
-    return item?.latestSubmittedVersionId || item?.activeDraftVersionId || itemVersions[0]?.id || "";
-  });
+  const [selectedVersionId, setSelectedVersionId] = useState<string>("");
+
+  useEffect(() => {
+    if (detailData && !selectedVersionId) {
+      const vId =
+        detailData.item.latestSubmittedVersionId ||
+        detailData.item.activeDraftVersionId ||
+        detailData.itemVersions[0]?.id ||
+        "";
+      setSelectedVersionId(vId);
+    }
+  }, [detailData, selectedVersionId]);
 
   const currentVersion =
     itemVersions.find((v) => v.id === selectedVersionId) ||
@@ -233,28 +278,63 @@ export default function ContentItemWorkspacePage() {
 
   // New Draft Editing State
   const [isEditingDraft, setIsEditingDraft] = useState(false);
-  const [draftCaption, setDraftCaption] = useState(currentVersion?.copy.caption || "");
-  const [draftHashtags, setDraftHashtags] = useState(currentVersion?.copy.hashtags.join(" ") || "");
-  const [draftCTA, setDraftCTA] = useState(currentVersion?.copy.cta || "");
+  const [draftCaption, setDraftCaption] = useState(currentVersion?.copy?.caption || "");
+  const [draftHashtags, setDraftHashtags] = useState(currentVersion?.copy?.hashtags?.join(" ") || "");
+  const [draftCTA, setDraftCTA] = useState(currentVersion?.copy?.cta || "");
 
-  if (!item || !project || !currentVersion) {
+  useEffect(() => {
+    if (currentVersion?.copy) {
+      setDraftCaption(currentVersion.copy.caption || "");
+      setDraftHashtags((currentVersion.copy.hashtags || []).join(" "));
+      setDraftCTA(currentVersion.copy.cta || "");
+    }
+  }, [currentVersion?.id]);
+
+  if (isLoading && !detailData) {
     return (
-      <div className="p-12 text-center text-[#86868b]">
-        Content deliverable not found.
+      <div className="p-20 text-center flex flex-col items-center justify-center space-y-4">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#0071e3] border-t-transparent" />
+        <p className="text-[14px] text-[#86868b]">Loading deliverable detail...</p>
+      </div>
+    );
+  }
+
+  if (loadError || !item || !project || !currentVersion) {
+    return (
+      <div className="p-16 text-center space-y-3">
+        <div className="mx-auto h-12 w-12 rounded-full bg-[#fff0ee] flex items-center justify-center text-[#d70015]">
+          <AlertCircle className="h-6 w-6" />
+        </div>
+        <h3 className="text-[17px] font-semibold text-[#1d1d1f]">
+          {loadError || "Content deliverable not found."}
+        </h3>
+        <p className="text-[13px] text-[#86868b] max-w-md mx-auto">
+          The requested deliverable may not exist in this project or you do not have permission to view it.
+        </p>
+        <div className="pt-2">
+          <Link
+            href={`/projects/${projectId}/kanban`}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-2 text-[13px] font-medium text-white shadow-sm transition"
+          >
+            Return to Kanban
+          </Link>
+        </div>
       </div>
     );
   }
 
   // Approval Matrix Summary
+  const approvalDecisions = detailData?.approvalDecisions || state.approvalDecisions;
+  const founderOverrides = detailData?.founderOverrides || state.founderOverrides;
   const approvalSummary = getItemApprovalMatrixSummary(
     item,
     currentVersion,
-    state.approvalDecisions,
-    state.founderOverrides
+    approvalDecisions,
+    founderOverrides
   );
 
   // Change Requests for this item
-  const itemChangeRequests = state.changeRequests.filter(
+  const itemChangeRequests = detailData?.changeRequests || state.changeRequests.filter(
     (cr) => cr.contentItemId === item.id
   );
   const unaddressedOpenRequests = itemChangeRequests.filter(
@@ -263,10 +343,11 @@ export default function ContentItemWorkspacePage() {
   const canResubmit = unaddressedOpenRequests.length === 0;
 
   // Comments for this item (Internal + External)
-  const itemComments = state.comments.filter((c) => c.contentItemId === item.id);
+  const itemComments = detailData?.comments || state.comments.filter((c) => c.contentItemId === item.id);
+  const projectMembers = detailData?.projectMembers || [];
 
   // Handlers
-  const handleDecision = (
+  const handleDecision = async (
     component: ApprovalComponentType,
     decision: ComponentDecision
   ) => {
@@ -278,9 +359,20 @@ export default function ContentItemWorkspacePage() {
       reviewerRole: activeRole === "founder" ? "founder" : "consultant",
       decision,
     });
+    try {
+      await recordApprovalDecisionAction({
+        actorUserId: activeUserId,
+        submissionVersionId: currentVersion.id,
+        component,
+        decision: decision as any,
+      });
+      await loadDetail();
+    } catch (e) {
+      console.error("Failed to record decision:", e);
+    }
   };
 
-  const handleApplyOverride = () => {
+  const handleApplyOverride = async () => {
     if (!overrideReason.trim()) {
       alert("A mandatory reason is required to log a Founder Override.");
       return;
@@ -291,30 +383,52 @@ export default function ContentItemWorkspacePage() {
       actorUserId: activeUserId,
       reason: overrideReason.trim(),
     });
+    try {
+      await recordFounderOverrideAction({
+        actorUserId: activeUserId,
+        contentItemId: item.id,
+        submissionVersionId: currentVersion.id,
+        justification: overrideReason.trim(),
+      });
+      await loadDetail();
+    } catch (e) {
+      console.error("Failed to apply override:", e);
+    }
     setIsOverrideModalOpen(false);
     setOverrideReason("");
   };
 
-  const handleRevokeApproval = () => {
+  const handleRevokeApproval = async () => {
     if (!revokeReason.trim()) {
       alert("A mandatory reason is required to revoke an approval.");
       return;
     }
-    // Find active decision by this reviewer to revoke
-    const activeDec = state.approvalDecisions.find(
+    const activeDec = approvalDecisions.find(
       (d) => d.submissionVersionId === currentVersion.id && d.reviewerUserId === activeUserId
     );
     if (activeDec) {
       revokeApprovalDecision(activeDec.id, revokeReason.trim(), activeUserId);
+      try {
+        await revokeApprovalDecisionAction({
+          actorUserId: activeUserId,
+          decisionId: activeDec.id,
+          reason: revokeReason.trim(),
+        });
+        await loadDetail();
+      } catch (e) {
+        console.error("Failed to revoke decision:", e);
+      }
     }
     setIsRevokeModalOpen(false);
     setRevokeReason("");
   };
 
-  const handleLogChangeRequest = () => {
+  const handleLogChangeRequest = async () => {
     if (!crText.trim()) return;
     const reviewerName =
-      state.users.find((u) => u.id === activeUserId)?.name || "Reviewer";
+      projectMembers.find((u) => u.userId === activeUserId)?.name ||
+      state.users.find((u) => u.id === activeUserId)?.name ||
+      "Reviewer";
 
     createChangeRequest({
       projectId,
@@ -327,24 +441,37 @@ export default function ContentItemWorkspacePage() {
       priority: crPriority,
     });
 
-    recordApprovalDecision({
-      contentItemId: item.id,
-      submissionVersionId: currentVersion.id,
-      component: crComponent,
-      reviewerUserId: activeUserId,
-      reviewerRole: activeRole === "founder" ? "founder" : "consultant",
-      decision: "changes_requested",
-      note: crText.trim(),
-    });
+    try {
+      await createChangeRequestAction({
+        actorUserId: activeUserId,
+        submissionVersionId: currentVersion.id,
+        component: crComponent,
+        requestedChange: crText.trim(),
+        priority: crPriority,
+      });
+      await loadDetail();
+    } catch (e) {
+      console.error("Failed to create change request:", e);
+    }
 
     setIsChangeRequestModalOpen(false);
     setCrText("");
   };
 
-  const handleDesignerRespond = (crId: string) => {
+  const handleDesignerRespond = async (crId: string) => {
     const text = designerResponses[crId];
     if (!text?.trim()) return;
     respondToChangeRequest(crId, text.trim());
+    try {
+      await respondToChangeRequestAction({
+        actorUserId: activeUserId,
+        changeRequestId: crId,
+        responseText: text.trim(),
+      });
+      await loadDetail();
+    } catch (e) {
+      console.error("Failed to respond to change request:", e);
+    }
   };
 
   const handleResubmit = async () => {
@@ -394,6 +521,7 @@ export default function ContentItemWorkspacePage() {
       if (submitRes.success) {
         setSelectedVersionId(draftVersionId);
         setIsEditingDraft(false);
+        await loadDetail();
       } else {
         alert(submitRes.error || "Failed to submit version for review.");
       }
@@ -486,20 +614,7 @@ export default function ContentItemWorkspacePage() {
     setNewCommentBody("");
   };
 
-  const linkedScript = state.scripts.find((s) => s.linkedContentItemId === item.id);
-
-  const projectMembers = state.projectMemberships
-    .filter((m) => m.projectId === projectId)
-    .map((m) => {
-      const user = state.users.find((u) => u.id === m.userId);
-      return {
-        userId: m.userId,
-        role: m.membershipRole || user?.role || "designer",
-        name: user?.name || m.userId,
-        email: user?.email || "",
-        avatar: user?.avatar || "U",
-      };
-    });
+  const linkedScript = detailData?.linkedScript || state.scripts.find((s) => s.linkedContentItemId === item.id);
 
   const assignedMember = projectMembers.find((m) => m.userId === item.accountableOwnerId);
 

@@ -242,6 +242,8 @@ export interface ContentItem {
   deletedByUserId?: string;
   deletionReason?: string;
   status?: string;
+  createdAt?: string;
+  updatedAt?: string;
   // Note: Derived commercial metrics are computed from AnalyticsSnapshot[]
 }
 

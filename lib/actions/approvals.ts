@@ -2,8 +2,11 @@
 
 import { db } from "../db";
 import { projects, contentItems, contentAssignments, users, projectMemberships, approvalDecisions, submissionVersions, founderOverrides } from "../db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNull, isNotNull, inArray, desc } from "drizzle-orm";
 import { getAuthoritativeUser } from "../auth/session";
+import { resolveProjectId } from "../compat/resolver";
+import { ExecutionProfiler } from "../observability/profiler";
+import { ContentPlatform, ContentType, ContentStage, ScopeClassification } from "../types";
 
 export interface OrganizationApprovalItem {
   id: string;
@@ -278,3 +281,388 @@ export async function recordFounderOverrideAction(params: {
     return { success: false, error: err.message };
   }
 }
+
+export interface ApprovalQueueItemDTO {
+  id: string;
+  projectId: string;
+  title: string;
+  platform: ContentPlatform;
+  contentType: ContentType;
+  stage: ContentStage;
+  currentVersionNumber: number;
+  scheduledPublicationDate?: string | null;
+  submissionDeadline?: string | null;
+  scopeClassification: ScopeClassification;
+  summary: {
+    allComponentsApproved: boolean;
+    anyChangesRequested: boolean;
+    copy: { isFullyApproved: boolean; hasChangesRequested: boolean };
+    creative: { isFullyApproved: boolean; hasChangesRequested: boolean };
+    posting_date: { isFullyApproved: boolean; hasChangesRequested: boolean };
+  };
+  latestSubmittedVersionId?: string;
+  activeDraftVersionId?: string;
+}
+
+export interface ProjectApprovalQueueDTO {
+  project: {
+    id: string;
+    name: string;
+    clientBrand: string;
+  };
+  counts: {
+    all: number;
+    pending: number;
+    changes_requested: number;
+    approved: number;
+  };
+  items: ApprovalQueueItemDTO[];
+  projectMembers: Array<{
+    userId: string;
+    name: string;
+    role: string;
+  }>;
+}
+
+/**
+ * Authoritative, Project-Scoped Approval Queue Query.
+ * Strictly bounded by projectId.
+ * Enforces canonical review eligibility:
+ * 1. content_items.project_id = projectId
+ * 2. content_items.deleted_at IS NULL
+ * 3. stage != 'draft' AND stage != 'idea'
+ * 4. At least one immutable submitted version exists (submitted_at IS NOT NULL and is_draft = false)
+ * Never depends on global AppState.
+ */
+export async function getAuthoritativeProjectApprovalQueueAction(
+  projectId: string,
+  filter: "all" | "pending" | "changes_requested" | "approved" = "pending",
+  actorUserId?: string
+): Promise<{
+  success: boolean;
+  data?: ProjectApprovalQueueDTO;
+  error?: string;
+}> {
+  const profiler = new ExecutionProfiler("getAuthoritativeProjectApprovalQueueAction");
+
+  try {
+    const authUser = await getAuthoritativeUser(actorUserId);
+    if (!authUser) {
+      return { success: false, error: "Unauthorized" };
+    }
+    profiler.mark("auth-resolution");
+
+    if (!projectId) {
+      return { success: false, error: "Missing projectId" };
+    }
+
+    const resolvedProjId = (await resolveProjectId(projectId)) || projectId;
+    const isClient = authUser.organizationRole === "client";
+    const orgId = authUser.orgId;
+
+    // 1. Fetch project & check access
+    const [project] = await db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        clientBrand: projects.clientName,
+      })
+      .from(projects)
+      .where(and(eq(projects.id, resolvedProjId), eq(projects.orgId, orgId)))
+      .limit(1);
+
+    if (!project) {
+      return { success: false, error: "Project not found or inaccessible" };
+    }
+
+    if (isClient) {
+      const [membership] = await db
+        .select({ id: projectMemberships.id })
+        .from(projectMemberships)
+        .where(
+          and(
+            eq(projectMemberships.projectId, resolvedProjId),
+            eq(projectMemberships.userId, authUser.id),
+            eq(projectMemberships.status, "active")
+          )
+        )
+        .limit(1);
+
+      if (!membership) {
+        return { success: false, error: "Access denied to this project" };
+      }
+    }
+
+    // 2. Query candidates: active, non-deleted, non-draft deliverables for this project
+    const [candidateItems, memberRows, decisionRows, overrideRows] = await Promise.all([
+      db
+        .select({
+          id: contentItems.id,
+          projectId: contentItems.projectId,
+          title: contentItems.title,
+          platform: contentItems.platform,
+          contentType: contentItems.contentType,
+          stage: contentItems.stage,
+          currentVersionNumber: contentItems.currentVersionNumber,
+          scheduledPublicationDate: contentItems.scheduledPublicationDate,
+          submissionDeadline: contentItems.submissionDeadline,
+          scopeClassification: contentItems.scopeClassification,
+          clientVisible: contentItems.clientVisible,
+          createdAt: contentItems.createdAt,
+        })
+        .from(contentItems)
+        .where(
+          and(
+            eq(contentItems.projectId, resolvedProjId),
+            isNull(contentItems.deletedAt)
+          )
+        )
+        .orderBy(desc(contentItems.createdAt)),
+
+      db
+        .select({
+          userId: projectMemberships.userId,
+          membershipRole: projectMemberships.membershipRole,
+          fullName: users.fullName,
+          organizationRole: users.organizationRole,
+        })
+        .from(projectMemberships)
+        .leftJoin(users, eq(projectMemberships.userId, users.id))
+        .where(
+          and(
+            eq(projectMemberships.projectId, resolvedProjId),
+            eq(projectMemberships.status, "active")
+          )
+        ),
+
+      db
+        .select({
+          id: approvalDecisions.id,
+          contentItemId: approvalDecisions.contentItemId,
+          submissionVersionId: approvalDecisions.submissionVersionId,
+          component: approvalDecisions.component,
+          decision: approvalDecisions.decision,
+          reviewerRole: approvalDecisions.reviewerRole,
+        })
+        .from(approvalDecisions)
+        .where(
+          and(
+            eq(approvalDecisions.projectId, resolvedProjId),
+            isNull(approvalDecisions.revokedAt)
+          )
+        ),
+
+      db
+        .select({
+          contentItemId: founderOverrides.contentItemId,
+          submissionVersionId: founderOverrides.submissionVersionId,
+          component: founderOverrides.component,
+        })
+        .from(founderOverrides)
+        .where(eq(founderOverrides.projectId, resolvedProjId)),
+    ]);
+
+    profiler.mark("parallel-candidates");
+
+    // Client visibility filter
+    const visibleCandidates = isClient
+      ? candidateItems.filter((i) => i.clientVisible)
+      : candidateItems;
+
+    if (visibleCandidates.length === 0) {
+      return {
+        success: true,
+        data: {
+          project: {
+            id: project.id,
+            name: project.name,
+            clientBrand: project.clientBrand || project.name,
+          },
+          counts: { all: 0, pending: 0, changes_requested: 0, approved: 0 },
+          items: [],
+          projectMembers: memberRows.map((m) => ({
+            userId: m.userId,
+            name: m.fullName || m.userId,
+            role: m.membershipRole || m.organizationRole || "designer",
+          })),
+        },
+      };
+    }
+
+    const candidateIds = visibleCandidates.map((i) => i.id);
+
+    // 3. Query submission versions for candidate items to enforce immutable submitted version invariant
+    const versions = await db
+      .select({
+        id: submissionVersions.id,
+        contentItemId: submissionVersions.contentItemId,
+        versionNumber: submissionVersions.versionNumber,
+        isDraft: submissionVersions.isDraft,
+        submittedAt: submissionVersions.submittedAt,
+      })
+      .from(submissionVersions)
+      .where(inArray(submissionVersions.contentItemId, candidateIds));
+
+    profiler.mark("query-versions");
+
+    // Index decisions and overrides
+    const decisionsByItem = new Map<string, typeof decisionRows>();
+    for (const d of decisionRows) {
+      const list = decisionsByItem.get(d.contentItemId) || [];
+      list.push(d);
+      decisionsByItem.set(d.contentItemId, list);
+    }
+
+    const overridesByItem = new Map<string, typeof overrideRows>();
+    for (const o of overrideRows) {
+      const list = overridesByItem.get(o.contentItemId) || [];
+      list.push(o);
+      overridesByItem.set(o.contentItemId, list);
+    }
+
+    const versionsByItem = new Map<string, typeof versions>();
+    for (const v of versions) {
+      const list = versionsByItem.get(v.contentItemId) || [];
+      list.push(v);
+      versionsByItem.set(v.contentItemId, list);
+    }
+
+    const counts = { all: 0, pending: 0, changes_requested: 0, approved: 0 };
+    const allEligibleItems: Array<ApprovalQueueItemDTO & { tab: "pending" | "changes_requested" | "approved" }> = [];
+
+    for (const item of visibleCandidates) {
+      // Internal work-in-progress drafts and ideas are NOT reviewable
+      if (item.stage === "draft" || item.stage === "idea") {
+        continue;
+      }
+
+      const itemVers = versionsByItem.get(item.id) || [];
+      // CANONICAL INVARIANT: Must have at least one immutable submitted version
+      const submittedVers = itemVers.filter((v) => !v.isDraft && v.submittedAt !== null);
+      if (submittedVers.length === 0) {
+        // No immutable submitted version exists — this deliverable is not reviewable!
+        continue;
+      }
+
+      // Sort to get latest submitted version
+      submittedVers.sort((a, b) => a.versionNumber - b.versionNumber);
+      const latestSubmittedVer = submittedVers[submittedVers.length - 1];
+      const activeDraftVer = itemVers.find((v) => v.isDraft);
+
+      const itemDecs = decisionsByItem.get(item.id) || [];
+      const itemOverrides = overridesByItem.get(item.id) || [];
+
+      // Check 3 components for latest submitted version
+      const verDecs = itemDecs.filter((d) => d.submissionVersionId === latestSubmittedVer.id);
+
+      const checkComponent = (comp: "copy" | "creative" | "posting_date") => {
+        const compDecs = verDecs.filter((d) => d.component === comp);
+        const hasChanges = compDecs.some(
+          (d) => d.decision === "changes_requested" || d.decision === "rejected"
+        );
+        const founderApproved = compDecs.some(
+          (d) =>
+            (d.reviewerRole === "founder" || d.reviewerRole === "admin") &&
+            (d.decision === "approved" || d.decision === "approved_with_conditions")
+        );
+        const consultantApproved = compDecs.some(
+          (d) =>
+            d.reviewerRole === "consultant" &&
+            (d.decision === "approved" || d.decision === "approved_with_conditions")
+        );
+        const hasOverride = itemOverrides.some(
+          (o) => o.submissionVersionId === latestSubmittedVer.id && (o.component === comp || !o.component)
+        );
+
+        const isFullyApproved = (founderApproved && consultantApproved) || hasOverride;
+        return {
+          isFullyApproved,
+          hasChangesRequested: hasChanges && !isFullyApproved,
+        };
+      };
+
+      const copyStatus = checkComponent("copy");
+      const creativeStatus = checkComponent("creative");
+      const postingDateStatus = checkComponent("posting_date");
+
+      const allApproved =
+        item.stage === "approved" ||
+        item.stage === "scheduled" ||
+        item.stage === "published" ||
+        (copyStatus.isFullyApproved && creativeStatus.isFullyApproved && postingDateStatus.isFullyApproved);
+
+      const anyChanges =
+        item.stage === "changes_requested" ||
+        copyStatus.hasChangesRequested ||
+        creativeStatus.hasChangesRequested ||
+        postingDateStatus.hasChangesRequested;
+
+      let tab: "pending" | "changes_requested" | "approved";
+      if (allApproved) {
+        tab = "approved";
+        counts.approved++;
+      } else if (anyChanges) {
+        tab = "changes_requested";
+        counts.changes_requested++;
+      } else {
+        tab = "pending";
+        counts.pending++;
+      }
+      counts.all++;
+
+      allEligibleItems.push({
+        id: item.id,
+        projectId: item.projectId,
+        title: item.title,
+        platform: (item.platform || "Instagram") as ContentPlatform,
+        contentType: (item.contentType || "post") as ContentType,
+        stage: item.stage as ContentStage,
+        currentVersionNumber: item.currentVersionNumber,
+        scheduledPublicationDate: item.scheduledPublicationDate ? item.scheduledPublicationDate.toISOString() : null,
+        submissionDeadline: item.submissionDeadline ? item.submissionDeadline.toISOString() : null,
+        scopeClassification: (item.scopeClassification || "contracted") as ScopeClassification,
+        summary: {
+          allComponentsApproved: allApproved,
+          anyChangesRequested: anyChanges,
+          copy: copyStatus,
+          creative: creativeStatus,
+          posting_date: postingDateStatus,
+        },
+        latestSubmittedVersionId: latestSubmittedVer.id,
+        activeDraftVersionId: activeDraftVer?.id,
+        tab,
+      });
+    }
+
+    // Filter items based on selected tab
+    const items =
+      filter === "all"
+        ? allEligibleItems
+        : allEligibleItems.filter((i) => i.tab === filter);
+
+    profiler.mark("dto-assembly");
+    profiler.logSummary();
+
+    return {
+      success: true,
+      data: {
+        project: {
+          id: project.id,
+          name: project.name,
+          clientBrand: project.clientBrand || project.name,
+        },
+        counts,
+        items,
+        projectMembers: memberRows.map((m) => ({
+          userId: m.userId,
+          name: m.fullName || m.userId,
+          role: m.membershipRole || m.organizationRole || "designer",
+        })),
+      },
+    };
+  } catch (err: any) {
+    console.error("[getAuthoritativeProjectApprovalQueueAction] Error:", err);
+    return { success: false, error: err.message || "Failed to load approval queue" };
+  }
+}
+

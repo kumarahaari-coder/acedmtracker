@@ -1,9 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import {
   CheckCircle2,
@@ -18,19 +17,48 @@ import {
   Clock,
   AlertCircle,
 } from "lucide-react";
-import { getItemApprovalMatrixSummary } from "@/lib/derived";
 import { formatDate } from "@/lib/formatters";
 import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
+import {
+  getAuthoritativeProjectApprovalQueueAction,
+  ProjectApprovalQueueDTO,
+  ApprovalQueueItemDTO,
+} from "@/lib/actions/approvals";
+import { createContentItemAction, submitVersionAction } from "@/lib/actions/content";
 
 export default function ApprovalsQueuePage() {
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state, createContentItem, submitVersion } = useAppState();
   const { activeRole, activeUserId } = useRole();
 
   const isManagement = activeRole === "founder" || activeRole === "consultant" || activeRole === "admin";
 
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "changes_requested" | "approved">("pending");
+  const [data, setData] = useState<ProjectApprovalQueueDTO | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadQueue = useCallback(async () => {
+    if (!projectId) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const res = await getAuthoritativeProjectApprovalQueueAction(projectId, statusFilter, activeUserId);
+      if (res.success && res.data) {
+        setData(res.data);
+      } else {
+        setLoadError(res.error || "Failed to load approval queue.");
+      }
+    } catch (err: any) {
+      setLoadError(err.message || "Failed to load approval queue.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectId, statusFilter, activeUserId]);
+
+  useEffect(() => {
+    loadQueue();
+  }, [loadQueue]);
 
   // Fast-track Add Creative for Review Modal (Management Only)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -64,40 +92,10 @@ export default function ApprovalsQueuePage() {
     reader.readAsDataURL(file);
   };
 
-  const project = state.projects.find((p) => p.id === projectId);
-  const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
-  const projectMembers = state.projectMemberships
-    .filter((m) => m.projectId === projectId && m.status === "active")
-    .map((m) => {
-      const user = state.users.find((u) => u.id === m.userId);
-      return {
-        userId: m.userId,
-        name: user?.name || m.userId,
-        role: m.membershipRole || user?.role || "designer",
-      };
-    });
-
-  const filteredItems = projectItems.filter((item) => {
-    // Drafts and ideas are internal work-in-progress and must NOT appear in the review queue
-    if (item.stage === "draft" || item.stage === "idea") {
-      return false;
-    }
-
-    const version = state.submissionVersions.find(
-      (v) => v.id === item.latestSubmittedVersionId || v.id === item.activeDraftVersionId
-    );
-    const summary = getItemApprovalMatrixSummary(
-      item,
-      version,
-      state.approvalDecisions,
-      state.founderOverrides
-    );
-
-    if (statusFilter === "pending") return !summary.allComponentsApproved && !summary.anyChangesRequested;
-    if (statusFilter === "changes_requested") return summary.anyChangesRequested;
-    if (statusFilter === "approved") return summary.allComponentsApproved;
-    return true;
-  });
+  const project = data?.project;
+  const projectMembers = data?.projectMembers || [];
+  const filteredItems = data?.items || [];
+  const counts = data?.counts || { all: 0, pending: 0, changes_requested: 0, approved: 0 };
 
   const handleAddDirectForReview = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,60 +107,37 @@ export default function ApprovalsQueuePage() {
       cta: "Learn more",
     };
 
-    const initialAssets = newAssetFile
-      ? [
-          {
-            assetId: "ast_" + Math.random().toString(36).substr(2, 9),
-            filename: newAssetFile.filename,
-            previewUrl: newAssetFile.previewUrl,
-            fileSizeBytes: newAssetFile.fileSizeBytes,
-            mimeType: newAssetFile.mimeType,
-            contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
-          },
-        ]
-      : [
-          {
-            assetId: "ast_" + Math.random().toString(36).substr(2, 9),
-            filename: `${newTitle.trim()} - Main Creative Asset`,
-            previewUrl:
-              newType === "carousel"
-                ? "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80"
-                : "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=800&auto=format&fit=crop&q=80",
-            fileSizeBytes: 2400000,
-            mimeType: newType === "carousel" ? "application/pdf" : "image/jpeg",
-            contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
-          },
-        ];
-
-    const res = await createContentItem(
-      {
+    setIsLoading(true);
+    try {
+      const createRes = await createContentItemAction({
+        actorUserId: activeUserId,
         projectId,
         title: newTitle.trim(),
         platform: newPlatform,
         contentType: newType,
-        stage: "in_review",
-        accountableOwnerId: newAssigneeId,
-        collaboratorIds: [],
-        deadlines: {
-          submissionDeadline: newDate,
-          scheduledPublicationDate: newDate,
-        },
-        scopeClassification: "contracted",
-      },
-      initialCopy,
-      initialAssets,
-      activeUserId
-    );
+        accountableOwnerId: newAssigneeId || undefined,
+        initialCopy,
+        scheduledPublicationDate: newDate,
+        submissionDeadline: newDate,
+      });
 
-    if (res.success && res.item?.activeDraftVersionId) {
-      submitVersion(res.item.activeDraftVersionId, activeUserId);
+      if (createRes.success && (createRes as any).version?.id) {
+        await submitVersionAction({
+          actorUserId: activeUserId,
+          submissionVersionId: (createRes as any).version.id,
+        });
+      }
+
+      setIsAddModalOpen(false);
+      setNewTitle("");
+      setNewCaption("");
+      setNewAssetFile(null);
+      setStatusFilter("pending");
+      await loadQueue();
+    } catch (err: any) {
+      alert(err.message || "Failed to create creative for review.");
+      setIsLoading(false);
     }
-
-    setIsAddModalOpen(false);
-    setNewTitle("");
-    setNewCaption("");
-    setNewAssetFile(null);
-    setStatusFilter("pending");
   };
 
   return (
@@ -190,6 +165,7 @@ export default function ApprovalsQueuePage() {
           )}
 
           {/* Filter */}
+          {/* Filter Tabs */}
           <div className="flex items-center gap-1 bg-[#ffffff] border border-black/[0.08] rounded-full p-1 shadow-sm text-[13px]">
             <button
               onClick={() => setStatusFilter("pending")}
@@ -197,7 +173,7 @@ export default function ApprovalsQueuePage() {
                 statusFilter === "pending" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
               }`}
             >
-              Needs Decision
+              Needs Decision {counts.pending > 0 ? `(${counts.pending})` : ""}
             </button>
             <button
               onClick={() => setStatusFilter("changes_requested")}
@@ -205,7 +181,7 @@ export default function ApprovalsQueuePage() {
                 statusFilter === "changes_requested" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
               }`}
             >
-              Changes Req
+              Changes Req {counts.changes_requested > 0 ? `(${counts.changes_requested})` : ""}
             </button>
             <button
               onClick={() => setStatusFilter("approved")}
@@ -213,7 +189,7 @@ export default function ApprovalsQueuePage() {
                 statusFilter === "approved" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
               }`}
             >
-              Approved
+              Approved {counts.approved > 0 ? `(${counts.approved})` : ""}
             </button>
             <button
               onClick={() => setStatusFilter("all")}
@@ -221,7 +197,7 @@ export default function ApprovalsQueuePage() {
                 statusFilter === "all" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:text-[#1d1d1f]"
               }`}
             >
-              All
+              All {counts.all > 0 ? `(${counts.all})` : ""}
             </button>
           </div>
         </div>
@@ -230,14 +206,19 @@ export default function ApprovalsQueuePage() {
       {/* Approvals Table */}
       <div className="bg-[#ffffff] border border-black/[0.08] rounded-[20px] overflow-hidden shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
         <div className="divide-y divide-black/[0.06]">
-          {filteredItems.length === 0 ? (
+          {isLoading ? (
+            <div className="p-16 text-center space-y-3">
+              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-[#0071e3] border-t-transparent" />
+              <p className="text-[13px] text-[#86868b]">Loading approvals...</p>
+            </div>
+          ) : filteredItems.length === 0 ? (
             <div className="p-16 text-center space-y-3">
               <div className="mx-auto h-12 w-12 rounded-full bg-[#f2f2f7] flex items-center justify-center text-[#86868b]">
                 <FileCheck2 className="h-6 w-6" />
               </div>
               <h3 className="text-[16px] font-semibold text-[#1d1d1f]">No Content in Queue</h3>
               <p className="text-[13px] text-[#86868b] max-w-md mx-auto">
-                No deliverables are currently awaiting review under the '{statusFilter.replace("_", " ")}' filter. Content appears here automatically after being formally submitted by a designer.
+                No deliverables are currently awaiting review under the '{statusFilter.replace("_", " ")}' filter. Content appears here automatically after an immutable version is formally submitted by a designer.
               </p>
               {isManagement && (
                 <div className="pt-2">
@@ -252,15 +233,7 @@ export default function ApprovalsQueuePage() {
             </div>
           ) : (
             filteredItems.map((item) => {
-              const version = state.submissionVersions.find(
-                (v) => v.id === item.latestSubmittedVersionId || v.id === item.activeDraftVersionId
-              );
-              const summary = getItemApprovalMatrixSummary(
-                item,
-                version,
-                state.approvalDecisions,
-                state.founderOverrides
-              );
+              const summary = item.summary;
 
               const getBadgeStyle = (isApproved: boolean, hasChanges: boolean) => {
                 if (isApproved) return "bg-[#eaf6ed] text-[#1f6f32] border-[#ceead6]";
@@ -268,7 +241,7 @@ export default function ApprovalsQueuePage() {
                 return "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]";
               };
 
-              const renderBadge = (label: string, comp: typeof summary.copy) => {
+              const renderBadge = (label: string, comp: { isFullyApproved: boolean; hasChangesRequested: boolean }) => {
                 const style = getBadgeStyle(comp.isFullyApproved, comp.hasChangesRequested);
                 const text = comp.isFullyApproved ? "✓ Approved" : comp.hasChangesRequested ? "✕ Changes" : "● Pending";
                 return (
@@ -297,8 +270,12 @@ export default function ApprovalsQueuePage() {
                     </div>
                     <div className="text-[12px] text-[#86868b] flex items-center gap-2">
                       <span>Version {item.currentVersionNumber}</span>
-                      <span>•</span>
-                      <span>Scheduled: {formatDate(item.deadlines.scheduledPublicationDate)}</span>
+                      {item.scheduledPublicationDate && (
+                        <>
+                          <span>•</span>
+                          <span>Scheduled: {formatDate(item.scheduledPublicationDate)}</span>
+                        </>
+                      )}
                       {item.scopeClassification === "goodwill" && (
                         <span className="text-[#1f6f32] font-semibold">• Goodwill Extra</span>
                       )}
