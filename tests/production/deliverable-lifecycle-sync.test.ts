@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { db } from "../../lib/db";
-import { contentItems, submissionVersions, users, projects } from "../../lib/db/schema";
+import {
+  contentItems,
+  submissionVersions,
+  users,
+  projects,
+  founderOverrides,
+  approvalDecisions,
+  changeRequests,
+} from "../../lib/db/schema";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { getAuthoritativeContentItemDetailAction } from "../../lib/actions/contentDetail";
 import {
@@ -24,6 +32,9 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
   let otherProjectId: string | null = null;
 
   async function resetItemToCleanDraft(itemId: string) {
+    await db.delete(founderOverrides).where(eq(founderOverrides.contentItemId, itemId));
+    await db.delete(approvalDecisions).where(eq(approvalDecisions.contentItemId, itemId));
+    await db.delete(changeRequests).where(eq(changeRequests.contentItemId, itemId));
     await db.update(contentItems).set({ stage: "draft" }).where(eq(contentItems.id, itemId));
     const versions = await db
       .select()

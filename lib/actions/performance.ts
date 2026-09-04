@@ -490,6 +490,8 @@ export interface MainDashboardDataDTO {
     plannedHours: number | null;
     status: string;
     priority: string;
+    timing?: "overdue" | "today";
+    isEffortAnchor?: boolean;
   }[];
   weeklyTeamCapacity: EmployeePeriodScorecard[];
   monthlyProjectHealth: ProjectPerformanceScorecard[];
@@ -523,42 +525,70 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
       authUser.organizationRole === "admin" ||
       authUser.organizationRole === "consultant";
 
-    const todayStr = new Date().toISOString().split("T")[0];
+    const istFormatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const todayISTStr = istFormatter.format(new Date()); // e.g. "2026-09-04"
+    const startOfTodayIST = new Date(`${todayISTStr}T00:00:00+05:30`);
+    const startOfTomorrowIST = new Date(startOfTodayIST.getTime() + 24 * 60 * 60 * 1000);
+    const endOfTomorrowIST = new Date(startOfTomorrowIST.getTime() + 24 * 60 * 60 * 1000);
+
     const thisMonthPeriod = getPeriodDateRange("this_month");
     const thisWeekPeriod = getPeriodDateRange("this_week");
+    const startOfMonthIST = new Date(`${thisMonthPeriod.startDate}T00:00:00+05:30`);
+    const startOfNextMonthIST = new Date(new Date(`${thisMonthPeriod.endDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000);
+    const startOfWeekIST = new Date(`${thisWeekPeriod.startDate}T00:00:00+05:30`);
+    const startOfNextWeekIST = new Date(new Date(`${thisWeekPeriod.endDate}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000);
 
     // Execute 4 bounded queries in parallel (1 multiplexed roundtrip)
     const [topCardsRes, workloadRes, capacityRes, projectHealthRes] = await Promise.all([
       // 1. Top Cards Aggregate Query
       db.execute(sql`
         SELECT
-          COUNT(*) FILTER (
-            WHERE (deleted_at IS NULL)
-            AND (stage NOT IN ('published', 'approved') AND completed_at IS NULL)
-            AND (COALESCE(final_internal_deadline::text, calculated_internal_deadline::text, submission_deadline::text, '') LIKE ${todayStr + "%"})
+          COUNT(DISTINCT ci.id) FILTER (
+            WHERE (ci.deleted_at IS NULL)
+            AND (p.deleted_at IS NULL)
+            AND (p.archived_at IS NULL)
+            AND (ci.status != 'archived')
+            AND (ci.stage != 'published' AND ci.completed_at IS NULL)
+            AND (COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) >= ${startOfTodayIST.toISOString()}::timestamptz
+                 AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTomorrowIST.toISOString()}::timestamptz)
+            AND (ci.content_group_id IS NULL OR ci.is_effort_anchor = true OR COALESCE(ci.final_planned_seconds, 0) > 0)
           )::int AS tasks_due_today,
 
-          COUNT(*) FILTER (
-            WHERE (deleted_at IS NULL)
-            AND (stage NOT IN ('published', 'approved') AND completed_at IS NULL)
-            AND (COALESCE(final_internal_deadline, calculated_internal_deadline, submission_deadline) < NOW())
+          COUNT(DISTINCT ci.id) FILTER (
+            WHERE (ci.deleted_at IS NULL)
+            AND (p.deleted_at IS NULL)
+            AND (p.archived_at IS NULL)
+            AND (ci.status != 'archived')
+            AND (ci.stage != 'published' AND ci.completed_at IS NULL)
+            AND (COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTodayIST.toISOString()}::timestamptz)
+            AND (ci.content_group_id IS NULL OR ci.is_effort_anchor = true OR COALESCE(ci.final_planned_seconds, 0) > 0)
           )::int AS overdue_tasks,
 
-          COUNT(*) FILTER (
-            WHERE (deleted_at IS NULL)
-            AND (stage IN ('published', 'approved') OR completed_at IS NOT NULL)
-            AND (COALESCE(completed_at::text, published_at::text, '') >= ${thisMonthPeriod.startDate}
-                 AND COALESCE(completed_at::text, published_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"})
+          COUNT(DISTINCT ci.id) FILTER (
+            WHERE (ci.deleted_at IS NULL)
+            AND (p.deleted_at IS NULL)
+            AND (p.archived_at IS NULL)
+            AND (ci.stage = 'published' OR ci.completed_at IS NOT NULL)
+            AND (COALESCE(ci.completed_at, ci.published_at) >= ${startOfMonthIST.toISOString()}::timestamptz
+                 AND COALESCE(ci.completed_at, ci.published_at) < ${startOfNextMonthIST.toISOString()}::timestamptz)
           )::int AS completed_this_month,
 
-          COALESCE(SUM(final_planned_seconds) FILTER (
-            WHERE (deleted_at IS NULL)
-            AND (work_nature = 'ad_hoc')
-            AND (COALESCE(scheduled_publication_date::text, final_internal_deadline::text, completed_at::text, '') >= ${thisMonthPeriod.startDate}
-                 AND COALESCE(scheduled_publication_date::text, final_internal_deadline::text, completed_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"})
+          COALESCE(SUM(ci.final_planned_seconds) FILTER (
+            WHERE (ci.deleted_at IS NULL)
+            AND (p.deleted_at IS NULL)
+            AND (p.archived_at IS NULL)
+            AND (ci.work_nature = 'ad_hoc')
+            AND (COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
+                 AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz)
           ), 0)::int AS ad_hoc_planned_seconds
-        FROM content_items
-        WHERE org_id = ${orgId}
+        FROM content_items ci
+        JOIN projects p ON ci.project_id = p.id
+        WHERE ci.org_id = ${orgId}
       `),
 
       // 2. Today's Workload Rows Query (joins project, assignment, user in PostgreSQL)
@@ -570,25 +600,38 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
           COALESCE(ci.topic, ci.title) AS "topic",
           ci.title,
           COALESCE(ci.work_type, ci.content_type) AS "workType",
-          COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, 'Today') AS "internalDeadline",
-          COALESCE(ci.scheduled_publication_date::text, 'TBD') AS "postingDate",
+          COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) AS "internalDeadline",
+          ci.scheduled_publication_date AS "postingDate",
           COALESCE(u.full_name, 'Unassigned') AS "assigneeName",
           CASE 
             WHEN ci.final_planned_seconds IS NOT NULL THEN ROUND((ci.final_planned_seconds::numeric / 3600.0), 2)
             ELSE NULL
           END AS "plannedHours",
           ci.stage AS "status",
-          ci.priority
+          ci.priority,
+          CASE 
+            WHEN COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTodayIST.toISOString()}::timestamptz THEN 'overdue'
+            ELSE 'today'
+          END AS "timing",
+          ci.is_effort_anchor AS "isEffortAnchor"
         FROM content_items ci
         JOIN projects p ON ci.project_id = p.id
-        LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id
+        LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id AND ca.status IN ('assigned', 'accepted', 'in_progress')
         LEFT JOIN users u ON u.id = ca.assignee_user_id
         WHERE ci.org_id = ${orgId}
           AND ci.deleted_at IS NULL
-          AND ci.stage NOT IN ('published', 'approved')
+          AND p.deleted_at IS NULL
+          AND p.archived_at IS NULL
+          AND ci.status != 'archived'
+          AND ci.stage != 'published'
           AND ci.completed_at IS NULL
-          AND COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, '') LIKE ${todayStr + "%"}
-        ORDER BY ci.priority = 'urgent' DESC, ci.created_at ASC
+          AND (ca.status IS NULL OR ca.status IN ('assigned', 'accepted', 'in_progress'))
+          AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTomorrowIST.toISOString()}::timestamptz
+          AND (ci.content_group_id IS NULL OR ci.is_effort_anchor = true OR COALESCE(ci.final_planned_seconds, 0) > 0)
+        ORDER BY 
+          CASE WHEN COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTodayIST.toISOString()}::timestamptz THEN 0 ELSE 1 END,
+          ci.priority = 'urgent' DESC,
+          COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) ASC
       `),
 
       // 3. User Capacity & Workload Aggregation (Set-based in PostgreSQL)
@@ -597,9 +640,9 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
           SELECT 
             ca.assignee_user_id AS user_id,
             COALESCE(SUM(ci.final_planned_seconds), 0)::numeric / 3600.0 AS assigned_hours,
-            COUNT(*) FILTER (WHERE ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)::int AS completed_count,
+            COUNT(*) FILTER (WHERE ci.stage = 'published' OR ci.completed_at IS NOT NULL)::int AS completed_count,
             COUNT(*) FILTER (
-              WHERE (ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)
+              WHERE (ci.stage = 'published' OR ci.completed_at IS NOT NULL)
               AND ci.completed_at <= COALESCE(ca.current_due_at, ca.initial_due_at, ci.final_internal_deadline, ci.submission_deadline)
             )::int AS on_time_count
           FROM content_assignments ca
@@ -607,8 +650,8 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
           WHERE ca.org_id = ${orgId}
             AND ca.status IN ('assigned', 'accepted', 'in_progress', 'submitted', 'completed')
             AND ci.deleted_at IS NULL
-            AND COALESCE(ca.current_due_at::text, ca.initial_due_at::text, ci.final_internal_deadline::text, ci.submission_deadline::text, '') >= ${thisWeekPeriod.startDate}
-            AND COALESCE(ca.current_due_at::text, ca.initial_due_at::text, ci.final_internal_deadline::text, ci.submission_deadline::text, '') <= ${thisWeekPeriod.endDate + "T23:59:59"}
+            AND COALESCE(ca.current_due_at, ca.initial_due_at, ci.final_internal_deadline, ci.submission_deadline) >= ${startOfWeekIST.toISOString()}::timestamptz
+            AND COALESCE(ca.current_due_at, ca.initial_due_at, ci.final_internal_deadline, ci.submission_deadline) < ${startOfNextWeekIST.toISOString()}::timestamptz
           GROUP BY ca.assignee_user_id
         ),
         user_actuals AS (
@@ -617,8 +660,8 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
             COALESCE(SUM(ws.accumulated_seconds), 0)::numeric / 3600.0 AS actual_hours
           FROM work_sessions ws
           WHERE ws.org_id = ${orgId}
-            AND ws.started_at >= ${thisWeekPeriod.startDate}
-            AND ws.started_at <= ${thisWeekPeriod.endDate + "T23:59:59"}
+            AND ws.started_at >= ${startOfWeekIST.toISOString()}::timestamptz
+            AND ws.started_at < ${startOfNextWeekIST.toISOString()}::timestamptz
           GROUP BY ws.user_id
         )
         SELECT 
@@ -646,17 +689,17 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
           SELECT 
             ci.project_id,
             COUNT(*)::int AS planned_tasks_count,
-            COUNT(*) FILTER (WHERE ci.stage IN ('published', 'approved') OR ci.completed_at IS NOT NULL)::int AS completed_tasks_count,
+            COUNT(*) FILTER (WHERE ci.stage = 'published' OR ci.completed_at IS NOT NULL)::int AS completed_tasks_count,
             COUNT(*) FILTER (
-              WHERE (ci.stage NOT IN ('published', 'approved') AND ci.completed_at IS NULL)
+              WHERE (ci.stage != 'published' AND ci.completed_at IS NULL)
               AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < NOW()
             )::int AS overdue_tasks_count,
             COALESCE(SUM(ci.final_planned_seconds), 0)::numeric / 3600.0 AS planned_hours
           FROM content_items ci
           WHERE ci.org_id = ${orgId}
             AND ci.deleted_at IS NULL
-            AND COALESCE(ci.scheduled_publication_date::text, ci.final_internal_deadline::text, ci.submission_deadline::text, ci.completed_at::text, '') >= ${thisMonthPeriod.startDate}
-            AND COALESCE(ci.scheduled_publication_date::text, ci.final_internal_deadline::text, ci.submission_deadline::text, ci.completed_at::text, '') <= ${thisMonthPeriod.endDate + "T23:59:59"}
+            AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.submission_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
+            AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.submission_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz
           GROUP BY ci.project_id
         ),
         proj_actuals AS (
@@ -665,8 +708,8 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
             COALESCE(SUM(ws.accumulated_seconds), 0)::numeric / 3600.0 AS actual_hours
           FROM work_sessions ws
           WHERE ws.org_id = ${orgId}
-            AND ws.started_at >= ${thisMonthPeriod.startDate}
-            AND ws.started_at <= ${thisMonthPeriod.endDate + "T23:59:59"}
+            AND ws.started_at >= ${startOfMonthIST.toISOString()}::timestamptz
+            AND ws.started_at < ${startOfNextMonthIST.toISOString()}::timestamptz
           GROUP BY ws.project_id
         )
         SELECT 
@@ -682,6 +725,8 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
         LEFT JOIN proj_items pi ON pi.project_id = p.id
         LEFT JOIN proj_actuals pa ON pa.project_id = p.id
         WHERE p.org_id = ${orgId}
+          AND p.deleted_at IS NULL
+          AND p.archived_at IS NULL
           AND p.status = 'active'
         ORDER BY p.name ASC
       `),
@@ -802,21 +847,19 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
       topic: row.topic,
       title: row.title,
       workType: row.workType,
-      internalDeadline: row.internalDeadline,
-      postingDate: row.postingDate,
+      internalDeadline: row.internalDeadline ? new Date(row.internalDeadline).toISOString() : "Today",
+      postingDate: row.postingDate ? new Date(row.postingDate).toISOString() : "TBD",
       assigneeName: row.assigneeName,
       plannedHours: row.plannedHours !== null ? parseFloat(row.plannedHours) : null,
       status: row.status,
       priority: row.priority || "normal",
+      timing: row.timing as "overdue" | "today",
+      isEffortAnchor: row.isEffortAnchor ?? true,
     }));
 
     // 5. Lightweight Employee Personal View (if employee)
     let employeePersonalView: MainDashboardDataDTO["employeePersonalView"] = undefined;
     if (!isManagement) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split("T")[0];
-
       const [userItemsRes, activeTimerRes, userTodayHoursRes] = await Promise.all([
         db.execute(sql`
           SELECT 
@@ -838,7 +881,9 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
         db.execute(sql`
           SELECT COALESCE(SUM(accumulated_seconds), 0)::numeric / 3600.0 as logged_today
           FROM work_sessions
-          WHERE user_id = ${authUser.id} AND started_at >= ${todayStr}
+          WHERE user_id = ${authUser.id}
+            AND started_at >= ${startOfTodayIST.toISOString()}::timestamptz
+            AND started_at < ${startOfTomorrowIST.toISOString()}::timestamptz
         `),
       ]);
 
@@ -856,17 +901,23 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
 
       const dueTodayTasks = userItems.filter((i) => {
         const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.toString().startsWith(todayStr) : false;
+        if (!dl) return false;
+        const d = new Date(dl);
+        return d >= startOfTodayIST && d < startOfTomorrowIST;
       });
 
       const queueTomorrow = userItems.filter((i) => {
         const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.toString().startsWith(tomorrowStr) : false;
+        if (!dl) return false;
+        const d = new Date(dl);
+        return d >= startOfTomorrowIST && d < endOfTomorrowIST;
       });
 
       const queueUpcoming = userItems.filter((i) => {
         const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
-        return dl ? dl.toString().split("T")[0] > tomorrowStr : false;
+        if (!dl) return false;
+        const d = new Date(dl);
+        return d >= endOfTomorrowIST;
       });
 
       const loggedToday = parseFloat((userTodayHoursRes.rows[0] as any)?.logged_today || "0");

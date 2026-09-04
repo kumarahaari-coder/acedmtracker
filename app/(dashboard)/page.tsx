@@ -237,6 +237,7 @@ export default function AuthoritativeDashboardPage() {
                     <th className="py-3 px-4">Task & Project</th>
                     <th className="py-3 px-4">Work Type</th>
                     <th className="py-3 px-4">Internal Deadline</th>
+                    <th className="py-3 px-4">Posting Date</th>
                     <th className="py-3 px-4">Assignee</th>
                     <th className="py-3 px-4 text-right">Planned Effort</th>
                     <th className="py-3 px-4 text-center">Priority</th>
@@ -246,17 +247,17 @@ export default function AuthoritativeDashboardPage() {
                 <tbody className="divide-y divide-black/[0.04]">
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-[#86868b]">Loading today's workload...</td>
+                      <td colSpan={8} className="py-8 text-center text-[#86868b]">Loading today's workload...</td>
                     </tr>
                   ) : dashboardData?.todaysWorkload.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-[#86868b]">Zero tasks due today.</td>
+                      <td colSpan={8} className="py-8 text-center text-[#86868b]">Zero tasks due today.</td>
                     </tr>
                   ) : (
                     dashboardData?.todaysWorkload.map((row) => (
                       <tr key={row.id} className="hover:bg-[#fbfbfd] transition">
                         <td className="py-3.5 px-4 font-semibold text-[#1d1d1f]">
-                          <Link href={`/projects/${row.projectId}`} className="hover:text-[#0071e3]">
+                          <Link href={`/projects/${row.projectId}/content/${row.id}`} className="hover:text-[#0071e3]">
                             {row.title}
                           </Link>
                           <div className="text-[11px] text-[#86868b] font-normal">{row.projectName}</div>
@@ -267,7 +268,24 @@ export default function AuthoritativeDashboardPage() {
                         </td>
 
                         <td className="py-3.5 px-4 text-xs font-medium text-[#1d1d1f]">
-                          {row.internalDeadline ? new Date(row.internalDeadline).toLocaleDateString() : "Today"}
+                          <div className="flex items-center gap-1.5">
+                            <span>
+                              {row.internalDeadline && row.internalDeadline !== "Today"
+                                ? new Date(row.internalDeadline).toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", month: "short", day: "numeric" })
+                                : "Today"}
+                            </span>
+                            {row.timing === "overdue" && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-[#ff3b30]/10 text-[#d70015]">
+                                Overdue
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#86868b]">
+                          {row.postingDate && row.postingDate !== "TBD"
+                            ? new Date(row.postingDate).toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", month: "short", day: "numeric" })
+                            : "TBD"}
                         </td>
 
                         <td className="py-3.5 px-4 text-xs font-medium text-[#1d1d1f]">
