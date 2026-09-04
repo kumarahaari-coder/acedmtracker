@@ -1,11 +1,20 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { db } from "../../lib/db";
 import { contentItems, submissionVersions, users, projects } from "../../lib/db/schema";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, desc } from "drizzle-orm";
 import { getAuthoritativeContentItemDetailAction } from "../../lib/actions/contentDetail";
-import { getAuthoritativeProjectApprovalQueueAction } from "../../lib/actions/approvals";
+import {
+  getAuthoritativeProjectApprovalQueueAction,
+  getAuthoritativeGlobalApprovalQueueAction,
+  recordFounderOverrideAction,
+} from "../../lib/actions/approvals";
 import { getAuthoritativeProjectKanbanAction } from "../../lib/actions/kanban";
-import { updateContentItemStageAction } from "../../lib/actions/content";
+import {
+  updateContentItemStageAction,
+  submitVersionAction,
+  createNewVersionDraftAction,
+} from "../../lib/actions/content";
+import { createChangeRequestAction } from "../../lib/actions/changes";
 import { enforceTestSafetyGuard } from "../helpers/safetyGuard";
 
 describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Content Detail & Approval Queue", () => {
@@ -13,6 +22,29 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
   let targetProjectId: string;
   let targetItemId: string;
   let otherProjectId: string | null = null;
+
+  async function resetItemToCleanDraft(itemId: string) {
+    await db.update(contentItems).set({ stage: "draft" }).where(eq(contentItems.id, itemId));
+    const versions = await db
+      .select()
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, itemId))
+      .orderBy(desc(submissionVersions.versionNumber));
+
+    if (versions.length > 0) {
+      await db
+        .update(submissionVersions)
+        .set({ isDraft: true, submittedAt: null })
+        .where(eq(submissionVersions.id, versions[0].id));
+
+      for (let i = 1; i < versions.length; i++) {
+        await db
+          .update(submissionVersions)
+          .set({ isDraft: false, submittedAt: null })
+          .where(eq(submissionVersions.id, versions[i].id));
+      }
+    }
+  }
 
   beforeAll(async () => {
     enforceTestSafetyGuard();
@@ -86,12 +118,7 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
 
   it("4. Canonical Approval Queue eligibility: draft items without submitted_at are NOT in queue", async () => {
     // Ensure an item in draft stage without submitted version is NOT present in queue
-    await db.update(contentItems).set({ stage: "draft" }).where(eq(contentItems.id, targetItemId));
-    // Also ensure no submitted versions exist for this draft item
-    await db
-      .update(submissionVersions)
-      .set({ isDraft: true, submittedAt: null })
-      .where(eq(submissionVersions.contentItemId, targetItemId));
+    await resetItemToCleanDraft(targetItemId);
 
     const queueRes = await getAuthoritativeProjectApprovalQueueAction(targetProjectId, "all", founderUser.id);
     expect(queueRes.success).toBe(true);
@@ -103,10 +130,7 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
 
   it("5. Invariant guard: rejects stage transition to 'submitted' without an immutable submitted version", async () => {
     // Ensure item has no immutable submitted versions
-    await db
-      .update(submissionVersions)
-      .set({ isDraft: true, submittedAt: null })
-      .where(eq(submissionVersions.contentItemId, targetItemId));
+    await resetItemToCleanDraft(targetItemId);
 
     const res = await updateContentItemStageAction({
       actorUserId: founderUser.id,
@@ -116,5 +140,148 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
 
     expect(res.success).toBe(false);
     expect(res.error).toContain("Cannot move deliverable to Submitted or In Review without an immutable submitted version");
+  });
+
+  it("6. Acceptance Step 1: Create + assign -> Kanban Drafting -> Global Approvals absent", async () => {
+    // Reset target item to draft with no submitted versions
+    await resetItemToCleanDraft(targetItemId);
+
+    // Kanban should show card in drafting
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(targetProjectId, founderUser.id);
+    expect(kanbanRes.success).toBe(true);
+    const card = kanbanRes.data!.cards.find((c) => c.id === targetItemId);
+    expect(card?.stage).toBe("draft");
+
+    // Global approvals should NOT include this item
+    const globalRes = await getAuthoritativeGlobalApprovalQueueAction("all", founderUser.id);
+    expect(globalRes.success).toBe(true);
+    const globalItem = globalRes.data!.items.find((i) => i.id === targetItemId);
+    expect(globalItem).toBeUndefined();
+  });
+
+  it("7. Acceptance Step 2: Designer submits -> Kanban In Review -> Project & Global Approvals present", async () => {
+    // Ensure a draft version exists
+    let [v] = await db
+      .select()
+      .from(submissionVersions)
+      .where(and(eq(submissionVersions.contentItemId, targetItemId), eq(submissionVersions.isDraft, true)))
+      .limit(1);
+
+    if (!v) {
+      const draftRes = await createNewVersionDraftAction({
+        actorUserId: founderUser.id,
+        contentItemId: targetItemId,
+      });
+      v = (draftRes as any).version;
+    }
+
+    const submitRes = await submitVersionAction({
+      actorUserId: founderUser.id,
+      submissionVersionId: v.id,
+    });
+    expect(submitRes.success).toBe(true);
+
+    // Kanban shows in_review
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(targetProjectId, founderUser.id);
+    const card = kanbanRes.data!.cards.find((c) => c.id === targetItemId);
+    expect(card?.stage).toBe("in_review");
+
+    // Project Approvals shows item
+    const projAppRes = await getAuthoritativeProjectApprovalQueueAction(targetProjectId, "pending", founderUser.id);
+    expect(projAppRes.success).toBe(true);
+    const projItem = projAppRes.data!.items.find((i) => i.id === targetItemId);
+    expect(projItem).toBeDefined();
+
+    // Global Approvals shows item
+    const globalRes = await getAuthoritativeGlobalApprovalQueueAction("pending", founderUser.id);
+    expect(globalRes.success).toBe(true);
+    const globalItem = globalRes.data!.items.find((i) => i.id === targetItemId);
+    expect(globalItem).toBeDefined();
+  });
+
+  it("8. Acceptance Step 3: Request Changes -> Kanban Changes Requested -> both approval views reflect Changes Requested", async () => {
+    const [v] = await db
+      .select()
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, targetItemId))
+      .orderBy(desc(submissionVersions.versionNumber))
+      .limit(1);
+
+    const changeRes = await createChangeRequestAction({
+      actorUserId: founderUser.id,
+      submissionVersionId: v.id,
+      component: "creative",
+      requestedChange: "Please update colour contrast on background title",
+      priority: "medium",
+    });
+    expect(changeRes.success).toBe(true);
+
+    // Kanban shows changes_requested
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(targetProjectId, founderUser.id);
+    const card = kanbanRes.data!.cards.find((c) => c.id === targetItemId);
+    expect(card?.stage).toBe("changes_requested");
+
+    // Both approval views reflect changes_requested
+    const projAppRes = await getAuthoritativeProjectApprovalQueueAction(targetProjectId, "changes_requested", founderUser.id);
+    expect(projAppRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
+
+    const globalRes = await getAuthoritativeGlobalApprovalQueueAction("changes_requested", founderUser.id);
+    expect(globalRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
+  });
+
+  it("9. Acceptance Step 4: Designer submits revision -> returns to review in both approval queues", async () => {
+    // Auto-create or create revision version and submit
+    const draftRes = await createNewVersionDraftAction({
+      actorUserId: founderUser.id,
+      contentItemId: targetItemId,
+    });
+    expect(draftRes.success).toBe(true);
+
+    const submitRes = await submitVersionAction({
+      actorUserId: founderUser.id,
+      submissionVersionId: (draftRes as any).version.id,
+    });
+    expect(submitRes.success).toBe(true);
+
+    // Returns to in_review
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(targetProjectId, founderUser.id);
+    const card = kanbanRes.data!.cards.find((c) => c.id === targetItemId);
+    expect(card?.stage).toBe("in_review");
+
+    // Both approval queues reflect pending review
+    const projAppRes = await getAuthoritativeProjectApprovalQueueAction(targetProjectId, "pending", founderUser.id);
+    expect(projAppRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
+
+    const globalRes = await getAuthoritativeGlobalApprovalQueueAction("pending", founderUser.id);
+    expect(globalRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
+  });
+
+  it("10. Acceptance Step 5: Required approvals complete -> Kanban Approved -> Approved filter in both approval views", async () => {
+    // Ensure founderUser is founder or admin
+    await db.update(users).set({ organizationRole: "founder" }).where(eq(users.id, founderUser.id));
+
+    // Record Founder Override to complete all approvals
+    const overrideRes = await recordFounderOverrideAction({
+      actorUserId: founderUser.id,
+      contentItemId: targetItemId,
+      overrideType: "all",
+      justification: "Full acceptance verification approval",
+    });
+    if (!overrideRes.success) {
+      console.error("overrideRes error:", overrideRes.error);
+    }
+    expect(overrideRes.success).toBe(true);
+
+    // Kanban shows approved
+    const kanbanRes = await getAuthoritativeProjectKanbanAction(targetProjectId, founderUser.id);
+    const card = kanbanRes.data!.cards.find((c) => c.id === targetItemId);
+    expect(card?.stage).toBe("approved");
+
+    // Approved filter in both approval views shows item
+    const projAppRes = await getAuthoritativeProjectApprovalQueueAction(targetProjectId, "approved", founderUser.id);
+    expect(projAppRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
+
+    const globalRes = await getAuthoritativeGlobalApprovalQueueAction("approved", founderUser.id);
+    expect(globalRes.data!.items.find((i) => i.id === targetItemId)).toBeDefined();
   });
 });

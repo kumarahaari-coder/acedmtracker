@@ -11,6 +11,8 @@ import {
   Loader2,
   RefreshCw,
   User as UserIcon,
+  ArrowRight,
+  ExternalLink,
 } from "lucide-react";
 import { ContentStage } from "@/lib/types";
 import { formatDate } from "@/lib/formatters";
@@ -80,18 +82,50 @@ export default function KanbanBoardPage() {
 
     if (card.stage === targetStage) return;
 
-    // Approval gate checks
-    const isApprovedOrBeyond = targetStage === "approved" || targetStage === "scheduled" || targetStage === "published";
-    if (isApprovedOrBeyond && !card.approvalSummary.allComponentsApproved && !card.approvalSummary.isOverridden) {
+    // Enforce business action invariants: transitions requiring business actions cannot be done directly
+    if (card.stage === "draft" && (targetStage === "submitted" || targetStage === "in_review")) {
       setTransitionError(
-        `Cannot move '${card.title}' to ${targetStage.toUpperCase()}: Gated by approval workflow. All 3 components (Copy, Creative, Posting Date) must be approved by both Consultant and Founder, or Founder Override must be applied.`
+        `Direct transition disabled: Deliverable '${card.title}' must be submitted for review from the deliverable page with creative work attached.`
       );
       return;
     }
 
-    if (targetStage === "published" && !card.liveUrl) {
+    if (targetStage === "changes_requested") {
       setTransitionError(
-        `Cannot mark '${card.title}' as Published: A valid Live Post URL is required.`
+        `Direct transition disabled: Changes for '${card.title}' must be requested through the Approvals Queue with specific revision notes.`
+      );
+      return;
+    }
+
+    if (targetStage === "approved") {
+      setTransitionError(
+        `Direct transition disabled: '${card.title}' must be approved through the Approvals Queue across all 3 components (Copy, Creative, Date) or via Founder Override.`
+      );
+      return;
+    }
+
+    if (targetStage === "scheduled") {
+      setTransitionError(
+        `Direct transition disabled: Publication date for '${card.title}' must be scheduled via the Project Calendar or Deliverable Detail.`
+      );
+      return;
+    }
+
+    if (targetStage === "published") {
+      setTransitionError(
+        `Direct transition disabled: Publishing '${card.title}' requires recording a verified Live URL on the deliverable page.`
+      );
+      return;
+    }
+
+    // Only legal direct Kanban triage: between 'submitted' and 'in_review'
+    const isTriaging =
+      (card.stage === "submitted" && targetStage === "in_review") ||
+      (card.stage === "in_review" && targetStage === "submitted");
+
+    if (!isTriaging) {
+      setTransitionError(
+        `Invalid lifecycle transition from ${card.stage.toUpperCase()} to ${targetStage.toUpperCase()}. Stages represent milestone progress achieved through business actions.`
       );
       return;
     }
@@ -362,23 +396,69 @@ export default function KanbanBoardPage() {
                             )}
                           </div>
 
-                          {/* Quick Stage Mover Dropdown */}
-                          <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-black/[0.06]">
-                            <span className="text-[#86868b]">Move:</span>
-                            <select
-                              value={item.stage}
-                              disabled={isUpdatingStage}
-                              onChange={(e) => handleStageTransition(item.id, e.target.value as ContentStage)}
-                              className="bg-[#f5f5f7] border border-black/[0.08] text-[#1d1d1f] rounded-lg px-2 py-0.5 text-[11px] focus:outline-none disabled:opacity-50"
-                            >
-                              <option value="draft">Draft</option>
-                              <option value="submitted">Submitted</option>
-                              <option value="in_review">In Review</option>
-                              <option value="changes_requested">Changes Req</option>
-                              <option value="approved">Approved</option>
-                              <option value="scheduled">Scheduled</option>
-                              <option value="published">Published</option>
-                            </select>
+                          {/* Lifecycle Action Helper (Replaces arbitrary dropdown with valid business action) */}
+                          <div className="flex items-center justify-between text-[11px] pt-2 border-t border-black/[0.06]">
+                            <span className="text-[#86868b] font-medium">Action:</span>
+                            {item.stage === "draft" && (
+                              <Link
+                                href={`/projects/${projectId}/content/${item.id}`}
+                                className="inline-flex items-center gap-1 font-medium text-[#0071e3] hover:underline"
+                              >
+                                <span>Submit Review</span>
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            )}
+                            {(item.stage === "submitted" || item.stage === "in_review") && (
+                              <Link
+                                href={`/projects/${projectId}/approvals`}
+                                className="inline-flex items-center gap-1 font-medium text-[#0071e3] hover:underline"
+                              >
+                                <span>Review in Queue</span>
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            )}
+                            {item.stage === "changes_requested" && (
+                              <Link
+                                href={`/projects/${projectId}/content/${item.id}`}
+                                className="inline-flex items-center gap-1 font-medium text-[#b42318] hover:underline"
+                              >
+                                <span>Revise Work</span>
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            )}
+                            {item.stage === "approved" && (
+                              <Link
+                                href={`/projects/${projectId}/calendar`}
+                                className="inline-flex items-center gap-1 font-medium text-[#027a48] hover:underline"
+                              >
+                                <span>Schedule</span>
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            )}
+                            {item.stage === "scheduled" && (
+                              <Link
+                                href={`/projects/${projectId}/content/${item.id}`}
+                                className="inline-flex items-center gap-1 font-medium text-[#0071e3] hover:underline"
+                              >
+                                <span>Publish Live</span>
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            )}
+                            {item.stage === "published" && (
+                              item.liveUrl ? (
+                                <a
+                                  href={item.liveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 font-medium text-[#027a48] hover:underline"
+                                >
+                                  <span>Live Post</span>
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                              ) : (
+                                <span className="text-[#86868b] font-medium">Published</span>
+                              )
+                            )}
                           </div>
                         </div>
                       );

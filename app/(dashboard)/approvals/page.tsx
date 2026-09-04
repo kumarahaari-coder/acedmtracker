@@ -1,86 +1,188 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { getAuthoritativeOrganizationApprovalsAction, OrganizationApprovalItem } from "@/lib/actions/approvals";
-import { CheckCircle2, AlertCircle, Filter, ShieldCheck, Clock, FileCheck2, Loader2, ArrowRight, Send } from "lucide-react";
+import {
+  getAuthoritativeGlobalApprovalQueueAction,
+  GlobalApprovalQueueItemDTO,
+  GlobalApprovalQueueDTO,
+} from "@/lib/actions/approvals";
+import {
+  CheckCircle2,
+  AlertCircle,
+  Filter,
+  FileCheck2,
+  Loader2,
+  ArrowRight,
+  RefreshCw,
+  Clock,
+  ExternalLink,
+  User as UserIcon,
+} from "lucide-react";
 import { useRole } from "@/lib/context/RoleContext";
-import { useAppState } from "@/lib/context/AppStateContext";
+import { formatDate } from "@/lib/formatters";
 
-export default function OrganizationApprovalsPage() {
-  const { activeRole } = useRole();
-  const { updateContentItemStage } = useAppState();
-  const [items, setItems] = useState<OrganizationApprovalItem[]>([]);
-  const [projectsList, setProjectsList] = useState<Array<{ id: string; name: string }>>([]);
-  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; name: string }>>([]);
+export default function GlobalApprovalsPage() {
+  const { activeRole, activeUserId } = useRole();
+  const [data, setData] = useState<GlobalApprovalQueueDTO | null>(null);
+  const [activeTab, setActiveTab] = useState<"pending" | "changes_requested" | "approved" | "all">("pending");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
-  // Filters
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
-  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string>("all");
-  const [selectedConsultantStatus, setSelectedConsultantStatus] = useState<string>("all");
-  const [selectedFounderStatus, setSelectedFounderStatus] = useState<string>("all");
-  const [selectedOverallStatus, setSelectedOverallStatus] = useState<string>("all");
-
-  useEffect(() => {
-    async function loadApprovals() {
-      setIsLoading(true);
-      setErrorNotice(null);
-      const res = await getAuthoritativeOrganizationApprovalsAction();
-      if (res.success) {
-        setItems(res.items);
-        setProjectsList(res.projects);
-        setTeamMembers(res.teamMembers);
+  const loadApprovals = useCallback(async () => {
+    setIsLoading(true);
+    setErrorNotice(null);
+    try {
+      const res = await getAuthoritativeGlobalApprovalQueueAction(activeTab, activeUserId);
+      if (res.success && res.data) {
+        setData(res.data);
       } else {
-        setErrorNotice(res.error || "Failed to load Organization Approvals Queue");
+        setErrorNotice(res.error || "Failed to load Global Approvals Queue");
       }
+    } catch (err: any) {
+      setErrorNotice(err.message || "Network error loading approvals");
+    } finally {
       setIsLoading(false);
     }
+  }, [activeTab, activeUserId]);
+
+  useEffect(() => {
     loadApprovals();
-  }, []);
+  }, [loadApprovals]);
+
+  const items = data?.items || [];
+  const counts = data?.counts || { all: 0, pending: 0, changes_requested: 0, approved: 0 };
+  const projectsList = data?.projects || [];
 
   const filteredItems = items.filter((item) => {
     if (selectedProjectId !== "all" && item.projectId !== selectedProjectId) return false;
-    if (selectedAssigneeId !== "all" && item.assignedOwnerId !== selectedAssigneeId) return false;
-    if (selectedConsultantStatus !== "all" && item.consultantStatus !== selectedConsultantStatus) return false;
-    if (selectedFounderStatus !== "all" && item.founderStatus !== selectedFounderStatus) return false;
-    if (selectedOverallStatus !== "all" && item.overallStatus !== selectedOverallStatus) return false;
     return true;
   });
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 sm:p-10 max-w-7xl mx-auto space-y-6 animate-in fade-in">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-black/[0.08] pb-5">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-black/[0.06]">
         <div>
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center rounded-full bg-[#0071e3]/10 px-2.5 py-0.5 text-xs font-semibold text-[#0071e3]">
-              Company Scope
+              Organization Scope
             </span>
-            <h1 className="text-2xl font-bold tracking-tight text-[#1d1d1f]">Organization Approvals Queue</h1>
+            <h1 className="text-[28px] sm:text-[36px] font-bold text-[#1d1d1f] tracking-tight">
+              Global Approvals Queue
+            </h1>
           </div>
-          <p className="text-xs text-[#86868b] mt-1">
-            Authoritative approval queue tracking Copy, Creative, and Posting Date decisions across all projects.
+          <p className="text-[14px] text-[#6e6e73] mt-1">
+            Authoritative approval queue tracking reviewable deliverables across all authorized projects.
           </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => loadApprovals()}
+            disabled={isLoading}
+            title="Refresh Approvals"
+            className="p-2.5 rounded-full border border-black/[0.08] bg-white text-[#6e6e73] hover:text-[#1d1d1f] transition shadow-xs disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+          </button>
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="rounded-2xl border border-black/[0.08] bg-white p-4 shadow-sm space-y-3">
-        <div className="flex items-center gap-2 text-xs font-semibold text-[#1d1d1f] uppercase tracking-wider">
-          <Filter className="h-3.5 w-3.5 text-[#0071e3]" />
-          <span>Filter Approvals</span>
+      {/* Tabs & Secondary Filters */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        {/* Status Tabs */}
+        <div className="flex items-center bg-[#f5f5f7] p-1 rounded-full text-[13px] border border-black/[0.06] overflow-x-auto max-w-full">
+          <button
+            onClick={() => setActiveTab("pending")}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-medium transition whitespace-nowrap ${
+              activeTab === "pending"
+                ? "bg-white text-[#1d1d1f] shadow-xs"
+                : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            <span>Needs Decision</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                activeTab === "pending"
+                  ? "bg-[#0071e3] text-white"
+                  : "bg-black/[0.06] text-[#6e6e73]"
+              }`}
+            >
+              {counts.pending}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("changes_requested")}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-medium transition whitespace-nowrap ${
+              activeTab === "changes_requested"
+                ? "bg-white text-[#1d1d1f] shadow-xs"
+                : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            <span>Changes Requested</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                activeTab === "changes_requested"
+                  ? "bg-[#b42318] text-white"
+                  : "bg-black/[0.06] text-[#6e6e73]"
+              }`}
+            >
+              {counts.changes_requested}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("approved")}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-medium transition whitespace-nowrap ${
+              activeTab === "approved"
+                ? "bg-white text-[#1d1d1f] shadow-xs"
+                : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            <span>Approved</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                activeTab === "approved"
+                  ? "bg-[#027a48] text-white"
+                  : "bg-black/[0.06] text-[#6e6e73]"
+              }`}
+            >
+              {counts.approved}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("all")}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-medium transition whitespace-nowrap ${
+              activeTab === "all"
+                ? "bg-white text-[#1d1d1f] shadow-xs"
+                : "text-[#6e6e73] hover:text-[#1d1d1f]"
+            }`}
+          >
+            <span>All Reviewable</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                activeTab === "all"
+                  ? "bg-[#1d1d1f] text-white"
+                  : "bg-black/[0.06] text-[#6e6e73]"
+              }`}
+            >
+              {counts.all}
+            </span>
+          </button>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
-          {/* Project */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Project</label>
+        {/* Project Selector Filter */}
+        {projectsList.length > 1 && (
+          <div className="flex items-center gap-2 bg-white border border-black/[0.08] rounded-full px-3.5 py-1.5 text-[13px] shadow-2xs">
+            <Filter className="h-3.5 w-3.5 text-[#86868b]" />
             <select
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
+              className="bg-transparent text-[#1d1d1f] font-medium focus:outline-none text-[13px]"
             >
               <option value="all">All Projects ({projectsList.length})</option>
               {projectsList.map((p) => (
@@ -90,204 +192,192 @@ export default function OrganizationApprovalsPage() {
               ))}
             </select>
           </div>
-
-          {/* Assigned Owner */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Assigned Owner</label>
-            <select
-              value={selectedAssigneeId}
-              onChange={(e) => setSelectedAssigneeId(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
-            >
-              <option value="all">All Team Members</option>
-              {teamMembers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Consultant Status */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Consultant Status</label>
-            <select
-              value={selectedConsultantStatus}
-              onChange={(e) => setSelectedConsultantStatus(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
-            >
-              <option value="all">All Consultant States</option>
-              <option value="approved">Approved</option>
-              <option value="changes_requested">Changes Requested</option>
-              <option value="pending">Pending</option>
-            </select>
-          </div>
-
-          {/* Founder Status */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Founder Status</label>
-            <select
-              value={selectedFounderStatus}
-              onChange={(e) => setSelectedFounderStatus(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
-            >
-              <option value="all">All Founder States</option>
-              <option value="approved">Approved</option>
-              <option value="changes_requested">Changes Requested</option>
-              <option value="pending">Pending</option>
-            </select>
-          </div>
-
-          {/* Overall Status */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Overall Status</label>
-            <select
-              value={selectedOverallStatus}
-              onChange={(e) => setSelectedOverallStatus(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
-            >
-              <option value="all">All Overall States</option>
-              <option value="approved">Approved</option>
-              <option value="in_review">In Review</option>
-              <option value="changes_requested">Changes Requested</option>
-              <option value="draft">Draft</option>
-            </select>
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* Main Table */}
-      {isLoading ? (
-        <div className="flex items-center justify-center p-12 bg-white rounded-2xl border border-black/[0.08]">
-          <Loader2 className="h-6 w-6 animate-spin text-[#0071e3]" />
-          <span className="ml-2 text-xs font-medium text-[#86868b]">Loading Organization Approvals Queue...</span>
-        </div>
-      ) : errorNotice ? (
-        <div className="p-6 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs flex items-center gap-2">
+      {/* Error Alert */}
+      {errorNotice && (
+        <div className="rounded-2xl border border-[#ffd5d0] bg-[#fff0ee] p-4 text-[13px] text-[#b42318] flex items-center gap-3 shadow-xs">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{errorNotice}</span>
         </div>
+      )}
+
+      {/* Main List */}
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center p-16 bg-white rounded-2xl border border-black/[0.08] min-h-[300px] gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-[#0071e3]" />
+          <span className="text-[13px] font-medium text-[#86868b]">Loading approvals queue...</span>
+        </div>
       ) : filteredItems.length === 0 ? (
-        <div className="p-12 text-center bg-white rounded-2xl border border-black/[0.08] space-y-2">
-          <FileCheck2 className="h-8 w-8 mx-auto text-[#86868b]" />
-          <p className="text-sm font-semibold text-[#1d1d1f]">No Pending Approvals</p>
-          <p className="text-xs text-[#86868b]">No deliverables match your current approval filters.</p>
+        <div className="p-16 text-center bg-white rounded-2xl border border-black/[0.08] space-y-3 shadow-xs">
+          <FileCheck2 className="h-10 w-10 mx-auto text-[#86868b]/70" />
+          <p className="text-[16px] font-semibold text-[#1d1d1f]">No Deliverables in Queue</p>
+          <p className="text-[13px] text-[#86868b] max-w-md mx-auto">
+            {activeTab === "pending"
+              ? "All submitted deliverables have decisions recorded. New items will appear here when designers submit work."
+              : activeTab === "changes_requested"
+              ? "No deliverables currently have open change requests."
+              : activeTab === "approved"
+              ? "No approved deliverables found matching this filter."
+              : "No reviewable deliverables found across authorized projects."}
+          </p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-black/[0.08] shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#f5f5f7] border-b border-black/[0.08] font-semibold text-[#1d1d1f] uppercase tracking-wider">
+            <table className="w-full text-left text-[13px]">
+              <thead className="bg-[#f5f5f7] border-b border-black/[0.08] font-semibold text-[#1d1d1f] uppercase tracking-wider text-[11px]">
                 <tr>
-                  <th className="p-3.5">Project</th>
-                  <th className="p-3.5">Deliverable</th>
-                  <th className="p-3.5 text-center">3-Component Matrix</th>
-                  <th className="p-3.5">Consultant</th>
-                  <th className="p-3.5">Founder</th>
-                  <th className="p-3.5">Assigned Owner</th>
-                  <th className="p-3.5">Due Date</th>
-                  <th className="p-3.5">Overall</th>
-                  <th className="p-3.5 text-right">Action</th>
+                  <th className="p-4">Project</th>
+                  <th className="p-4">Deliverable</th>
+                  <th className="p-4 text-center">3-Component Status</th>
+                  <th className="p-4">Assigned Designer</th>
+                  <th className="p-4">Submission / Target</th>
+                  <th className="p-4 text-center">Overall Stage</th>
+                  <th className="p-4 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/[0.06] text-[#1d1d1f]">
-                {filteredItems.map((item) => (
-                  <tr key={item.id} className="hover:bg-[#fbfbfd] transition">
-                    <td className="p-3.5 font-semibold text-[#0071e3]">
-                      <Link href={`/projects/${item.projectId}`} className="hover:underline">
-                        {item.projectName}
-                      </Link>
-                    </td>
-                    <td className="p-3.5 font-medium">
-                      <div className="flex flex-col">
-                        <Link href={`/projects/${item.projectId}/content/${item.id}`} className="hover:underline font-semibold text-[#1d1d1f]">
-                          {item.title}
+                {filteredItems.map((item) => {
+                  const copy = item.summary.copy;
+                  const creative = item.summary.creative;
+                  const date = item.summary.posting_date;
+
+                  return (
+                    <tr key={item.id} className="hover:bg-[#fbfbfd] transition">
+                      {/* Project Column */}
+                      <td className="p-4 font-semibold text-[#0071e3] whitespace-nowrap">
+                        <Link href={`/projects/${item.projectId}`} className="hover:underline">
+                          {item.projectName}
                         </Link>
-                        <span className="text-[11px] text-[#86868b]">
-                          {item.platform} • v{item.currentVersionNumber}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-3.5">
-                      <div className="flex items-center justify-center gap-1.5 text-[11px]">
-                        <span className={`px-2 py-0.5 rounded font-medium ${item.copyApprovalStatus === "approved" ? "bg-green-100 text-green-800" : item.copyApprovalStatus === "changes_requested" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>
-                          Copy: {item.copyApprovalStatus}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded font-medium ${item.creativeApprovalStatus === "approved" ? "bg-green-100 text-green-800" : item.creativeApprovalStatus === "changes_requested" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>
-                          Creative: {item.creativeApprovalStatus}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded font-medium ${item.postingDateApprovalStatus === "approved" ? "bg-green-100 text-green-800" : item.postingDateApprovalStatus === "changes_requested" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>
-                          Date: {item.postingDateApprovalStatus}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-3.5 capitalize font-medium">
-                      <span className={item.consultantStatus === "approved" ? "text-green-700" : item.consultantStatus === "changes_requested" ? "text-amber-700" : "text-gray-500"}>
-                        {item.consultantStatus}
-                      </span>
-                    </td>
-                    <td className="p-3.5 capitalize font-medium">
-                      <span className={item.founderStatus === "approved" ? "text-green-700" : item.founderStatus === "changes_requested" ? "text-amber-700" : "text-gray-500"}>
-                        {item.founderStatus}
-                      </span>
-                    </td>
-                    <td className="p-3.5 font-medium">
-                      {item.assignedOwnerName ? (
-                        <span className="text-[#1d1d1f]">{item.assignedOwnerName}</span>
-                      ) : (
-                        <span className="text-[#86868b] italic">Unassigned</span>
-                      )}
-                    </td>
-                    <td className="p-3.5 text-[#6e6e73]">
-                      {item.submissionDeadline ? new Date(item.submissionDeadline).toLocaleDateString() : "No Due Date"}
-                    </td>
-                    <td className="p-3.5">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                          item.overallStatus === "approved"
-                            ? "bg-green-50 text-green-700 border border-green-200"
-                            : item.overallStatus === "changes_requested"
-                            ? "bg-amber-50 text-amber-700 border border-amber-200"
-                            : item.overallStatus === "in_review"
-                            ? "bg-blue-50 text-blue-700 border border-blue-200"
-                            : "bg-gray-100 text-gray-700"
-                        }`}
-                      >
-                        {item.overallStatus.replace(/_/g, " ")}
-                      </span>
-                    </td>
-                    <td className="p-3.5 text-right">
-                      {activeRole === "designer" ? (
-                        item.overallStatus === "draft" || item.overallStatus === "changes_requested" ? (
-                          <button
-                            onClick={async () => {
-                              await updateContentItemStage(item.id, "submitted");
-                              const res = await getAuthoritativeOrganizationApprovalsAction();
-                              if (res.success) setItems(res.items);
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-3.5 py-1 text-[11px] font-semibold text-white transition shadow-sm"
-                          >
-                            <Send className="h-3 w-3" /> Submit for Review
-                          </button>
-                        ) : (
-                          <Link
-                            href={`/projects/${item.projectId}/content/${item.id}`}
-                            className="inline-flex items-center gap-1 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3 py-1 text-[11px] font-medium text-[#0071e3] transition"
-                          >
-                            View Deliverable <ArrowRight className="h-3 w-3" />
-                          </Link>
-                        )
-                      ) : (
+                        <div className="text-[11px] text-[#86868b] font-normal">{item.clientBrand}</div>
+                      </td>
+
+                      {/* Deliverable Title & Platform */}
+                      <td className="p-4">
                         <Link
                           href={`/projects/${item.projectId}/content/${item.id}`}
-                          className="inline-flex items-center gap-1 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3 py-1 text-[11px] font-medium text-[#0071e3] transition"
+                          className="font-medium text-[#1d1d1f] hover:text-[#0071e3] transition line-clamp-1"
                         >
-                          Review <ArrowRight className="h-3 w-3" />
+                          {item.title}
                         </Link>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-[#86868b]">
+                          <span className="capitalize">{item.platform}</span>
+                          <span>•</span>
+                          <span className="capitalize">{item.contentType}</span>
+                          <span>•</span>
+                          <span>v{item.currentVersionNumber}</span>
+                        </div>
+                      </td>
+
+                      {/* 3-Component Matrix */}
+                      <td className="p-4">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* Copy */}
+                          <span
+                            title={`Copy: ${copy.isFullyApproved ? "Approved" : copy.hasChangesRequested ? "Changes Req" : "Pending"}`}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              copy.isFullyApproved
+                                ? "bg-[#ecfdf3] text-[#027a48] border border-[#a6f4c5]"
+                                : copy.hasChangesRequested
+                                ? "bg-[#fef3f2] text-[#b42318] border border-[#fecdca]"
+                                : "bg-[#f5f5f7] text-[#6e6e73] border border-black/[0.06]"
+                            }`}
+                          >
+                            Copy
+                          </span>
+
+                          {/* Creative */}
+                          <span
+                            title={`Creative: ${creative.isFullyApproved ? "Approved" : creative.hasChangesRequested ? "Changes Req" : "Pending"}`}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              creative.isFullyApproved
+                                ? "bg-[#ecfdf3] text-[#027a48] border border-[#a6f4c5]"
+                                : creative.hasChangesRequested
+                                ? "bg-[#fef3f2] text-[#b42318] border border-[#fecdca]"
+                                : "bg-[#f5f5f7] text-[#6e6e73] border border-black/[0.06]"
+                            }`}
+                          >
+                            Creative
+                          </span>
+
+                          {/* Date */}
+                          <span
+                            title={`Posting Date: ${date.isFullyApproved ? "Approved" : date.hasChangesRequested ? "Changes Req" : "Pending"}`}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              date.isFullyApproved
+                                ? "bg-[#ecfdf3] text-[#027a48] border border-[#a6f4c5]"
+                                : date.hasChangesRequested
+                                ? "bg-[#fef3f2] text-[#b42318] border border-[#fecdca]"
+                                : "bg-[#f5f5f7] text-[#6e6e73] border border-black/[0.06]"
+                            }`}
+                          >
+                            Date
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Assigned Designer */}
+                      <td className="p-4 whitespace-nowrap text-[#6e6e73]">
+                        {item.assignedOwner ? (
+                          <div className="flex items-center gap-1.5">
+                            <UserIcon className="h-3.5 w-3.5 text-[#86868b]" />
+                            <span className="font-medium text-[#1d1d1f]">{item.assignedOwner.name}</span>
+                          </div>
+                        ) : (
+                          <span className="text-[#86868b] italic">Unassigned</span>
+                        )}
+                      </td>
+
+                      {/* Deadline / Publication */}
+                      <td className="p-4 whitespace-nowrap text-[#6e6e73] text-[12px]">
+                        {item.submissionDeadline ? (
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-[#86868b]" />
+                            <span>{formatDate(item.submissionDeadline)}</span>
+                          </div>
+                        ) : (
+                          <span className="text-[#86868b]">No deadline</span>
+                        )}
+                      </td>
+
+                      {/* Overall Stage Badge */}
+                      <td className="p-4 text-center whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                            item.stage === "approved" || item.stage === "scheduled" || item.stage === "published"
+                              ? "bg-[#ecfdf3] text-[#027a48]"
+                              : item.stage === "changes_requested"
+                              ? "bg-[#fef3f2] text-[#b42318]"
+                              : "bg-[#eff8ff] text-[#175cd3]"
+                          }`}
+                        >
+                          {item.stage === "in_review"
+                            ? "In Review"
+                            : item.stage === "submitted"
+                            ? "Submitted"
+                            : item.stage === "changes_requested"
+                            ? "Changes Req"
+                            : item.stage === "approved"
+                            ? "Approved"
+                            : item.stage}
+                        </span>
+                      </td>
+
+                      {/* Action */}
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <Link
+                          href={`/projects/${item.projectId}/content/${item.id}`}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-3.5 py-1.5 text-[12px] font-medium text-[#0071e3] transition shadow-2xs"
+                        >
+                          <span>Review</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

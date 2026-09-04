@@ -73,7 +73,7 @@ export async function generatePresignedUploadUrl(params: {
   // In production with AWS SDK / S3 Client:
   // const command = new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: objectKey, ContentType: params.mimeType });
   // const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn });
-  
+
   // Deterministic edge/staging compatible presigned URL format:
   const presignedUrl = `${r2Endpoint}/${objectKey}?X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
 
@@ -91,16 +91,10 @@ export async function generatePresignedDownloadUrl(params: {
   inline?: boolean;
 }): Promise<string> {
   const expiresIn = params.expiresInSeconds || 300; // 5 minutes default
-  const encodedFilename = encodeURIComponent(params.filename);
-  const disposition = params.inline ? "inline" : `attachment; filename="${encodedFilename}"`;
+  const disposition = params.inline ? "inline" : `attachment; filename="${encodeURIComponent(params.filename)}"`;
   const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
-  const query = new URLSearchParams({
-    "response-content-disposition": disposition,
-    "X-Amz-Expires": String(expiresIn),
-    "X-Amz-Signature": `sig_${Date.now()}`,
-  });
 
-  return `${r2Endpoint}/${params.objectKey}?${query.toString()}`;
+  return `${r2Endpoint}/${params.objectKey}?response-content-disposition=${encodeURIComponent(disposition)}&X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
 }
 
 /**
