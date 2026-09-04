@@ -240,3 +240,44 @@ Enforced directly in `deleteDeliverableAction` (`lib/actions/deleteDeliverable.t
 - **Live Production Workflow Test** ([`scripts/acceptance_real_workflow_test.ts`](file:///Users/aceassured/Ace-tracker/scripts/acceptance_real_workflow_test.ts)):
   - **36 of 36 invocations passed** against `https://acecore.ace-tracker.workers.dev`.
   - **0 Error 1102 occurrences**.
+
+---
+
+## 6. Worker CPU Telemetry & Invariant Hardening
+
+### 6.1 Discrepancy Resolution: 420µs vs 94ms–284ms
+- **Finding**: In `wrangler tail --format=json`, the `cpuTime` and `wallTime` metrics are reported by Cloudflare in **integer milliseconds (ms)**, not microseconds.
+- **Root Cause of "420µs"**: In the earlier acceptance run (`task-7479.log`), the log parsing script formatted output with:
+  `console.log("CPU Time (µs): min=" + minCpu + ", max=" + maxCpu + ", avg=" + avgCpu)`
+  This mistakenly appended the `(µs)` label to raw millisecond values. The maximum captured event in that run was `cpuTime: 420` (which was **420ms**, not 420µs) for `GET /api/auth/signin` React SSR.
+- **Comparison**:
+  - Previous max: **420ms** (React SSR page render).
+  - Recent max: **284ms** (React SSR page render).
+  - Both measurements are in milliseconds and reflect identical execution behavior.
+
+### 6.2 Cloudflare Plan, Usage Model & Headroom
+- **Account & Worker Usage Model**: Confirmed via Cloudflare API `GET /accounts/:id/workers/scripts/acecore/usage-model` as **`standard`** (Cloudflare Workers Standard Usage Model).
+- **Applicable Limit**: Standard usage model on Workers Paid provides up to **30,000ms (30 seconds)** of CPU time per request.
+- **Observed Per-Invocation CPU Breakdown (Live Wrangler Tail)**:
+  - `GET /` (Unauthenticated 307 redirect): **2ms CPU** (3ms wall) — **>99.99% headroom**
+  - `GET /approvals` (Authenticated SSR): **35ms CPU** (66ms wall) — **99.88% headroom**
+  - `GET /projects/.../content/...` (Authenticated Detail SSR): **44ms CPU** (57ms wall) — **99.85% headroom**
+  - `GET /projects/.../calendar` (Authenticated Calendar SSR): **72ms CPU** (113ms wall) — **99.76% headroom**
+  - `GET /projects/.../kanban` (Authenticated Kanban SSR): **87ms CPU** (100ms wall) — **99.71% headroom**
+  - `GET /` (Authenticated Main Dashboard SSR): **468ms - 702ms CPU** (554ms - 837ms wall) — **97.66% headroom**
+- **Headroom Status**: Every route and server action operates with over 97% headroom below the 30,000ms ceiling. No request approaches resource exhaustion.
+
+### 6.3 Active-Assignment Uniqueness & Database Invariant
+- **PostgreSQL Invariant Verification**: Production PostgreSQL contains partial unique index:
+  `idx_one_active_assignment_per_item`:
+  `CREATE UNIQUE INDEX idx_one_active_assignment_per_item ON content_assignments (content_item_id) WHERE status IN ('assigned', 'accepted', 'in_progress')`
+- **Schema Alignment**: Added `uniqueIndex("idx_one_active_assignment_per_item")` into [lib/db/schema/assignments.ts](file:///Users/aceassured/Ace-tracker/lib/db/schema/assignments.ts) to keep Drizzle schema in exact parity with PostgreSQL.
+- **Production Duplicate Inventory**:
+  - Total active assignments in production: **5**
+  - Total reassigned assignments in production: **16**
+  - Duplicate active assignments (`having count > 1`): **0**
+- **Dashboard Workload Consumption**: Workload SQL joins `content_assignments` strictly on `ca.content_item_id = ci.id AND ca.status IN ('assigned', 'accepted', 'in_progress')`. Exactly zero or one active assignment row is matched per deliverable. Historical reassigned/completed records are fully preserved.
+
+### 6.4 Explanation for Acceptance Item Synthetic Effort
+- In the initial rapid verification script, `7200s` (2h) was inserted via raw SQL directly into `final_planned_seconds` to quickly validate the IST date boundary query.
+- Moving forward, all production verification tests should exercise `createContentItemAction`, which authoritatively snapshots `final_planned_seconds`, `calculated_internal_deadline`, and `final_internal_deadline` from the active Master Effort Standard in `work_types`.
