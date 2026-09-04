@@ -91,10 +91,16 @@ export async function generatePresignedDownloadUrl(params: {
   inline?: boolean;
 }): Promise<string> {
   const expiresIn = params.expiresInSeconds || 300; // 5 minutes default
-  const disposition = params.inline ? "inline" : `attachment; filename="${encodeURIComponent(params.filename)}"`;
+  const encodedFilename = encodeURIComponent(params.filename);
+  const disposition = params.inline ? "inline" : `attachment; filename="${encodedFilename}"`;
   const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
+  const query = new URLSearchParams({
+    "response-content-disposition": disposition,
+    "X-Amz-Expires": String(expiresIn),
+    "X-Amz-Signature": `sig_${Date.now()}`,
+  });
 
-  return `${r2Endpoint}/${params.objectKey}?response-content-disposition=${encodeURIComponent(disposition)}&X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
+  return `${r2Endpoint}/${params.objectKey}?${query.toString()}`;
 }
 
 /**

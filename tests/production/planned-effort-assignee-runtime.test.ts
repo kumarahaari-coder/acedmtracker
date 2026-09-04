@@ -255,6 +255,7 @@ describe("Planned Effort Snapshot, Project-Scoped Assignee & Group Effort Accept
         name: userRecord.fullName,
         email: userRecord.email,
         role: "designer",
+        avatar: userRecord.avatarUrl || "",
         status: "active",
         workingHoursPerDay: 8,
         dateJoined: new Date().toISOString(),
