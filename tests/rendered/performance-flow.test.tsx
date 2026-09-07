@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ userId: "u_designer1", projectId: "proj_acme" }),
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => "/performance",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // Mock Server Actions for Render Testing

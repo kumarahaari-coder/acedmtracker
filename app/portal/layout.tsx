@@ -3,7 +3,6 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useParams } from "next/navigation";
-import { useAppState } from "@/lib/context/AppStateContext";
 import { useRole } from "@/lib/context/RoleContext";
 import {
   Calendar,
@@ -15,7 +14,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { productConfig, organizationConfig } from "@/lib/config/branding";
-import { getAuthoritativeWorkspaceStateAction } from "@/lib/actions/workspace";
+import { getAuthoritativePortalContextAction, PortalContextDTO } from "@/lib/actions/clientPortal";
 
 export default function ClientPortalLayout({
   children,
@@ -26,10 +25,11 @@ export default function ClientPortalLayout({
   const router = useRouter();
   const params = useParams();
   const projectId = (params?.projectId as string) || "";
-  const { state, hydrateServerState } = useAppState();
-  const { activeRole, activeUserId, setUserSession } = useRole();
+  const { activeRole, setUserSession } = useRole();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
+  const [accessibleProjects, setAccessibleProjects] = useState<PortalContextDTO["projects"]>([]);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Authoritative sync on mount and on window focus
   React.useEffect(() => {
@@ -43,18 +43,17 @@ export default function ClientPortalLayout({
       if (isSyncing || !isMounted) return;
       isSyncing = true;
       try {
-        const result = await getAuthoritativeWorkspaceStateAction();
-        if (isMounted && result.success) {
+        const result = await getAuthoritativePortalContextAction();
+        if (isMounted && result.success && result.data) {
           lastSyncedAt = Date.now();
-          if (hydrateServerState) {
-            hydrateServerState(result.state);
-          }
-          if (result.user) {
+          setAccessibleProjects(result.data.projects);
+          setIsLoaded(true);
+          if (result.data.user) {
             setUserSession({
-              id: result.user.id,
-              role: (result.user.organizationRole as any) || "client",
-              email: result.user.email,
-              name: result.user.fullName,
+              id: result.data.user.id,
+              role: (result.data.user.organizationRole as any) || "client",
+              email: result.data.user.email,
+              name: result.data.user.fullName,
             });
           }
         }
@@ -90,17 +89,8 @@ export default function ClientPortalLayout({
     };
   }, []);
 
-  // User's accessible projects
-  const accessibleProjects = state.projects.filter((p) => {
-    if (p.status === "archived") return false;
-    if (activeRole === "founder" || activeRole === "admin") return true;
-    return state.projectMemberships.some(
-      (m) => m.projectId === p.id && m.userId === activeUserId && m.status === "active"
-    );
-  });
-
   const activeProject =
-    state.projects.find((p) => p.id === projectId) || accessibleProjects[0] || state.projects[0];
+    accessibleProjects.find((p) => p.id === projectId) || accessibleProjects[0];
 
   const navItems = [
     { label: "Overview", href: `/portal/${activeProject?.id || ""}`, icon: LayoutDashboard },

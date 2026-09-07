@@ -44,242 +44,7 @@ import {
   ProjectPerformanceInput,
 } from "../types";
 
-// Helper to hydrate PostgreSQL rows into strictly typed domain models with bounded performance filters
-async function fetchAuthoritativeWorkspaceEntities(orgId: string, options?: { fromDate?: string }) {
-  const fromDate = options?.fromDate;
-  const sessionCondition = fromDate
-    ? sql`${workSessions.orgId} = ${orgId} AND (${workSessions.status} = 'active' OR ${workSessions.startedAt} >= ${fromDate})`
-    : eq(workSessions.orgId, orgId);
-
-  const [
-    userRows,
-    projectRows,
-    itemRows,
-    assignmentRows,
-    sessionRows,
-    crRows,
-    scheduleRows,
-    adjustmentRows,
-    standardRows,
-    commitmentRows,
-    perfInputRows,
-  ] = await Promise.all([
-    db.select().from(users).where(eq(users.orgId, orgId)),
-    db.select().from(projects).where(eq(projects.orgId, orgId)),
-    db.select().from(contentItems).where(and(eq(contentItems.orgId, orgId), sql`${contentItems.deletedAt} IS NULL`)),
-    db.select().from(contentAssignments).where(eq(contentAssignments.orgId, orgId)),
-    db.select().from(workSessions).where(sessionCondition),
-    db.select().from(changeRequests).where(eq(changeRequests.orgId, orgId)),
-    db.select().from(employeeCapacitySchedules).where(eq(employeeCapacitySchedules.orgId, orgId)),
-    db.select().from(capacityAdjustments).where(eq(capacityAdjustments.orgId, orgId)),
-    db.select().from(effortStandards).where(and(eq(effortStandards.orgId, orgId), eq(effortStandards.active, true))),
-    db.select().from(projectCommitments).where(eq(projectCommitments.orgId, orgId)),
-    db.select().from(projectPerformanceInputs).where(eq(projectPerformanceInputs.orgId, orgId)),
-  ]);
-
-  const mappedUsers: User[] = userRows.map((u) => ({
-    id: u.id,
-    name: u.fullName,
-    email: u.email,
-    avatar: u.avatarUrl || "",
-    role: u.organizationRole as any,
-    status: u.status as any,
-    workingHoursPerDay: 8,
-    dateJoined: u.createdAt.toISOString(),
-    createdAt: u.createdAt.toISOString(),
-    updatedAt: u.updatedAt.toISOString(),
-  }));
-
-  const mappedProjects: Project[] = projectRows.map((p) => ({
-    id: p.id,
-    name: p.name,
-    clientBrand: p.clientName,
-    avatar: "",
-    scope: p.briefMarkdown || p.engagementModel || "",
-    timezone: "Asia/Kolkata",
-    status: p.status as any,
-    targetRequirements: { posts: 0, carousels: 0, reels: 0, trialReels: 0 },
-    workflowStages: ["idea", "draft", "in_review", "approved", "published"],
-    createdAt: p.createdAt.toISOString(),
-  }));
-
-  const mappedItems: ContentItem[] = itemRows.map((i) => ({
-    id: i.id,
-    projectId: i.projectId,
-    campaignId: i.campaignId || undefined,
-    contentGroupId: i.contentGroupId || undefined,
-    title: i.title,
-    platform: i.platform as any,
-    contentType: i.contentType as any,
-    workType: i.workType || undefined,
-    workTypeId: i.workTypeId || undefined,
-    contentPillar: i.contentPillar || undefined,
-    topic: i.topic || undefined,
-    brief: i.brief || undefined,
-    referenceLink: i.referenceLink || undefined,
-    priority: (i.priority || "normal") as any,
-    workNature: (i.workNature || "planned") as any,
-    accountOwnerId: i.accountOwnerId || undefined,
-    stage: i.stage as any,
-    accountableOwnerId: "",
-    collaboratorIds: [],
-    deadlines: {
-      submissionDeadline: i.submissionDeadline ? i.submissionDeadline.toISOString() : undefined,
-      resubmissionDeadline: i.resubmissionDeadline ? i.resubmissionDeadline.toISOString() : undefined,
-      approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
-      scheduledPublicationDate: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined,
-    },
-    calculatedInternalDeadline: i.calculatedInternalDeadline ? i.calculatedInternalDeadline.toISOString() : undefined,
-    finalInternalDeadline: i.finalInternalDeadline ? i.finalInternalDeadline.toISOString() : undefined,
-    deadlineOverrideReason: i.deadlineOverrideReason || undefined,
-    standardContentSeconds: i.standardContentSeconds ?? undefined,
-    standardProductionSeconds: i.standardProductionSeconds ?? undefined,
-    revisionContentSeconds: i.revisionContentSeconds ?? undefined,
-    revisionProductionSeconds: i.revisionProductionSeconds ?? undefined,
-    finalPlannedSeconds: i.finalPlannedSeconds ?? undefined,
-    isEffortAnchor: i.isEffortAnchor ?? false,
-    completedAt: i.completedAt ? i.completedAt.toISOString() : undefined,
-    currentVersionNumber: i.currentVersionNumber,
-    publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
-    liveUrl: i.liveUrl || undefined,
-    publishedByUserId: i.publishedByUserId || undefined,
-    clientVisible: i.clientVisible,
-    scopeClassification: i.scopeClassification as any,
-  }));
-
-  const mappedAssignments: ContentAssignment[] = assignmentRows.map((a) => ({
-    id: a.id,
-    projectId: a.projectId,
-    contentItemId: a.contentItemId,
-    assigneeUserId: a.assigneeUserId,
-    assignmentRole: a.assignmentRole as any,
-    status: a.status as any,
-    assignedByUserId: a.assignedByUserId,
-    assignedAt: a.assignedAt.toISOString(),
-    initialDueAt: a.initialDueAt.toISOString(),
-    currentDueAt: a.currentDueAt.toISOString(),
-    createdAt: a.createdAt.toISOString(),
-    updatedAt: a.updatedAt.toISOString(),
-  }));
-
-  const mappedSessions: WorkSession[] = sessionRows.map((s) => ({
-    id: s.id,
-    projectId: s.projectId,
-    contentItemId: s.contentItemId,
-    assignmentId: s.assignmentId,
-    userId: s.userId,
-    startedAt: s.startedAt.toISOString(),
-    endedAt: s.endedAt ? s.endedAt.toISOString() : undefined,
-    accumulatedSeconds: s.accumulatedSeconds,
-    status: s.status as any,
-    adjustments: [],
-    createdAt: s.createdAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-  }));
-
-  const mappedCRs: ChangeRequest[] = crRows.map((cr) => ({
-    id: cr.id,
-    projectId: cr.projectId,
-    contentItemId: cr.contentItemId,
-    submissionVersionId: cr.submissionVersionId,
-    component: cr.component as any,
-    reviewerUserId: cr.reviewerUserId,
-    reviewerName: "",
-    requestedChange: cr.requestedChange,
-    priority: cr.priority as any,
-    status: cr.status as any,
-    createdAt: cr.createdAt.toISOString(),
-  }));
-
-  const mappedSchedules: EmployeeCapacitySchedule[] = scheduleRows.map((s) => ({
-    id: s.id,
-    orgId: s.orgId,
-    userId: s.userId,
-    effectiveFrom: s.effectiveFrom,
-    effectiveTo: s.effectiveTo,
-    mondayHours: Number(s.mondayHours),
-    tuesdayHours: Number(s.tuesdayHours),
-    wednesdayHours: Number(s.wednesdayHours),
-    thursdayHours: Number(s.thursdayHours),
-    fridayHours: Number(s.fridayHours),
-    saturdayHours: Number(s.saturdayHours),
-    sundayHours: Number(s.sundayHours),
-    primaryFunction: s.primaryFunction,
-    creativeEligibility: s.creativeEligibility as any,
-    createdAt: s.createdAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-  }));
-
-  const mappedAdjustments: CapacityAdjustment[] = adjustmentRows.map((a) => ({
-    id: a.id,
-    orgId: a.orgId,
-    userId: a.userId,
-    adjustmentDate: a.adjustmentDate,
-    kind: a.kind as any,
-    adjustmentHours: Number(a.adjustmentHours),
-    reason: a.reason,
-    createdByUserId: a.createdByUserId || undefined,
-    createdAt: a.createdAt.toISOString(),
-  }));
-
-  const mappedStandards: EffortStandard[] = standardRows.map((std) => ({
-    id: std.id,
-    orgId: std.orgId,
-    category: std.category,
-    workType: std.workType,
-    contentSeconds: std.contentSeconds,
-    productionSeconds: std.productionSeconds,
-    totalSeconds: std.totalSeconds,
-    leadTimeWorkdays: std.leadTimeWorkdays,
-    defaultRole: std.defaultRole,
-    active: std.active,
-    version: std.version,
-    effectiveFrom: std.effectiveFrom.toISOString(),
-    createdAt: std.createdAt.toISOString(),
-    updatedAt: std.updatedAt.toISOString(),
-  }));
-
-  const mappedCommitments: ProjectCommitment[] = commitmentRows.map((c) => ({
-    id: c.id,
-    orgId: c.orgId,
-    projectId: c.projectId,
-    workTypeId: c.workTypeId || undefined,
-    workTypeName: c.workTypeName,
-    committedQuantity: c.committedQuantity,
-    effectiveMonth: c.effectiveMonth,
-    createdAt: c.createdAt.toISOString(),
-    updatedAt: c.updatedAt.toISOString(),
-  }));
-
-  const mappedPerfInputs: ProjectPerformanceInput[] = perfInputRows.map((p) => ({
-    id: p.id,
-    orgId: p.orgId,
-    projectId: p.projectId,
-    campaignId: p.campaignId || undefined,
-    effectiveMonth: p.effectiveMonth,
-    currency: p.currency,
-    adBudget: Number(p.adBudget),
-    adSpend: Number(p.adSpend),
-    leads: p.leads,
-    conversions: p.conversions,
-    createdAt: p.createdAt.toISOString(),
-    updatedAt: p.updatedAt.toISOString(),
-  }));
-
-  return {
-    users: mappedUsers,
-    projects: mappedProjects,
-    items: mappedItems,
-    assignments: mappedAssignments,
-    workSessions: mappedSessions,
-    changeRequests: mappedCRs,
-    schedules: mappedSchedules,
-    adjustments: mappedAdjustments,
-    standards: mappedStandards,
-    commitments: mappedCommitments,
-    perfInputs: mappedPerfInputs,
-  };
-}
+// Note: Legacy full-workspace table hydration was permanently removed to eliminate CPU spikes.
 
 // 1. Performance Overview Action with Bounded PostgreSQL Filtering
 export interface PerformanceOverviewFilterOptions {
@@ -612,97 +377,90 @@ export async function getAuthoritativePerformanceOverviewAction(
       };
     }
 
-    // 5. Run Scoped, Bounded Parallel PostgreSQL Queries
+    // 5. Run Scoped, Bounded Single Consolidated PostgreSQL Query
     const targetUserIds = candidateUsers.map((u) => u.id);
+    const startTimestamp = `${period.startDate}T00:00:00.000Z`;
+    const endTimestamp = `${period.endDate}T23:59:59.999Z`;
 
-    const [
-      itemRows,
-      assignmentRows,
-      sessionRows,
-      crRows,
-      scheduleRows,
-      adjustmentRows,
-      commitmentRows,
-      perfInputRows,
-    ] = await Promise.all([
-      db
-        .select()
-        .from(contentItems)
-        .where(
-          and(
-            eq(contentItems.orgId, authUser.orgId),
-            inArray(contentItems.projectId, targetProjectIds),
-            sql`${contentItems.deletedAt} IS NULL`
-          )
+    const queryRes: any = await db.execute(sql`
+      WITH
+        p_ids AS (SELECT UNNEST(${targetProjectIds}::uuid[]) AS id),
+        u_ids AS (SELECT UNNEST(${targetUserIds}::uuid[]) AS id),
+        scoped_items AS (
+          SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
+                 stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
+                 standard_content_seconds, standard_production_seconds, is_effort_anchor,
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+          FROM content_items
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
+            AND deleted_at IS NULL
         ),
-      db
-        .select()
-        .from(contentAssignments)
-        .where(
-          and(
-            eq(contentAssignments.orgId, authUser.orgId),
-            inArray(contentAssignments.projectId, targetProjectIds),
-            inArray(contentAssignments.assigneeUserId, targetUserIds)
-          )
+        scoped_assignments AS (
+          SELECT id, org_id, project_id, content_item_id, assignee_user_id, assignment_role, status,
+                 current_due_at, initial_due_at, created_at
+          FROM content_assignments
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
+            AND assignee_user_id IN (SELECT id FROM u_ids)
         ),
-      db
-        .select()
-        .from(workSessions)
-        .where(
-          and(
-            eq(workSessions.orgId, authUser.orgId),
-            inArray(workSessions.projectId, targetProjectIds),
-            inArray(workSessions.userId, targetUserIds),
-            sql`(${workSessions.status} = 'active' OR (${workSessions.startedAt}::date >= ${period.startDate} AND ${workSessions.startedAt}::date <= ${period.endDate}))`
-          )
+        scoped_sessions AS (
+          SELECT id, org_id, project_id, content_item_id, user_id, started_at, ended_at,
+                 accumulated_seconds, status, created_at, updated_at
+          FROM work_sessions
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
+            AND user_id IN (SELECT id FROM u_ids)
+            AND (status = 'active' OR (started_at >= ${startTimestamp}::timestamptz AND started_at <= ${endTimestamp}::timestamptz))
         ),
-      db
-        .select()
-        .from(changeRequests)
-        .where(
-          and(
-            eq(changeRequests.orgId, authUser.orgId),
-            inArray(changeRequests.projectId, targetProjectIds)
-          )
+        scoped_crs AS (
+          SELECT id, project_id, content_item_id, submission_version_id, component, reviewer_user_id,
+                 requested_change, priority, status, created_at
+          FROM change_requests
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
         ),
-      db
-        .select()
-        .from(employeeCapacitySchedules)
-        .where(
-          and(
-            eq(employeeCapacitySchedules.orgId, authUser.orgId),
-            inArray(employeeCapacitySchedules.userId, targetUserIds)
-          )
+        scoped_schedules AS (
+          SELECT id, org_id, user_id, effective_from, effective_to, monday_hours, tuesday_hours,
+                 wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours,
+                 primary_function, creative_eligibility, created_at, updated_at
+          FROM employee_capacity_schedules
+          WHERE org_id = ${authUser.orgId}
+            AND user_id IN (SELECT id FROM u_ids)
         ),
-      db
-        .select()
-        .from(capacityAdjustments)
-        .where(
-          and(
-            eq(capacityAdjustments.orgId, authUser.orgId),
-            inArray(capacityAdjustments.userId, targetUserIds),
-            sql`${capacityAdjustments.adjustmentDate} >= ${period.startDate} AND ${capacityAdjustments.adjustmentDate} <= ${period.endDate}`
-          )
+        scoped_adjustments AS (
+          SELECT id, org_id, user_id, adjustment_date, kind, adjustment_hours, reason,
+                 created_by_user_id, created_at
+          FROM capacity_adjustments
+          WHERE org_id = ${authUser.orgId}
+            AND user_id IN (SELECT id FROM u_ids)
+            AND adjustment_date >= ${period.startDate} AND adjustment_date <= ${period.endDate}
         ),
-      db
-        .select()
-        .from(projectCommitments)
-        .where(
-          and(
-            eq(projectCommitments.orgId, authUser.orgId),
-            inArray(projectCommitments.projectId, targetProjectIds)
-          )
+        scoped_commitments AS (
+          SELECT id, org_id, project_id, work_type_id, work_type_name, committed_quantity,
+                 effective_month, created_at, updated_at
+          FROM project_commitments
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
         ),
-      db
-        .select()
-        .from(projectPerformanceInputs)
-        .where(
-          and(
-            eq(projectPerformanceInputs.orgId, authUser.orgId),
-            inArray(projectPerformanceInputs.projectId, targetProjectIds)
-          )
-        ),
-    ]);
+        scoped_perf_inputs AS (
+          SELECT id, org_id, project_id, campaign_id, effective_month, currency, ad_budget,
+                 ad_spend, leads, conversions, created_at, updated_at
+          FROM project_performance_inputs
+          WHERE org_id = ${authUser.orgId}
+            AND project_id IN (SELECT id FROM p_ids)
+        )
+      SELECT
+        (SELECT COALESCE(json_agg(i), '[]'::json) FROM scoped_items i) AS items,
+        (SELECT COALESCE(json_agg(a), '[]'::json) FROM scoped_assignments a) AS assignments,
+        (SELECT COALESCE(json_agg(s), '[]'::json) FROM scoped_sessions s) AS sessions,
+        (SELECT COALESCE(json_agg(c), '[]'::json) FROM scoped_crs c) AS crs,
+        (SELECT COALESCE(json_agg(sc), '[]'::json) FROM scoped_schedules sc) AS schedules,
+        (SELECT COALESCE(json_agg(ad), '[]'::json) FROM scoped_adjustments ad) AS adjustments,
+        (SELECT COALESCE(json_agg(cm), '[]'::json) FROM scoped_commitments cm) AS commitments,
+        (SELECT COALESCE(json_agg(pi), '[]'::json) FROM scoped_perf_inputs pi) AS perf_inputs;
+    `);
+    const batch: any = queryRes.rows?.[0] || queryRes?.[0] || {};
 
     // 6. Map Domain Models
     const mappedUsers: User[] = candidateUsers.map((u) => ({
@@ -733,150 +491,143 @@ export async function getAuthoritativePerformanceOverviewAction(
         createdAt: p.createdAt.toISOString(),
       }));
 
-    const mappedItems: ContentItem[] = itemRows.map((i) => ({
+    const mappedItems: ContentItem[] = (batch?.items || []).map((i: any) => ({
       id: i.id,
-      projectId: i.projectId,
-      campaignId: i.campaignId || undefined,
-      contentGroupId: i.contentGroupId || undefined,
+      projectId: i.project_id,
+      campaignId: i.campaign_id || undefined,
+      contentGroupId: i.content_group_id || undefined,
       title: i.title,
       platform: i.platform as any,
-      contentType: i.contentType as any,
-      workType: i.workType || undefined,
-      workTypeId: i.workTypeId || undefined,
-      contentPillar: i.contentPillar || undefined,
-      topic: i.topic || undefined,
-      brief: i.brief || undefined,
-      referenceLink: i.referenceLink || undefined,
-      priority: (i.priority || "normal") as any,
-      workNature: (i.workNature || "planned") as any,
-      accountOwnerId: i.accountOwnerId || undefined,
+      contentType: i.content_type as any,
+      workType: i.work_type || undefined,
+      workTypeId: i.work_type_id || undefined,
+      contentPillar: undefined,
+      topic: undefined,
+      brief: undefined,
+      referenceLink: undefined,
+      priority: "normal",
+      workNature: "planned",
+      accountOwnerId: undefined,
       stage: i.stage as any,
       accountableOwnerId: "",
       collaboratorIds: [],
       deadlines: {
-        submissionDeadline: i.submissionDeadline ? i.submissionDeadline.toISOString() : undefined,
-        resubmissionDeadline: i.resubmissionDeadline ? i.resubmissionDeadline.toISOString() : undefined,
-        approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
-        scheduledPublicationDate: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined,
+        submissionDeadline: i.submission_deadline || undefined,
+        scheduledPublicationDate: i.scheduled_publication_date || undefined,
       },
-      calculatedInternalDeadline: i.calculatedInternalDeadline ? i.calculatedInternalDeadline.toISOString() : undefined,
-      finalInternalDeadline: i.finalInternalDeadline ? i.finalInternalDeadline.toISOString() : undefined,
-      deadlineOverrideReason: i.deadlineOverrideReason || undefined,
-      standardContentSeconds: i.standardContentSeconds ?? undefined,
-      standardProductionSeconds: i.standardProductionSeconds ?? undefined,
-      revisionContentSeconds: i.revisionContentSeconds ?? undefined,
-      revisionProductionSeconds: i.revisionProductionSeconds ?? undefined,
-      finalPlannedSeconds: i.finalPlannedSeconds ?? undefined,
-      isEffortAnchor: i.isEffortAnchor ?? false,
-      completedAt: i.completedAt ? i.completedAt.toISOString() : undefined,
-      currentVersionNumber: i.currentVersionNumber,
-      publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
-      liveUrl: i.liveUrl || undefined,
-      publishedByUserId: i.publishedByUserId || undefined,
-      clientVisible: i.clientVisible,
-      scopeClassification: i.scopeClassification as any,
+      finalPlannedSeconds: i.final_planned_seconds,
+      standardContentSeconds: i.standard_content_seconds,
+      standardProductionSeconds: i.standard_production_seconds,
+      isEffortAnchor: i.is_effort_anchor,
+      completedAt: i.completed_at || undefined,
+      publishedAt: i.published_at || undefined,
+      finalInternalDeadline: i.final_internal_deadline || undefined,
+      calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     }));
 
-    const mappedAssignments: ContentAssignment[] = assignmentRows.map((a) => ({
+    const mappedAssignments: ContentAssignment[] = (batch?.assignments || []).map((a: any) => ({
       id: a.id,
-      projectId: a.projectId,
-      contentItemId: a.contentItemId,
-      assigneeUserId: a.assigneeUserId,
-      assignmentRole: a.assignmentRole as any,
+      orgId: a.org_id,
+      projectId: a.project_id,
+      contentItemId: a.content_item_id,
+      assigneeUserId: a.assignee_user_id,
+      role: (a.assignment_role || a.role || "designer") as any,
       status: a.status as any,
-      assignedByUserId: a.assignedByUserId,
-      assignedAt: a.assignedAt.toISOString(),
-      initialDueAt: a.initialDueAt.toISOString(),
-      currentDueAt: a.currentDueAt.toISOString(),
-      createdAt: a.createdAt.toISOString(),
-      updatedAt: a.updatedAt.toISOString(),
+      assignedByUserId: "",
+      assignedAt: a.created_at,
+      initialDueAt: a.initial_due_at || undefined,
+      currentDueAt: a.current_due_at || undefined,
+      createdAt: a.created_at,
+      updatedAt: a.created_at,
     }));
 
-    const mappedSessions: WorkSession[] = sessionRows.map((s) => ({
+    const mappedSessions: WorkSession[] = (batch?.sessions || []).map((s: any) => ({
       id: s.id,
-      projectId: s.projectId,
-      contentItemId: s.contentItemId,
-      assignmentId: s.assignmentId,
-      userId: s.userId,
-      startedAt: s.startedAt.toISOString(),
-      endedAt: s.endedAt ? s.endedAt.toISOString() : undefined,
-      accumulatedSeconds: s.accumulatedSeconds,
+      orgId: s.org_id,
+      projectId: s.project_id,
+      contentItemId: s.content_item_id || undefined,
+      userId: s.user_id,
+      startedAt: typeof s.started_at === "string" ? s.started_at : new Date(s.started_at).toISOString(),
+      endedAt: s.ended_at ? (typeof s.ended_at === "string" ? s.ended_at : new Date(s.ended_at).toISOString()) : undefined,
+      accumulatedSeconds: s.accumulated_seconds,
       status: s.status as any,
       adjustments: [],
-      createdAt: s.createdAt.toISOString(),
-      updatedAt: s.updatedAt.toISOString(),
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
     }));
 
-    const mappedCRs: ChangeRequest[] = crRows.map((cr) => ({
+    const mappedCRs: ChangeRequest[] = (batch?.crs || []).map((cr: any) => ({
       id: cr.id,
-      projectId: cr.projectId,
-      contentItemId: cr.contentItemId,
-      submissionVersionId: cr.submissionVersionId,
+      projectId: cr.project_id,
+      contentItemId: cr.content_item_id,
+      submissionVersionId: cr.submission_version_id,
       component: cr.component as any,
-      reviewerUserId: cr.reviewerUserId,
+      reviewerUserId: cr.reviewer_user_id,
       reviewerName: "",
-      requestedChange: cr.requestedChange,
+      requestedChange: cr.requested_change,
       priority: cr.priority as any,
       status: cr.status as any,
-      createdAt: cr.createdAt.toISOString(),
+      createdAt: typeof cr.created_at === "string" ? cr.created_at : new Date(cr.created_at).toISOString(),
     }));
 
-    const mappedSchedules: EmployeeCapacitySchedule[] = scheduleRows.map((s) => ({
+    const mappedSchedules: EmployeeCapacitySchedule[] = (batch?.schedules || []).map((s: any) => ({
       id: s.id,
-      orgId: s.orgId,
-      userId: s.userId,
-      effectiveFrom: s.effectiveFrom,
-      effectiveTo: s.effectiveTo,
-      mondayHours: Number(s.mondayHours),
-      tuesdayHours: Number(s.tuesdayHours),
-      wednesdayHours: Number(s.wednesdayHours),
-      thursdayHours: Number(s.thursdayHours),
-      fridayHours: Number(s.fridayHours),
-      saturdayHours: Number(s.saturdayHours),
-      sundayHours: Number(s.sundayHours),
-      primaryFunction: s.primaryFunction,
-      creativeEligibility: s.creativeEligibility as any,
-      createdAt: s.createdAt.toISOString(),
-      updatedAt: s.updatedAt.toISOString(),
+      orgId: s.org_id,
+      userId: s.user_id,
+      effectiveFrom: s.effective_from,
+      effectiveTo: s.effective_to,
+      mondayHours: Number(s.monday_hours),
+      tuesdayHours: Number(s.tuesday_hours),
+      wednesdayHours: Number(s.wednesday_hours),
+      thursdayHours: Number(s.thursday_hours),
+      fridayHours: Number(s.friday_hours),
+      saturdayHours: Number(s.saturday_hours),
+      sundayHours: Number(s.sunday_hours),
+      primaryFunction: s.primary_function,
+      creativeEligibility: s.creative_eligibility as any,
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
     }));
 
-    const mappedAdjustments: CapacityAdjustment[] = adjustmentRows.map((a) => ({
+    const mappedAdjustments: CapacityAdjustment[] = (batch?.adjustments || []).map((a: any) => ({
       id: a.id,
-      orgId: a.orgId,
-      userId: a.userId,
-      adjustmentDate: a.adjustmentDate,
+      orgId: a.org_id,
+      userId: a.user_id,
+      adjustmentDate: a.adjustment_date,
       kind: a.kind as any,
-      adjustmentHours: Number(a.adjustmentHours),
+      adjustmentHours: Number(a.adjustment_hours),
       reason: a.reason,
-      createdByUserId: a.createdByUserId || undefined,
-      createdAt: a.createdAt.toISOString(),
+      createdByUserId: a.created_by_user_id || undefined,
+      createdAt: typeof a.created_at === "string" ? a.created_at : new Date(a.created_at).toISOString(),
     }));
 
-    const mappedCommitments: ProjectCommitment[] = commitmentRows.map((c) => ({
+    const mappedCommitments: ProjectCommitment[] = (batch?.commitments || []).map((c: any) => ({
       id: c.id,
-      orgId: c.orgId,
-      projectId: c.projectId,
-      workTypeId: c.workTypeId || undefined,
-      workTypeName: c.workTypeName,
-      committedQuantity: c.committedQuantity,
-      effectiveMonth: c.effectiveMonth,
-      createdAt: c.createdAt.toISOString(),
-      updatedAt: c.updatedAt.toISOString(),
+      orgId: c.org_id,
+      projectId: c.project_id,
+      workTypeId: c.work_type_id || undefined,
+      workTypeName: c.work_type_name,
+      committedQuantity: c.committed_quantity,
+      effectiveMonth: c.effective_month,
+      createdAt: typeof c.created_at === "string" ? c.created_at : new Date(c.created_at).toISOString(),
+      updatedAt: typeof c.updated_at === "string" ? c.updated_at : new Date(c.updated_at).toISOString(),
     }));
 
-    const mappedPerfInputs: ProjectPerformanceInput[] = perfInputRows.map((p) => ({
+    const mappedPerfInputs: ProjectPerformanceInput[] = (batch?.perf_inputs || []).map((p: any) => ({
       id: p.id,
-      orgId: p.orgId,
-      projectId: p.projectId,
-      campaignId: p.campaignId || undefined,
-      effectiveMonth: p.effectiveMonth,
+      orgId: p.org_id,
+      projectId: p.project_id,
+      campaignId: p.campaign_id || undefined,
+      effectiveMonth: p.effective_month,
       currency: p.currency,
-      adBudget: Number(p.adBudget),
-      adSpend: Number(p.adSpend),
+      adBudget: Number(p.ad_budget),
+      adSpend: Number(p.ad_spend),
       leads: p.leads,
       conversions: p.conversions,
-      createdAt: p.createdAt.toISOString(),
-      updatedAt: p.updatedAt.toISOString(),
+      createdAt: typeof p.created_at === "string" ? p.created_at : new Date(p.created_at).toISOString(),
+      updatedAt: typeof p.updated_at === "string" ? p.updated_at : new Date(p.updated_at).toISOString(),
     }));
 
     // 7. Calculate Aggregations and Scorecards
@@ -907,7 +658,7 @@ export async function getAuthoritativePerformanceOverviewAction(
   }
 }
 
-// 2. Team Capacity Action
+// 2. Team Capacity Action (Bounded Single CTE Query)
 export async function getAuthoritativeTeamCapacityAction(
   filter: PeriodFilter = "this_week",
   customStart?: string,
@@ -923,24 +674,197 @@ export async function getAuthoritativeTeamCapacityAction(
     if (!authUser) return { success: false, scorecards: [], error: "Unauthorized" };
     if (authUser.organizationRole === "client") return { success: false, scorecards: [], error: "Forbidden" };
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
     const period = getPeriodDateRange(filter, customStart, customEnd);
+    const startTimestamp = `${period.startDate}T00:00:00.000Z`;
+    const endTimestamp = `${period.endDate}T23:59:59.999Z`;
 
-    // Designers ONLY get their own team capacity scorecard
-    const filteredUsers = authUser.organizationRole === "designer"
-      ? data.users.filter((u) => u.id === authUser.id)
-      : data.users.filter((u) => u.role !== "client" && u.status === "active");
+    const queryRes: any = await db.execute(sql`
+      WITH
+        target_users AS (
+          SELECT id, full_name, email, avatar_url, organization_role, status, created_at, updated_at
+          FROM users
+          WHERE org_id = ${authUser.orgId}
+            AND deleted_at IS NULL
+            AND status = 'active'
+            AND organization_role != 'client'
+            ${authUser.organizationRole === "designer" ? sql`AND id = ${authUser.id}` : sql``}
+          ORDER BY full_name
+        ),
+        u_ids AS (SELECT id FROM target_users),
+        scoped_items AS (
+          SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
+                 stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
+                 standard_content_seconds, standard_production_seconds, is_effort_anchor,
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+          FROM content_items
+          WHERE org_id = ${authUser.orgId} AND deleted_at IS NULL
+        ),
+        scoped_assignments AS (
+          SELECT id, org_id, project_id, content_item_id, assignee_user_id, assignment_role, status,
+                 current_due_at, initial_due_at, created_at
+          FROM content_assignments
+          WHERE org_id = ${authUser.orgId} AND assignee_user_id IN (SELECT id FROM u_ids)
+        ),
+        scoped_sessions AS (
+          SELECT id, org_id, project_id, content_item_id, user_id, started_at, ended_at,
+                 accumulated_seconds, status, created_at, updated_at
+          FROM work_sessions
+          WHERE org_id = ${authUser.orgId} AND user_id IN (SELECT id FROM u_ids)
+            AND (status = 'active' OR (started_at >= ${startTimestamp}::timestamptz AND started_at <= ${endTimestamp}::timestamptz))
+        ),
+        scoped_crs AS (
+          SELECT id, project_id, content_item_id, submission_version_id, component, reviewer_user_id,
+                 requested_change, priority, status, created_at
+          FROM change_requests
+          WHERE org_id = ${authUser.orgId}
+        ),
+        scoped_schedules AS (
+          SELECT id, org_id, user_id, effective_from, effective_to, monday_hours, tuesday_hours,
+                 wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours,
+                 primary_function, creative_eligibility, created_at, updated_at
+          FROM employee_capacity_schedules
+          WHERE org_id = ${authUser.orgId} AND user_id IN (SELECT id FROM u_ids)
+        ),
+        scoped_adjustments AS (
+          SELECT id, org_id, user_id, adjustment_date, kind, adjustment_hours, reason,
+                 created_by_user_id, created_at
+          FROM capacity_adjustments
+          WHERE org_id = ${authUser.orgId} AND user_id IN (SELECT id FROM u_ids)
+            AND adjustment_date >= ${period.startDate} AND adjustment_date <= ${period.endDate}
+        )
+      SELECT
+        (SELECT COALESCE(json_agg(u), '[]'::json) FROM target_users u) AS users,
+        (SELECT COALESCE(json_agg(i), '[]'::json) FROM scoped_items i) AS items,
+        (SELECT COALESCE(json_agg(a), '[]'::json) FROM scoped_assignments a) AS assignments,
+        (SELECT COALESCE(json_agg(s), '[]'::json) FROM scoped_sessions s) AS sessions,
+        (SELECT COALESCE(json_agg(c), '[]'::json) FROM scoped_crs c) AS crs,
+        (SELECT COALESCE(json_agg(sc), '[]'::json) FROM scoped_schedules sc) AS schedules,
+        (SELECT COALESCE(json_agg(ad), '[]'::json) FROM scoped_adjustments ad) AS adjustments;
+    `);
+    const batch: any = queryRes.rows?.[0] || queryRes?.[0] || {};
 
-    const scorecards = filteredUsers.map((u) =>
+    const mappedUsers: User[] = (batch?.users || []).map((u: any) => ({
+      id: u.id,
+      name: u.full_name,
+      email: u.email,
+      avatar: u.avatar_url || "",
+      role: u.organization_role as any,
+      status: u.status as any,
+      workingHoursPerDay: 8,
+      dateJoined: u.created_at,
+      createdAt: u.created_at,
+      updatedAt: u.updated_at,
+    }));
+
+    const mappedItems: ContentItem[] = (batch?.items || []).map((i: any) => ({
+      id: i.id,
+      projectId: i.project_id,
+      campaignId: i.campaign_id || undefined,
+      contentGroupId: i.content_group_id || undefined,
+      title: i.title,
+      platform: i.platform as any,
+      contentType: i.content_type as any,
+      workType: i.work_type || undefined,
+      workTypeId: i.work_type_id || undefined,
+      stage: i.stage as any,
+      accountableOwnerId: "",
+      deadlines: {
+        submissionDeadline: i.submission_deadline || undefined,
+        scheduledPublicationDate: i.scheduled_publication_date || undefined,
+      },
+      finalPlannedSeconds: i.final_planned_seconds,
+      standardContentSeconds: i.standard_content_seconds,
+      standardProductionSeconds: i.standard_production_seconds,
+      isEffortAnchor: i.is_effort_anchor,
+      completedAt: i.completed_at || undefined,
+      publishedAt: i.published_at || undefined,
+      finalInternalDeadline: i.final_internal_deadline || undefined,
+      calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
+    }));
+
+    const mappedAssignments: ContentAssignment[] = (batch?.assignments || []).map((a: any) => ({
+      id: a.id,
+      orgId: a.org_id,
+      projectId: a.project_id,
+      contentItemId: a.content_item_id,
+      assigneeUserId: a.assignee_user_id,
+      role: (a.assignment_role || a.role || "designer") as any,
+      status: a.status as any,
+      initialDueAt: a.initial_due_at || undefined,
+      currentDueAt: a.current_due_at || undefined,
+      createdAt: a.created_at,
+    }));
+
+    const mappedSessions: WorkSession[] = (batch?.sessions || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      projectId: s.project_id,
+      contentItemId: s.content_item_id || undefined,
+      userId: s.user_id,
+      startedAt: typeof s.started_at === "string" ? s.started_at : new Date(s.started_at).toISOString(),
+      endedAt: s.ended_at ? (typeof s.ended_at === "string" ? s.ended_at : new Date(s.ended_at).toISOString()) : undefined,
+      accumulatedSeconds: s.accumulated_seconds,
+      status: s.status as any,
+      adjustments: [],
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const mappedCRs: ChangeRequest[] = (batch?.crs || []).map((cr: any) => ({
+      id: cr.id,
+      projectId: cr.project_id,
+      contentItemId: cr.content_item_id,
+      submissionVersionId: cr.submission_version_id,
+      component: cr.component as any,
+      reviewerUserId: cr.reviewer_user_id,
+      reviewerName: "",
+      requestedChange: cr.requested_change,
+      priority: cr.priority as any,
+      status: cr.status as any,
+      createdAt: typeof cr.created_at === "string" ? cr.created_at : new Date(cr.created_at).toISOString(),
+    }));
+
+    const mappedSchedules: EmployeeCapacitySchedule[] = (batch?.schedules || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      userId: s.user_id,
+      effectiveFrom: s.effective_from,
+      effectiveTo: s.effective_to,
+      mondayHours: Number(s.monday_hours),
+      tuesdayHours: Number(s.tuesday_hours),
+      wednesdayHours: Number(s.wednesday_hours),
+      thursdayHours: Number(s.thursday_hours),
+      fridayHours: Number(s.friday_hours),
+      saturdayHours: Number(s.saturday_hours),
+      sundayHours: Number(s.sunday_hours),
+      primaryFunction: s.primary_function,
+      creativeEligibility: s.creative_eligibility as any,
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const mappedAdjustments: CapacityAdjustment[] = (batch?.adjustments || []).map((a: any) => ({
+      id: a.id,
+      orgId: a.org_id,
+      userId: a.user_id,
+      adjustmentDate: a.adjustment_date,
+      kind: a.kind as any,
+      adjustmentHours: Number(a.adjustment_hours),
+      reason: a.reason,
+      createdByUserId: a.created_by_user_id || undefined,
+      createdAt: typeof a.created_at === "string" ? a.created_at : new Date(a.created_at).toISOString(),
+    }));
+
+    const scorecards = mappedUsers.map((u) =>
       calculateEmployeeScorecard(
         u,
         period,
-        data.items,
-        data.assignments,
-        data.workSessions,
-        data.changeRequests,
-        data.schedules,
-        data.adjustments
+        mappedItems,
+        mappedAssignments,
+        mappedSessions,
+        mappedCRs,
+        mappedSchedules,
+        mappedAdjustments
       )
     );
 
@@ -950,7 +874,7 @@ export async function getAuthoritativeTeamCapacityAction(
   }
 }
 
-// 3. Employee Detailed Drilldown Action
+// 3. Employee Detailed Drilldown Action (Bounded Single User Query)
 export async function getAuthoritativeEmployeePerformanceAction(
   userId: string,
   filter: PeriodFilter = "this_month",
@@ -971,20 +895,194 @@ export async function getAuthoritativeEmployeePerformanceAction(
       return { success: false, error: "Unauthorized: Designers can only view their own performance metrics." };
     }
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
-    const targetUser = data.users.find((u) => u.id === userId);
-    if (!targetUser) return { success: false, error: "User not found" };
-
     const period = getPeriodDateRange(filter, customStart, customEnd);
+    const startTimestamp = `${period.startDate}T00:00:00.000Z`;
+    const endTimestamp = `${period.endDate}T23:59:59.999Z`;
+
+    const queryRes: any = await db.execute(sql`
+      WITH
+        target_user AS (
+          SELECT id, full_name, email, avatar_url, organization_role, status, created_at, updated_at
+          FROM users WHERE id = ${userId} AND org_id = ${authUser.orgId} AND deleted_at IS NULL
+        ),
+        scoped_assignments AS (
+          SELECT id, org_id, project_id, content_item_id, assignee_user_id, assignment_role, status,
+                 current_due_at, initial_due_at, created_at
+          FROM content_assignments
+          WHERE org_id = ${authUser.orgId} AND assignee_user_id = ${userId}
+        ),
+        scoped_items AS (
+          SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
+                 stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
+                 standard_content_seconds, standard_production_seconds, is_effort_anchor,
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+          FROM content_items
+          WHERE org_id = ${authUser.orgId}
+            AND (id IN (SELECT content_item_id FROM scoped_assignments) OR account_owner_id = ${userId})
+            AND deleted_at IS NULL
+        ),
+        scoped_sessions AS (
+          SELECT id, org_id, project_id, content_item_id, user_id, started_at, ended_at,
+                 accumulated_seconds, status, created_at, updated_at
+          FROM work_sessions
+          WHERE org_id = ${authUser.orgId} AND user_id = ${userId}
+            AND (status = 'active' OR (started_at >= ${startTimestamp}::timestamptz AND started_at <= ${endTimestamp}::timestamptz))
+        ),
+        scoped_crs AS (
+          SELECT id, project_id, content_item_id, submission_version_id, component, reviewer_user_id,
+                 requested_change, priority, status, created_at
+          FROM change_requests
+          WHERE org_id = ${authUser.orgId} AND content_item_id IN (SELECT id FROM scoped_items)
+        ),
+        scoped_schedules AS (
+          SELECT id, org_id, user_id, effective_from, effective_to, monday_hours, tuesday_hours,
+                 wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours,
+                 primary_function, creative_eligibility, created_at, updated_at
+          FROM employee_capacity_schedules
+          WHERE org_id = ${authUser.orgId} AND user_id = ${userId}
+        ),
+        scoped_adjustments AS (
+          SELECT id, org_id, user_id, adjustment_date, kind, adjustment_hours, reason,
+                 created_by_user_id, created_at
+          FROM capacity_adjustments
+          WHERE org_id = ${authUser.orgId} AND user_id = ${userId}
+            AND adjustment_date >= ${period.startDate} AND adjustment_date <= ${period.endDate}
+        )
+      SELECT
+        (SELECT json_agg(u) FROM target_user u) AS users,
+        (SELECT COALESCE(json_agg(i), '[]'::json) FROM scoped_items i) AS items,
+        (SELECT COALESCE(json_agg(a), '[]'::json) FROM scoped_assignments a) AS assignments,
+        (SELECT COALESCE(json_agg(s), '[]'::json) FROM scoped_sessions s) AS sessions,
+        (SELECT COALESCE(json_agg(c), '[]'::json) FROM scoped_crs c) AS crs,
+        (SELECT COALESCE(json_agg(sc), '[]'::json) FROM scoped_schedules sc) AS schedules,
+        (SELECT COALESCE(json_agg(ad), '[]'::json) FROM scoped_adjustments ad) AS adjustments;
+    `);
+    const batch: any = queryRes.rows?.[0] || queryRes?.[0] || {};
+
+    const userRaw = (batch?.users || [])[0];
+    if (!userRaw) return { success: false, error: "User not found" };
+
+    const targetUser: User = {
+      id: userRaw.id,
+      name: userRaw.full_name,
+      email: userRaw.email,
+      avatar: userRaw.avatar_url || "",
+      role: userRaw.organization_role as any,
+      status: userRaw.status as any,
+      workingHoursPerDay: 8,
+      dateJoined: userRaw.created_at,
+      createdAt: userRaw.created_at,
+      updatedAt: userRaw.updated_at,
+    };
+
+    const mappedItems: ContentItem[] = (batch?.items || []).map((i: any) => ({
+      id: i.id,
+      projectId: i.project_id,
+      campaignId: i.campaign_id || undefined,
+      contentGroupId: i.content_group_id || undefined,
+      title: i.title,
+      platform: i.platform as any,
+      contentType: i.content_type as any,
+      workType: i.work_type || undefined,
+      workTypeId: i.work_type_id || undefined,
+      stage: i.stage as any,
+      accountableOwnerId: "",
+      deadlines: {
+        submissionDeadline: i.submission_deadline || undefined,
+        scheduledPublicationDate: i.scheduled_publication_date || undefined,
+      },
+      finalPlannedSeconds: i.final_planned_seconds,
+      standardContentSeconds: i.standard_content_seconds,
+      standardProductionSeconds: i.standard_production_seconds,
+      isEffortAnchor: i.is_effort_anchor,
+      completedAt: i.completed_at || undefined,
+      publishedAt: i.published_at || undefined,
+      finalInternalDeadline: i.final_internal_deadline || undefined,
+      calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
+    }));
+
+    const mappedAssignments: ContentAssignment[] = (batch?.assignments || []).map((a: any) => ({
+      id: a.id,
+      orgId: a.org_id,
+      projectId: a.project_id,
+      contentItemId: a.content_item_id,
+      assigneeUserId: a.assignee_user_id,
+      role: (a.assignment_role || a.role || "designer") as any,
+      status: a.status as any,
+      initialDueAt: a.initial_due_at || undefined,
+      currentDueAt: a.current_due_at || undefined,
+      createdAt: a.created_at,
+    }));
+
+    const mappedSessions: WorkSession[] = (batch?.sessions || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      projectId: s.project_id,
+      contentItemId: s.content_item_id || undefined,
+      userId: s.user_id,
+      startedAt: typeof s.started_at === "string" ? s.started_at : new Date(s.started_at).toISOString(),
+      endedAt: s.ended_at ? (typeof s.ended_at === "string" ? s.ended_at : new Date(s.ended_at).toISOString()) : undefined,
+      accumulatedSeconds: s.accumulated_seconds,
+      status: s.status as any,
+      adjustments: [],
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const mappedCRs: ChangeRequest[] = (batch?.crs || []).map((cr: any) => ({
+      id: cr.id,
+      projectId: cr.project_id,
+      contentItemId: cr.content_item_id,
+      submissionVersionId: cr.submission_version_id,
+      component: cr.component as any,
+      reviewerUserId: cr.reviewer_user_id,
+      reviewerName: "",
+      requestedChange: cr.requested_change,
+      priority: cr.priority as any,
+      status: cr.status as any,
+      createdAt: typeof cr.created_at === "string" ? cr.created_at : new Date(cr.created_at).toISOString(),
+    }));
+
+    const mappedSchedules: EmployeeCapacitySchedule[] = (batch?.schedules || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      userId: s.user_id,
+      effectiveFrom: s.effective_from,
+      effectiveTo: s.effective_to,
+      mondayHours: Number(s.monday_hours),
+      tuesdayHours: Number(s.tuesday_hours),
+      wednesdayHours: Number(s.wednesday_hours),
+      thursdayHours: Number(s.thursday_hours),
+      fridayHours: Number(s.friday_hours),
+      saturdayHours: Number(s.saturday_hours),
+      sundayHours: Number(s.sunday_hours),
+      primaryFunction: s.primary_function,
+      creativeEligibility: s.creative_eligibility as any,
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const mappedAdjustments: CapacityAdjustment[] = (batch?.adjustments || []).map((a: any) => ({
+      id: a.id,
+      orgId: a.org_id,
+      userId: a.user_id,
+      adjustmentDate: a.adjustment_date,
+      kind: a.kind as any,
+      adjustmentHours: Number(a.adjustment_hours),
+      reason: a.reason,
+      createdByUserId: a.created_by_user_id || undefined,
+      createdAt: typeof a.created_at === "string" ? a.created_at : new Date(a.created_at).toISOString(),
+    }));
+
     const scorecard = calculateEmployeeScorecard(
       targetUser,
       period,
-      data.items,
-      data.assignments,
-      data.workSessions,
-      data.changeRequests,
-      data.schedules,
-      data.adjustments
+      mappedItems,
+      mappedAssignments,
+      mappedSessions,
+      mappedCRs,
+      mappedSchedules,
+      mappedAdjustments
     );
 
     return { success: true, scorecard };
@@ -993,7 +1091,7 @@ export async function getAuthoritativeEmployeePerformanceAction(
   }
 }
 
-// 4. Projects Performance Action
+// 4. Projects Performance Action (Bounded Single CTE Query)
 export async function getAuthoritativeProjectsPerformanceAction(
   filter: PeriodFilter = "this_month",
   customStart?: string,
@@ -1009,11 +1107,143 @@ export async function getAuthoritativeProjectsPerformanceAction(
     if (!authUser) return { success: false, projectScorecards: [], error: "Unauthorized" };
     if (authUser.organizationRole === "client") return { success: false, projectScorecards: [], error: "Forbidden" };
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
     const period = getPeriodDateRange(filter, customStart, customEnd);
+    const startTimestamp = `${period.startDate}T00:00:00.000Z`;
+    const endTimestamp = `${period.endDate}T23:59:59.999Z`;
 
-    const projectScorecards = data.projects.map((p) =>
-      calculateProjectPerformance(p, period, data.items, data.workSessions, data.commitments, data.perfInputs)
+    const queryRes: any = await db.execute(sql`
+      WITH
+        target_projects AS (
+          SELECT id, name, client_name, brief_markdown, engagement_model, status, created_at
+          FROM projects
+          WHERE org_id = ${authUser.orgId}
+            AND deleted_at IS NULL
+            ${
+              authUser.organizationRole === "consultant"
+                ? sql`AND id IN (SELECT project_id FROM project_memberships WHERE user_id = ${authUser.id} AND status = 'active')`
+                : sql``
+            }
+          ORDER BY name
+        ),
+        p_ids AS (SELECT id FROM target_projects),
+        scoped_items AS (
+          SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
+                 stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
+                 standard_content_seconds, standard_production_seconds, is_effort_anchor,
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+          FROM content_items
+          WHERE org_id = ${authUser.orgId} AND project_id IN (SELECT id FROM p_ids) AND deleted_at IS NULL
+        ),
+        scoped_sessions AS (
+          SELECT id, org_id, project_id, content_item_id, user_id, started_at, ended_at,
+                 accumulated_seconds, status, created_at, updated_at
+          FROM work_sessions
+          WHERE org_id = ${authUser.orgId} AND project_id IN (SELECT id FROM p_ids)
+            AND (status = 'active' OR (started_at >= ${startTimestamp}::timestamptz AND started_at <= ${endTimestamp}::timestamptz))
+        ),
+        scoped_commitments AS (
+          SELECT id, org_id, project_id, work_type_id, work_type_name, committed_quantity,
+                 effective_month, created_at, updated_at
+          FROM project_commitments
+          WHERE org_id = ${authUser.orgId} AND project_id IN (SELECT id FROM p_ids)
+        ),
+        scoped_perf_inputs AS (
+          SELECT id, org_id, project_id, campaign_id, effective_month, currency, ad_budget,
+                 ad_spend, leads, conversions, created_at, updated_at
+          FROM project_performance_inputs
+          WHERE org_id = ${authUser.orgId} AND project_id IN (SELECT id FROM p_ids)
+        )
+      SELECT
+        (SELECT COALESCE(json_agg(p), '[]'::json) FROM target_projects p) AS projects,
+        (SELECT COALESCE(json_agg(i), '[]'::json) FROM scoped_items i) AS items,
+        (SELECT COALESCE(json_agg(s), '[]'::json) FROM scoped_sessions s) AS sessions,
+        (SELECT COALESCE(json_agg(cm), '[]'::json) FROM scoped_commitments cm) AS commitments,
+        (SELECT COALESCE(json_agg(pi), '[]'::json) FROM scoped_perf_inputs pi) AS perf_inputs;
+    `);
+    const batch: any = queryRes.rows?.[0] || queryRes?.[0] || {};
+
+    const mappedProjects: Project[] = (batch?.projects || []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      clientBrand: p.client_name || "",
+      avatar: "",
+      scope: p.brief_markdown || p.engagement_model || "",
+      timezone: "Asia/Kolkata",
+      status: p.status,
+      targetRequirements: { posts: 0, carousels: 0, reels: 0, trialReels: 0 },
+      workflowStages: ["idea", "draft", "in_review", "approved", "published"],
+      createdAt: p.created_at,
+    }));
+
+    const mappedItems: ContentItem[] = (batch?.items || []).map((i: any) => ({
+      id: i.id,
+      projectId: i.project_id,
+      campaignId: i.campaign_id || undefined,
+      contentGroupId: i.content_group_id || undefined,
+      title: i.title,
+      platform: i.platform as any,
+      contentType: i.content_type as any,
+      workType: i.work_type || undefined,
+      workTypeId: i.work_type_id || undefined,
+      stage: i.stage as any,
+      deadlines: {
+        submissionDeadline: i.submission_deadline || undefined,
+        scheduledPublicationDate: i.scheduled_publication_date || undefined,
+      },
+      finalPlannedSeconds: i.final_planned_seconds,
+      standardContentSeconds: i.standard_content_seconds,
+      standardProductionSeconds: i.standard_production_seconds,
+      isEffortAnchor: i.is_effort_anchor,
+      completedAt: i.completed_at || undefined,
+      publishedAt: i.published_at || undefined,
+      finalInternalDeadline: i.final_internal_deadline || undefined,
+      calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
+    }));
+
+    const mappedSessions: WorkSession[] = (batch?.sessions || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      projectId: s.project_id,
+      contentItemId: s.content_item_id || undefined,
+      userId: s.user_id,
+      startedAt: typeof s.started_at === "string" ? s.started_at : new Date(s.started_at).toISOString(),
+      endedAt: s.ended_at ? (typeof s.ended_at === "string" ? s.ended_at : new Date(s.ended_at).toISOString()) : undefined,
+      accumulatedSeconds: s.accumulated_seconds,
+      status: s.status as any,
+      adjustments: [],
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const mappedCommitments: ProjectCommitment[] = (batch?.commitments || []).map((c: any) => ({
+      id: c.id,
+      orgId: c.org_id,
+      projectId: c.project_id,
+      workTypeId: c.work_type_id || undefined,
+      workTypeName: c.work_type_name,
+      committedQuantity: c.committed_quantity,
+      effectiveMonth: c.effective_month,
+      createdAt: typeof c.created_at === "string" ? c.created_at : new Date(c.created_at).toISOString(),
+      updatedAt: typeof c.updated_at === "string" ? c.updated_at : new Date(c.updated_at).toISOString(),
+    }));
+
+    const mappedPerfInputs: ProjectPerformanceInput[] = (batch?.perf_inputs || []).map((p: any) => ({
+      id: p.id,
+      orgId: p.org_id,
+      projectId: p.project_id,
+      campaignId: p.campaign_id || undefined,
+      effectiveMonth: p.effective_month,
+      currency: p.currency,
+      adBudget: Number(p.ad_budget),
+      adSpend: Number(p.ad_spend),
+      leads: p.leads,
+      conversions: p.conversions,
+      createdAt: typeof p.created_at === "string" ? p.created_at : new Date(p.created_at).toISOString(),
+      updatedAt: typeof p.updated_at === "string" ? p.updated_at : new Date(p.updated_at).toISOString(),
+    }));
+
+    const projectScorecards = mappedProjects.map((p) =>
+      calculateProjectPerformance(p, period, mappedItems, mappedSessions, mappedCommitments, mappedPerfInputs)
     );
 
     return { success: true, projectScorecards, period };
@@ -1022,7 +1252,7 @@ export async function getAuthoritativeProjectsPerformanceAction(
   }
 }
 
-// 5. Effort Standards vs Actual Analysis Action
+// 5. Effort Standards vs Actual Analysis Action (Bounded Single CTE Query)
 export async function getAuthoritativeEffortAnalysisAction(
   filter: PeriodFilter = "this_month",
   customStart?: string,
@@ -1038,18 +1268,105 @@ export async function getAuthoritativeEffortAnalysisAction(
     if (!authUser) return { success: false, analysisRows: [], error: "Unauthorized" };
     if (authUser.organizationRole === "client") return { success: false, analysisRows: [], error: "Forbidden" };
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
     const period = getPeriodDateRange(filter, customStart, customEnd);
+    const startTimestamp = `${period.startDate}T00:00:00.000Z`;
+    const endTimestamp = `${period.endDate}T23:59:59.999Z`;
 
-    // Filter completed tasks in period
-    const completedTasks = data.items.filter((i) => {
-      const isDone = i.completedAt || i.stage === "published" || i.stage === "approved";
-      if (!isDone) return false;
-      const compDateStr = (i.completedAt || i.publishedAt || period.startDate).split("T")[0];
-      return compDateStr >= period.startDate && compDateStr <= period.endDate;
-    });
+    const queryRes: any = await db.execute(sql`
+      WITH
+        scoped_standards AS (
+          SELECT id, org_id, work_type, category, default_role,
+                 content_seconds, production_seconds, total_seconds,
+                 lead_time_workdays, active, version, effective_from, created_at, updated_at
+          FROM effort_standards
+          WHERE org_id = ${authUser.orgId} AND active = true
+        ),
+        scoped_items AS (
+          SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
+                 stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
+                 standard_content_seconds, standard_production_seconds, is_effort_anchor,
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+          FROM content_items
+          WHERE org_id = ${authUser.orgId}
+            AND (completed_at IS NOT NULL OR stage IN ('published', 'approved'))
+            AND (
+              (completed_at >= ${startTimestamp}::timestamptz AND completed_at <= ${endTimestamp}::timestamptz) OR
+              (published_at >= ${startTimestamp}::timestamptz AND published_at <= ${endTimestamp}::timestamptz)
+            )
+            AND deleted_at IS NULL
+        ),
+        scoped_sessions AS (
+          SELECT id, org_id, project_id, content_item_id, user_id, started_at, ended_at,
+                 accumulated_seconds, status, created_at, updated_at
+          FROM work_sessions
+          WHERE org_id = ${authUser.orgId}
+            AND content_item_id IN (SELECT id FROM scoped_items)
+        )
+      SELECT
+        (SELECT COALESCE(json_agg(st), '[]'::json) FROM scoped_standards st) AS standards,
+        (SELECT COALESCE(json_agg(i), '[]'::json) FROM scoped_items i) AS items,
+        (SELECT COALESCE(json_agg(s), '[]'::json) FROM scoped_sessions s) AS sessions;
+    `);
+    const batch: any = queryRes.rows?.[0] || queryRes?.[0] || {};
 
-    const analysisRows = calculateEffortAnalysis(data.standards, completedTasks, data.workSessions);
+    const mappedStandards: EffortStandard[] = (batch?.standards || []).map((std: any) => ({
+      id: std.id,
+      orgId: std.org_id,
+      category: std.category,
+      workType: std.work_type,
+      contentSeconds: std.content_seconds,
+      productionSeconds: std.production_seconds,
+      totalSeconds: std.total_seconds,
+      leadTimeWorkdays: std.lead_time_workdays,
+      defaultRole: std.default_role,
+      active: std.active,
+      version: std.version,
+      effectiveFrom: typeof std.effective_from === "string" ? std.effective_from : new Date(std.effective_from).toISOString(),
+      createdAt: typeof std.created_at === "string" ? std.created_at : new Date(std.created_at).toISOString(),
+      updatedAt: typeof std.updated_at === "string" ? std.updated_at : new Date(std.updated_at).toISOString(),
+    }));
+
+    const mappedItems: ContentItem[] = (batch?.items || []).map((i: any) => ({
+      id: i.id,
+      projectId: i.project_id,
+      campaignId: i.campaign_id || undefined,
+      contentGroupId: i.content_group_id || undefined,
+      title: i.title,
+      platform: i.platform as any,
+      contentType: i.content_type as any,
+      workType: i.work_type || undefined,
+      workTypeId: i.work_type_id || undefined,
+      stage: i.stage as any,
+      deadlines: {
+        submissionDeadline: i.submission_deadline || undefined,
+        scheduledPublicationDate: i.scheduled_publication_date || undefined,
+      },
+      finalPlannedSeconds: i.final_planned_seconds,
+      standardContentSeconds: i.standard_content_seconds,
+      standardProductionSeconds: i.standard_production_seconds,
+      isEffortAnchor: i.is_effort_anchor,
+      completedAt: i.completed_at || undefined,
+      publishedAt: i.published_at || undefined,
+      finalInternalDeadline: i.final_internal_deadline || undefined,
+      calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
+    }));
+
+    const mappedSessions: WorkSession[] = (batch?.sessions || []).map((s: any) => ({
+      id: s.id,
+      orgId: s.org_id,
+      projectId: s.project_id,
+      contentItemId: s.content_item_id || undefined,
+      userId: s.user_id,
+      startedAt: typeof s.started_at === "string" ? s.started_at : new Date(s.started_at).toISOString(),
+      endedAt: s.ended_at ? (typeof s.ended_at === "string" ? s.ended_at : new Date(s.ended_at).toISOString()) : undefined,
+      accumulatedSeconds: s.accumulated_seconds,
+      status: s.status as any,
+      adjustments: [],
+      createdAt: typeof s.created_at === "string" ? s.created_at : new Date(s.created_at).toISOString(),
+      updatedAt: typeof s.updated_at === "string" ? s.updated_at : new Date(s.updated_at).toISOString(),
+    }));
+
+    const analysisRows = calculateEffortAnalysis(mappedStandards, mappedItems, mappedSessions);
 
     return { success: true, analysisRows, period };
   } catch (error: any) {

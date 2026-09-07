@@ -206,3 +206,83 @@ export async function getAuthoritativeClientCalendarAction(
   if (!res.success || !res.data) return { success: false, error: res.error || "Failed to load calendar." };
   return { success: true, calendar: res.data.upcomingCalendar };
 }
+
+export interface PortalContextDTO {
+  user: {
+    id: string;
+    fullName: string;
+    email: string;
+    organizationRole: string;
+  };
+  projects: Array<{
+    id: string;
+    name: string;
+    clientBrand: string;
+    avatar: string;
+    timezone: string;
+    status: string;
+  }>;
+}
+
+export async function getAuthoritativePortalContextAction(): Promise<{
+  success: boolean;
+  data?: PortalContextDTO;
+  error?: string;
+}> {
+  const authUser = await getAuthoritativeUser();
+  if (!authUser) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const isInternalAdmin = authUser.organizationRole === "founder" || authUser.organizationRole === "admin";
+
+  let eligibleProjects: any[] = [];
+  if (isInternalAdmin) {
+    eligibleProjects = await db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        clientBrand: projects.clientName,
+        status: projects.status,
+      })
+      .from(projects)
+      .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`))
+      .orderBy(projects.name);
+  } else {
+    eligibleProjects = await db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        clientBrand: projects.clientName,
+        status: projects.status,
+      })
+      .from(projects)
+      .innerJoin(projectMemberships, and(
+        eq(projectMemberships.projectId, projects.id),
+        eq(projectMemberships.userId, authUser.id),
+        eq(projectMemberships.status, "active")
+      ))
+      .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`))
+      .orderBy(projects.name);
+  }
+
+  return {
+    success: true,
+    data: {
+      user: {
+        id: authUser.id,
+        fullName: authUser.fullName,
+        email: authUser.email,
+        organizationRole: authUser.organizationRole,
+      },
+      projects: eligibleProjects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        clientBrand: p.clientBrand || p.name,
+        avatar: (p.name || "A").charAt(0).toUpperCase(),
+        timezone: "Asia/Kolkata (IST)",
+        status: p.status,
+      })),
+    },
+  };
+}

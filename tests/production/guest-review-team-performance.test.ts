@@ -60,13 +60,34 @@ describe("Guest Review DTO, Client Visibility, Team Profile & Performance Scopin
     testItem = item;
 
     if (testItem) {
-      // 4. Resolve or create submission version with copy
-      const [ver] = await db
+      // 4. Resolve or create submission version with copy (must be draft to allow copy update)
+      const [draftVer] = await db
         .select()
         .from(submissionVersions)
-        .where(eq(submissionVersions.contentItemId, testItem.id))
+        .where(and(eq(submissionVersions.contentItemId, testItem.id), eq(submissionVersions.isDraft, true)))
         .limit(1);
-      testVersion = ver;
+
+      if (draftVer) {
+        testVersion = draftVer;
+      } else {
+        const versions = await db
+          .select({ vNum: submissionVersions.versionNumber })
+          .from(submissionVersions)
+          .where(eq(submissionVersions.contentItemId, testItem.id));
+        const nextVNum = (versions.length > 0 ? Math.max(...versions.map((v) => v.vNum)) : 0) + 1;
+        const [newVer] = await db
+          .insert(submissionVersions)
+          .values({
+            contentItemId: testItem.id,
+            projectId: testProject.id,
+            orgId: testItem.orgId,
+            versionNumber: nextVNum,
+            isDraft: true,
+            caption: "Initial copy",
+          })
+          .returning();
+        testVersion = newVer;
+      }
     }
   });
 
@@ -236,6 +257,7 @@ describe("Guest Review DTO, Client Visibility, Team Profile & Performance Scopin
           { id: "proj_1", name: "CraftXSpaces", clientBrand: "CraftX", status: "active", timezone: "Asia/Kolkata" },
         ],
         users: [
+          { id: "founder_id", name: "Founder", role: "founder", status: "active" },
           { id: "user_a", name: "Designer A", role: "designer", status: "active" },
           { id: "user_b", name: "Consultant B", role: "consultant", status: "active" },
           { id: "user_c", name: "Designer C", role: "designer", status: "active" }, // Not on proj_1
@@ -284,6 +306,7 @@ describe("Guest Review DTO, Client Visibility, Team Profile & Performance Scopin
           { id: "proj_1", name: "CraftXSpaces", clientBrand: "CraftX", status: "active", timezone: "Asia/Kolkata" },
         ],
         users: [
+          { id: "founder_id", name: "Founder", role: "founder", status: "active" },
           { id: "user_a", name: "Designer A", role: "designer", status: "active" },
           { id: "user_former", name: "Former Contributor", role: "designer", status: "active" },
         ],
@@ -330,6 +353,7 @@ describe("Guest Review DTO, Client Visibility, Team Profile & Performance Scopin
           { id: "proj_empty", name: "Empty Proj", clientBrand: "Empty", status: "active", timezone: "Asia/Kolkata" },
         ],
         users: [
+          { id: "founder_id", name: "Founder", role: "founder", status: "active" },
           { id: "user_unrelated", name: "Unrelated Designer", role: "designer", status: "active" },
         ],
         projectMemberships: [],

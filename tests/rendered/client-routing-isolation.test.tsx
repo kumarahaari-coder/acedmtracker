@@ -21,6 +21,29 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/portal/proj_acme",
 }));
 
+vi.mock("@/lib/actions/clientPortal", () => ({
+  getAuthoritativePortalContextAction: vi.fn().mockResolvedValue({
+    success: true,
+    data: {
+      user: {
+        id: "u_client_acme",
+        fullName: "Acme Client",
+        email: "client@acme.com",
+        organizationRole: "client",
+      },
+      projects: [
+        {
+          id: "proj_acme",
+          name: "Acme Healthcare",
+          clientBrand: "Acme Healthcare Pvt Ltd",
+          avatar: "A",
+          status: "active",
+        },
+      ],
+    },
+  }),
+}));
+
 function RoleSwitchWrapper({
   role,
   userId,
@@ -87,7 +110,7 @@ describe("Client Routing & Workspace Isolation (QA Requirements)", () => {
     expect(mockPush).toHaveBeenCalledWith("/portal/proj_acme");
   });
 
-  it("3. Single-project Client Portal header displays dedicated brand identity without a project dropdown switcher", () => {
+  it("3. Single-project Client Portal header displays dedicated brand identity without a project dropdown switcher", async () => {
     render(
       <AppStateProvider>
         <RoleProvider>
@@ -101,7 +124,7 @@ describe("Client Routing & Workspace Isolation (QA Requirements)", () => {
     );
 
     // Brand is prominently displayed
-    expect(screen.getByText("Acme Healthcare Pvt Ltd")).toBeDefined();
+    expect(await screen.findByText("Acme Healthcare Pvt Ltd")).toBeDefined();
 
     // Internal agency workspace link is NOT visible to Client
     expect(screen.queryByText("← Agency Workspace")).toBeNull();
