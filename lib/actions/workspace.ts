@@ -63,14 +63,15 @@ export interface LayoutContextDTO {
  * active memberships (for client guard), and unread notification count.
  * Never queries or downloads operational content items, versions, or assignments.
  */
-export async function getAuthoritativeLayoutContextAction(): Promise<{
+export async function getAuthoritativeLayoutContextAction(actorUserId?: string): Promise<{
   success: boolean;
   context?: LayoutContextDTO;
   error?: string;
 }> {
   const profiler = new ExecutionProfiler("getAuthoritativeLayoutContextAction");
   try {
-    let authoritativeUser = await getAuthoritativeUser();
+    const resolvedUserId = (process.env.NODE_ENV === "test" || process.env.VITEST) ? actorUserId : undefined;
+    let authoritativeUser = await getAuthoritativeUser(resolvedUserId);
     profiler.mark("auth-resolution");
 
     if (!authoritativeUser) {
@@ -89,6 +90,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
 
     const orgId = authoritativeUser.orgId;
     const isClient = authoritativeUser.organizationRole === "client";
+    const isDesigner = authoritativeUser.organizationRole === "designer";
 
     // 4 small indexed queries
     const [projectRows, membershipRows, userRows, [notifCountRow]] = await Promise.all([
@@ -114,7 +116,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
           and(
             eq(projectMemberships.orgId, orgId),
             eq(projectMemberships.status, "active"),
-            isClient ? eq(projectMemberships.userId, authoritativeUser.id) : sql`true`
+            (isClient || isDesigner) ? eq(projectMemberships.userId, authoritativeUser.id) : sql`true`
           )
         ),
       db
@@ -146,6 +148,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
 
     let accessibleProjects = projectRows;
     let accessibleUsers = userRows;
+    let accessibleMemberships = membershipRows;
 
     if (isClient) {
       const allowedProjIds = new Set(membershipRows.map((m) => m.projectId));
@@ -154,6 +157,16 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
       const allowedUserIds = new Set(membershipRows.map((m) => m.userId));
       allowedUserIds.add(authoritativeUser.id);
       accessibleUsers = userRows.filter((u) => allowedUserIds.has(u.id));
+      accessibleMemberships = membershipRows.filter((m) => allowedProjIds.has(m.projectId));
+    } else if (isDesigner) {
+      const allowedProjIds = new Set(
+        membershipRows
+          .filter((m) => m.userId === authoritativeUser.id && m.status === "active")
+          .map((m) => m.projectId)
+      );
+      accessibleProjects = projectRows.filter((p) => allowedProjIds.has(p.id));
+      accessibleMemberships = membershipRows.filter((m) => allowedProjIds.has(m.projectId));
+      accessibleUsers = userRows.filter((u) => u.role !== "client");
     }
 
     const context: LayoutContextDTO = {
@@ -166,7 +179,7 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
         avatarUrl: undefined,
       },
       projects: accessibleProjects,
-      projectMemberships: membershipRows,
+      projectMemberships: accessibleMemberships,
       users: accessibleUsers,
       unreadNotificationsCount: notifCountRow?.count || 0,
     };

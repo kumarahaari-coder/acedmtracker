@@ -139,6 +139,45 @@ export async function getAuthoritativeUser(userId?: string): Promise<Authoritati
   }
 }
 
+export const APPROVAL_REVIEWER_ROLES = ["founder", "admin", "consultant"] as const;
+export type ApprovalReviewerRole = typeof APPROVAL_REVIEWER_ROLES[number];
+
+export function isApprovalReviewerRole(role: string): role is ApprovalReviewerRole {
+  return (APPROVAL_REVIEWER_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Validates whether the actor has approval queue and reviewer privileges.
+ * STRICT SECURITY INVARIANT: Explicitly restricted to Founder, Admin, and Consultant.
+ * Designers, Clients, and unauthenticated users are categorically denied.
+ */
+export async function requireApprovalReviewer(
+  actorOrUserId?: AuthoritativeUser | string | null
+): Promise<{ allowed: boolean; user?: AuthoritativeUser; error?: string }> {
+  let user: AuthoritativeUser | null = null;
+  if (!actorOrUserId) {
+    user = await getAuthoritativeUser();
+  } else if (typeof actorOrUserId === "string") {
+    user = await getAuthoritativeUser(actorOrUserId);
+  } else {
+    user = actorOrUserId;
+  }
+
+  if (!user || user.status !== "active") {
+    return { allowed: false, error: "401 Unauthorized: Active user session required." };
+  }
+
+  if (!isApprovalReviewerRole(user.organizationRole)) {
+    return {
+      allowed: false,
+      user,
+      error: `403 Forbidden: Role '${user.organizationRole}' is not authorized to access approval queues or perform reviews.`,
+    };
+  }
+
+  return { allowed: true, user };
+}
+
 /**
  * Validates project access based on active membership or organization-scoped Founder/Admin role
  */

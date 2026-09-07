@@ -6,6 +6,13 @@ import { users } from "./users";
 import { contentItems } from "./content";
 
 /**
+ * Authoritative canonical active assignment statuses.
+ * Matches idx_one_active_assignment_per_item database constraint.
+ */
+export const ACTIVE_ASSIGNMENT_STATUSES = ["assigned", "accepted", "in_progress"] as const;
+export type ActiveAssignmentStatus = typeof ACTIVE_ASSIGNMENT_STATUSES[number];
+
+/**
  * 1. Content Assignments Table
  * Authoritative deliverable ownership engine.
  */

@@ -61,7 +61,9 @@ export function Sidebar({ projectId }: SidebarProps) {
     { label: "Overview", href: `/projects/${projectId}`, icon: LayoutDashboard },
     { label: "Calendar", href: `/projects/${projectId}/calendar`, icon: Calendar },
     { label: "Kanban & Timeline", href: `/projects/${projectId}/kanban`, icon: Trello },
-    { label: "Approvals Queue", href: `/projects/${projectId}/approvals`, icon: CheckCircle2 },
+    ...(isManagement
+      ? [{ label: "Approvals Queue", href: `/projects/${projectId}/approvals`, icon: CheckCircle2 }]
+      : []),
     { label: "Script Library", href: `/projects/${projectId}/scripts`, icon: FileCode2 },
     { label: "Asset Vault", href: `/projects/${projectId}/assets`, icon: FolderKanban },
     { label: "Analytics Hub", href: `/projects/${projectId}/analytics`, icon: BarChart2 },

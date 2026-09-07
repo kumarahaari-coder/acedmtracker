@@ -3,12 +3,15 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { getAuthoritativeOrganizationCalendarAction, OrganizationCalendarItem } from "@/lib/actions/calendar";
+import { useRole } from "@/lib/context/RoleContext";
 import { Calendar as CalendarIcon, Filter, Layers, User, CheckCircle2, Clock, AlertCircle, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
 export default function OrganizationCalendarPage() {
+  const { activeRole } = useRole();
   const [items, setItems] = useState<OrganizationCalendarItem[]>([]);
   const [projectsList, setProjectsList] = useState<Array<{ id: string; name: string }>>([]);
   const [teamMembers, setTeamMembers] = useState<Array<{ id: string; name: string }>>([]);
+  const [isDesignerScope, setIsDesignerScope] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
@@ -29,13 +32,18 @@ export default function OrganizationCalendarPage() {
         setItems(res.items);
         setProjectsList(res.projects);
         setTeamMembers(res.teamMembers);
+        if (res.isDesigner) {
+          setIsDesignerScope(true);
+        }
       } else {
-        setErrorNotice(res.error || "Failed to load Organization Calendar");
+        setErrorNotice(res.error || "Failed to load Calendar");
       }
       setIsLoading(false);
     }
     loadCalendar();
   }, []);
+
+  const isDesigner = isDesignerScope || activeRole === "designer";
 
   const workTypes = Array.from(new Set(items.map((i) => i.workType).filter(Boolean)));
   const platforms = Array.from(new Set(items.map((i) => i.platform).filter(Boolean)));
@@ -43,7 +51,7 @@ export default function OrganizationCalendarPage() {
 
   const filteredItems = items.filter((item) => {
     if (selectedProjectId !== "all" && item.projectId !== selectedProjectId) return false;
-    if (selectedAssigneeId !== "all" && item.assignedOwnerId !== selectedAssigneeId) return false;
+    if (!isDesigner && selectedAssigneeId !== "all" && item.assignedOwnerId !== selectedAssigneeId) return false;
     if (selectedWorkType !== "all" && item.workType !== selectedWorkType) return false;
     if (selectedPlatform !== "all" && item.platform !== selectedPlatform) return false;
     if (selectedStage !== "all" && item.stage !== selectedStage) return false;
@@ -57,13 +65,19 @@ export default function OrganizationCalendarPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-black/[0.08] pb-5">
         <div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-[#0071e3]/10 px-2.5 py-0.5 text-xs font-semibold text-[#0071e3]">
-              Company Scope
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              isDesigner ? "bg-[#34c759]/10 text-[#34c759]" : "bg-[#0071e3]/10 text-[#0071e3]"
+            }`}>
+              {isDesigner ? "My Work" : "Company Scope"}
             </span>
-            <h1 className="text-2xl font-bold tracking-tight text-[#1d1d1f]">Organization Calendar</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-[#1d1d1f]">
+              {isDesigner ? "My Calendar" : "Organization Calendar"}
+            </h1>
           </div>
           <p className="text-xs text-[#86868b] mt-1">
-            Authoritative delivery schedule aggregated across all active projects in the organization.
+            {isDesigner
+              ? "Your delivery schedule across assigned projects."
+              : "Authoritative delivery schedule aggregated across all active projects in the organization."}
           </p>
         </div>
       </div>
@@ -75,7 +89,7 @@ export default function OrganizationCalendarPage() {
           <span>Filter Deliverables</span>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+        <div className={`grid grid-cols-2 md:grid-cols-3 ${isDesigner ? "lg:grid-cols-5" : "lg:grid-cols-6"} gap-3 text-xs`}>
           {/* Project */}
           <div>
             <label className="block text-[#86868b] font-medium mb-1">Project</label>
@@ -84,7 +98,7 @@ export default function OrganizationCalendarPage() {
               onChange={(e) => setSelectedProjectId(e.target.value)}
               className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
             >
-              <option value="all">All Projects ({projectsList.length})</option>
+              <option value="all">{isDesigner ? `All Assigned Projects (${projectsList.length})` : `All Projects (${projectsList.length})`}</option>
               {projectsList.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -93,22 +107,24 @@ export default function OrganizationCalendarPage() {
             </select>
           </div>
 
-          {/* Assigned Owner */}
-          <div>
-            <label className="block text-[#86868b] font-medium mb-1">Assigned Owner</label>
-            <select
-              value={selectedAssigneeId}
-              onChange={(e) => setSelectedAssigneeId(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
-            >
-              <option value="all">All Team Members</option>
-              {teamMembers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Assigned Owner: Excluded for Designer */}
+          {!isDesigner && (
+            <div>
+              <label className="block text-[#86868b] font-medium mb-1">Assigned Owner</label>
+              <select
+                value={selectedAssigneeId}
+                onChange={(e) => setSelectedAssigneeId(e.target.value)}
+                className="w-full rounded-xl border border-black/[0.12] bg-[#fbfbfd] p-2 text-[#1d1d1f]"
+              >
+                <option value="all">All Team Members</option>
+                {teamMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Work Type */}
           <div>

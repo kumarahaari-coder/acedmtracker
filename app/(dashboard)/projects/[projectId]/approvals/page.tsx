@@ -140,6 +140,26 @@ export default function ApprovalsQueuePage() {
     }
   };
 
+  if (activeRole === "designer" || activeRole === "client") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6 space-y-4">
+        <div className="rounded-full bg-red-50 p-3 text-red-600">
+          <AlertCircle className="h-8 w-8" />
+        </div>
+        <h2 className="text-xl font-bold text-[#1d1d1f]">403 Forbidden — Access Denied</h2>
+        <p className="text-xs text-[#86868b] max-w-md">
+          Project approvals are restricted to reviewers (Founders, Admins, and Consultants). Designers submit deliverables directly for review from the deliverable editor.
+        </p>
+        <Link
+          href={`/projects/${projectId}`}
+          className="rounded-full bg-[#0071e3] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0077ed] transition"
+        >
+          Return to Project Overview
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 sm:p-10 max-w-7xl mx-auto space-y-6 animate-in fade-in">
       {/* Header */}

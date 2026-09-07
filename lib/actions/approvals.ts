@@ -3,7 +3,7 @@
 import { db } from "../db";
 import { projects, contentItems, contentAssignments, users, projectMemberships, approvalDecisions, submissionVersions, founderOverrides } from "../db/schema";
 import { eq, and, sql, isNull, isNotNull, inArray, desc } from "drizzle-orm";
-import { getAuthoritativeUser } from "../auth/session";
+import { getAuthoritativeUser, requireApprovalReviewer, requireProjectAccess } from "../auth/session";
 import { resolveProjectId } from "../compat/resolver";
 import { ExecutionProfiler } from "../observability/profiler";
 import { ContentPlatform, ContentType, ContentStage, ScopeClassification } from "../types";
@@ -195,12 +195,13 @@ export async function getAuthoritativeGlobalApprovalQueueAction(
   data?: GlobalApprovalQueueDTO;
   error?: string;
 }> {
+  const profiler = new ExecutionProfiler("getAuthoritativeGlobalApprovalQueueAction");
   try {
-    const profiler = new ExecutionProfiler("getAuthoritativeGlobalApprovalQueueAction");
-    const actor = await getAuthoritativeUser(actorUserId);
-    if (!actor || actor.status !== "active") {
-      return { success: false, error: "Unauthorized: Active user session required" };
+    const reviewerAuth = await requireApprovalReviewer(actorUserId);
+    if (!reviewerAuth.allowed || !reviewerAuth.user) {
+      return { success: false, error: reviewerAuth.error || "Unauthorized" };
     }
+    const actor = reviewerAuth.user;
 
     profiler.mark("auth-resolution");
 
@@ -514,8 +515,11 @@ export async function recordApprovalDecisionAction(params: {
   note?: string;
 }) {
   try {
-    const reviewer = await getAuthoritativeUser(params.actorUserId);
-    if (!reviewer) return { success: false, error: "Unauthorized" };
+    const reviewerAuth = await requireApprovalReviewer(params.actorUserId);
+    if (!reviewerAuth.allowed || !reviewerAuth.user) {
+      return { success: false, error: reviewerAuth.error || "Unauthorized" };
+    }
+    const reviewer = reviewerAuth.user;
 
     const [version] = await db.select().from(submissionVersions).where(eq(submissionVersions.id, params.submissionVersionId)).limit(1);
     if (!version) return { success: false, error: "Submission version not found" };
@@ -607,8 +611,11 @@ export async function revokeApprovalDecisionAction(params: {
   reason?: string;
 }) {
   try {
-    const actor = await getAuthoritativeUser(params.actorUserId);
-    if (!actor) return { success: false, error: "Unauthorized" };
+    const reviewerAuth = await requireApprovalReviewer(params.actorUserId);
+    if (!reviewerAuth.allowed || !reviewerAuth.user) {
+      return { success: false, error: reviewerAuth.error || "Unauthorized" };
+    }
+    const actor = reviewerAuth.user;
 
     const [updated] = await db
       .update(approvalDecisions)
@@ -766,10 +773,11 @@ export async function getAuthoritativeProjectApprovalQueueAction(
   const profiler = new ExecutionProfiler("getAuthoritativeProjectApprovalQueueAction");
 
   try {
-    const authUser = await getAuthoritativeUser(actorUserId);
-    if (!authUser) {
-      return { success: false, error: "Unauthorized" };
+    const reviewerAuth = await requireApprovalReviewer(actorUserId);
+    if (!reviewerAuth.allowed || !reviewerAuth.user) {
+      return { success: false, error: reviewerAuth.error || "Unauthorized" };
     }
+    const authUser = reviewerAuth.user;
     profiler.mark("auth-resolution");
 
     if (!projectId) {
@@ -795,22 +803,9 @@ export async function getAuthoritativeProjectApprovalQueueAction(
       return { success: false, error: "Project not found or inaccessible" };
     }
 
-    if (isClient) {
-      const [membership] = await db
-        .select({ id: projectMemberships.id })
-        .from(projectMemberships)
-        .where(
-          and(
-            eq(projectMemberships.projectId, resolvedProjId),
-            eq(projectMemberships.userId, authUser.id),
-            eq(projectMemberships.status, "active")
-          )
-        )
-        .limit(1);
-
-      if (!membership) {
-        return { success: false, error: "Access denied to this project" };
-      }
+    const access = await requireProjectAccess(authUser.id, resolvedProjId);
+    if (!access.allowed) {
+      return { success: false, error: access.reason || "Access denied to this project" };
     }
 
     // 2. Query candidates: active, non-deleted, non-draft deliverables for this project

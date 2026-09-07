@@ -1,9 +1,9 @@
 "use server";
 
 import { db } from "../db";
-import { projects, projectMemberships, users, contentItems } from "../db/schema";
-import { eq, and, sql, gte, lte } from "drizzle-orm";
-import { getAuthoritativeUser } from "../auth/session";
+import { projects, projectMemberships, users, contentItems, contentAssignments, ACTIVE_ASSIGNMENT_STATUSES } from "../db/schema";
+import { eq, and, sql, gte, lte, inArray } from "drizzle-orm";
+import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { ContentItem, EffortStandard } from "../types";
 import { getCachedEffortStandards } from "../cache/effortStandardsCache";
 import { ExecutionProfiler } from "../observability/profiler";
@@ -48,7 +48,8 @@ export interface CalendarDataDTO {
 export async function getAuthoritativeCalendarDataAction(
   projectId: string,
   year: number,
-  month: number // 0-indexed month (0 = Jan, 11 = Dec)
+  month: number, // 0-indexed month (0 = Jan, 11 = Dec)
+  actorUserId?: string
 ): Promise<{
   success: boolean;
   data?: CalendarDataDTO;
@@ -56,9 +57,16 @@ export async function getAuthoritativeCalendarDataAction(
 }> {
   const profiler = new ExecutionProfiler("getAuthoritativeCalendarDataAction");
   try {
-    const authUser = await getAuthoritativeUser();
+    const resolvedUserId = (process.env.NODE_ENV === "test" || process.env.VITEST) ? actorUserId : undefined;
+    const authUser = await getAuthoritativeUser(resolvedUserId);
     if (!authUser) return { success: false, error: "Unauthorized" };
     profiler.mark("auth-resolution");
+
+    // Enforce project membership / organization authority
+    const access = await requireProjectAccess(authUser.id, projectId);
+    if (!access.allowed) {
+      return { success: false, error: access.reason || "403 Forbidden: Project access denied" };
+    }
 
     const orgId = authUser.orgId;
 
@@ -249,21 +257,106 @@ export interface OrganizationCalendarItem {
  * Organization-wide calendar action.
  * Returns deliverables across projects using set-based SQL with limits.
  */
-export async function getAuthoritativeOrganizationCalendarAction(): Promise<{
+export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: string): Promise<{
   success: boolean;
   items: OrganizationCalendarItem[];
   projects: Array<{ id: string; name: string }>;
   teamMembers: Array<{ id: string; name: string }>;
+  isDesigner?: boolean;
   error?: string;
 }> {
   try {
-    const authUser = await getAuthoritativeUser();
+    const resolvedUserId = (process.env.NODE_ENV === "test" || process.env.VITEST) ? actorUserId : undefined;
+    const authUser = await getAuthoritativeUser(resolvedUserId);
     if (!authUser) {
       return { success: false, items: [], projects: [], teamMembers: [], error: "Unauthorized" };
     }
 
     const orgId = authUser.orgId;
+    const isDesigner = authUser.organizationRole === "designer";
 
+    if (isDesigner) {
+      // 1. Designer Scope: ONLY active deliverables assigned to this designer in projects where they are active members
+      const [itemRowsRes, projectRows] = await Promise.all([
+        db.execute(sql`
+          SELECT 
+            ci.id,
+            ci.project_id as "projectId",
+            p.name as "projectName",
+            ci.title,
+            COALESCE(ci.work_type, ci.content_type) as "workType",
+            ci.platform,
+            ci.stage,
+            CASE 
+              WHEN ci.stage = 'approved' THEN 'Approved'
+              WHEN ci.stage = 'in_review' THEN 'Under Review'
+              WHEN ci.stage = 'changes_requested' THEN 'Changes Requested'
+              ELSE 'Draft'
+            END as "approvalStatus",
+            ca.assignee_user_id as "assignedOwnerId",
+            u.full_name as "assignedOwnerName",
+            COALESCE(ci.final_internal_deadline::text, ci.scheduled_publication_date::text, ci.submission_deadline::text) as "deadline",
+            ci.scheduled_publication_date::text as "scheduledPublicationDate",
+            ci.submission_deadline::text as "submissionDeadline"
+          FROM content_items ci
+          JOIN projects p ON ci.project_id = p.id
+          JOIN project_memberships pm ON pm.project_id = p.id 
+            AND pm.user_id = ${authUser.id} 
+            AND pm.status = 'active'
+            AND pm.org_id = ${orgId}
+          JOIN content_assignments ca ON ca.content_item_id = ci.id 
+            AND ca.assignee_user_id = ${authUser.id}
+            AND ca.status IN ('assigned', 'accepted', 'in_progress')
+          LEFT JOIN users u ON u.id = ca.assignee_user_id
+          WHERE ci.org_id = ${orgId} 
+            AND ci.deleted_at IS NULL
+            AND p.status = 'active'
+          ORDER BY ci.created_at DESC
+          LIMIT 200
+        `),
+        db.execute(sql`
+          SELECT DISTINCT p.id, p.name
+          FROM projects p
+          JOIN project_memberships pm ON pm.project_id = p.id
+          WHERE pm.user_id = ${authUser.id} 
+            AND pm.status = 'active' 
+            AND p.org_id = ${orgId} 
+            AND p.status = 'active'
+          ORDER BY p.name ASC
+        `),
+      ]);
+
+      const items: OrganizationCalendarItem[] = (itemRowsRes.rows as any[]).map((r) => ({
+        id: r.id,
+        projectId: r.projectId,
+        projectName: r.projectName,
+        title: r.title,
+        workType: r.workType || "Standard",
+        platform: r.platform || "Instagram",
+        stage: r.stage || "draft",
+        approvalStatus: r.approvalStatus || "Draft",
+        assignedOwnerId: r.assignedOwnerId || undefined,
+        assignedOwnerName: r.assignedOwnerName || undefined,
+        deadline: r.deadline || undefined,
+        scheduledPublicationDate: r.scheduledPublicationDate || undefined,
+        submissionDeadline: r.submissionDeadline || undefined,
+      }));
+
+      const projectsList: Array<{ id: string; name: string }> = (projectRows.rows as any[]).map((p) => ({
+        id: p.id,
+        name: p.name,
+      }));
+
+      return {
+        success: true,
+        items,
+        projects: projectsList,
+        teamMembers: [{ id: authUser.id, name: authUser.fullName }],
+        isDesigner: true,
+      };
+    }
+
+    // 2. Founder / Admin / Organization Scope
     const [itemRowsRes, projectRows, memberRows] = await Promise.all([
       db.execute(sql`
         SELECT 
@@ -287,7 +380,8 @@ export async function getAuthoritativeOrganizationCalendarAction(): Promise<{
           ci.submission_deadline::text as "submissionDeadline"
         FROM content_items ci
         JOIN projects p ON ci.project_id = p.id
-        LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id
+        LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id 
+          AND ca.status IN ('assigned', 'accepted', 'in_progress')
         LEFT JOIN users u ON u.id = ca.assignee_user_id
         WHERE ci.org_id = ${orgId} AND ci.deleted_at IS NULL
         ORDER BY ci.created_at DESC
@@ -324,6 +418,7 @@ export async function getAuthoritativeOrganizationCalendarAction(): Promise<{
       items,
       projects: projectRows,
       teamMembers: memberRows,
+      isDesigner: false,
     };
   } catch (err: any) {
     console.error("[getAuthoritativeOrganizationCalendarAction] error:", err);
