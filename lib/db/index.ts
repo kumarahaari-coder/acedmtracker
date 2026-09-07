@@ -8,6 +8,15 @@ export function getDatabaseUrl(): string {
     console.warn("[Database] DATABASE_URL is not set, falling back to localhost");
     return "postgres://postgres:postgres@localhost:5432/neondb";
   }
+
+  // Safety Guard: Vercel Preview environments must NEVER connect to the production Neon endpoint
+  const vercelEnv = process.env.VERCEL_ENV;
+  if (vercelEnv === "preview" && url.includes("ep-dry-forest-azifaoyz")) {
+    throw new Error(
+      "[CRITICAL DATABASE SAFETY GUARD] Vercel Preview environment is strictly forbidden from connecting to the production Neon database (ep-dry-forest-azifaoyz). Configure the staging Neon branch for Preview."
+    );
+  }
+
   return url;
 }
 

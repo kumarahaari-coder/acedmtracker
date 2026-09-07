@@ -51,4 +51,24 @@ describe("Architectural Regression Guards — Cloudflare 1102 & Worker CPU Safet
     expect(gqlParsed.cpuTimeMs).toBe(10.0);
     expect(gqlParsed.wallTimeMs).toBe(52.0);
   });
+
+  it("4. Vercel Preview environment strictly rejects connecting to production Neon database", async () => {
+    const { getDatabaseUrl } = await import("../../lib/db");
+    const originalVercelEnv = process.env.VERCEL_ENV;
+    const originalDbUrl = process.env.DATABASE_URL;
+
+    try {
+      process.env.VERCEL_ENV = "preview";
+      process.env.DATABASE_URL = "postgresql://user:pass@ep-dry-forest-azifaoyz.neon.tech/neondb";
+
+      expect(() => getDatabaseUrl()).toThrowError(/CRITICAL DATABASE SAFETY GUARD/);
+
+      // Verify staging branch is accepted under preview
+      process.env.DATABASE_URL = "postgresql://user:pass@ep-red-waterfall-azbw2scy.neon.tech/neondb";
+      expect(getDatabaseUrl()).toBe("postgresql://user:pass@ep-red-waterfall-azbw2scy.neon.tech/neondb");
+    } finally {
+      process.env.VERCEL_ENV = originalVercelEnv;
+      process.env.DATABASE_URL = originalDbUrl;
+    }
+  });
 });
