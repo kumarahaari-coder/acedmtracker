@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRole } from "@/lib/context/RoleContext";
 import {
   getEffortStandardsAction,
+  getEffortStandardHistoryAction,
   createEffortStandardAction,
   updateEffortStandardAction,
 } from "@/lib/actions/effortStandards";
@@ -44,6 +45,11 @@ export default function EffortStandardsAdminPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Version History modal state
+  const [historyModalWorkType, setHistoryModalWorkType] = useState<string | null>(null);
+  const [historyList, setHistoryList] = useState<EffortStandard[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   // Edit draft state
   const [draftContentHours, setDraftContentHours] = useState(0);
   const [draftProdHours, setDraftProdHours] = useState(0);
@@ -76,6 +82,19 @@ export default function EffortStandardsAdminPage() {
       setNotification({ type: "error", message: res.error || "Failed to load effort standards" });
     }
     setLoading(false);
+  };
+
+  const handleOpenHistory = async (workType: string) => {
+    setHistoryModalWorkType(workType);
+    setLoadingHistory(true);
+    const res = await getEffortStandardHistoryAction(workType);
+    if (res.success) {
+      setHistoryList(res.history);
+    } else {
+      setHistoryList([]);
+      setNotification({ type: "error", message: res.error || "Failed to load version history" });
+    }
+    setLoadingHistory(false);
   };
 
   const handleStartEdit = (std: EffortStandard) => {
@@ -373,7 +392,7 @@ export default function EffortStandardsAdminPage() {
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
                         {isEditing ? (
-                          <div className="inline-flex items-center gap-1.5">
+                          <div className="inline-flex items-center gap-1.5 justify-end">
                             <button
                               onClick={() => handleSaveEdit(std.id)}
                               disabled={saving}
@@ -389,12 +408,22 @@ export default function EffortStandardsAdminPage() {
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => handleStartEdit(std)}
-                            className="px-3 py-1 bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#1d1d1f] rounded-lg text-[12px] font-medium transition"
-                          >
-                            Edit
-                          </button>
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <button
+                              onClick={() => handleOpenHistory(std.workType)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#6e6e73] hover:text-[#1d1d1f] rounded-lg text-[12px] font-medium transition"
+                              title="View version history"
+                            >
+                              <History className="h-3.5 w-3.5 text-[#86868b]" />
+                              <span>History</span>
+                            </button>
+                            <button
+                              onClick={() => handleStartEdit(std)}
+                              className="px-3 py-1 bg-[#0071e3]/10 hover:bg-[#0071e3]/20 text-[#0071e3] rounded-lg text-[12px] font-medium transition"
+                            >
+                              Edit
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -520,6 +549,109 @@ export default function EffortStandardsAdminPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Version History Modal */}
+      {historyModalWorkType && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-black/[0.08] animate-in fade-in zoom-in-95 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-black/[0.06]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-[#0071e3] uppercase tracking-wider">Version History</span>
+                  <span className="text-[11px] text-[#86868b]">• Complete Audit Trail</span>
+                </div>
+                <h3 className="text-lg font-bold text-[#1d1d1f] mt-0.5">{historyModalWorkType}</h3>
+              </div>
+              <button
+                onClick={() => setHistoryModalWorkType(null)}
+                className="text-[#86868b] hover:text-[#1d1d1f] p-1 rounded-lg hover:bg-[#f5f5f7] transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-[#f5f5f7] rounded-xl text-xs text-[#6e6e73] space-y-1">
+              <p className="font-semibold text-[#1d1d1f]">Immutable Deliverable Linkage</p>
+              <p>
+                Historical deliverables retain their snapshotted values and remain linked to their original standard version.
+                Editing creates the next active version (V+1) without mutating historical records.
+              </p>
+            </div>
+
+            <div className="max-h-96 overflow-y-auto space-y-2.5 pr-1">
+              {loadingHistory ? (
+                <div className="py-8 text-center text-sm text-[#86868b]">Loading version history...</div>
+              ) : historyList.length === 0 ? (
+                <div className="py-8 text-center text-sm text-[#86868b]">No version history found.</div>
+              ) : (
+                historyList.map((ver) => (
+                  <div
+                    key={ver.id}
+                    className={`p-4 rounded-xl border transition ${
+                      ver.active
+                        ? "bg-[#34c759]/5 border-[#34c759]/30"
+                        : "bg-[#fbfbfd] border-black/[0.06]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-[#1d1d1f]">Version {ver.version}</span>
+                        {ver.active ? (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#34c759]/15 text-[#248a3d]">
+                            Current Active
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-black/[0.05] text-[#86868b]">
+                            Superseded
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-[#86868b]">
+                        Effective:{" "}
+                        {new Date(ver.effectiveFrom).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-3 mt-3 text-xs">
+                      <div>
+                        <span className="text-[#86868b] block text-[11px]">Total Effort</span>
+                        <span className="font-bold text-[#0071e3]">{(ver.totalSeconds / 3600).toFixed(2)}h</span>
+                      </div>
+                      <div>
+                        <span className="text-[#86868b] block text-[11px]">Content / Prod</span>
+                        <span className="font-medium text-[#1d1d1f]">
+                          {(ver.contentSeconds / 3600).toFixed(2)}h / {(ver.productionSeconds / 3600).toFixed(2)}h
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[#86868b] block text-[11px]">Lead Time</span>
+                        <span className="font-medium text-[#1d1d1f]">{ver.leadTimeWorkdays} days</span>
+                      </div>
+                      <div>
+                        <span className="text-[#86868b] block text-[11px]">Default Role</span>
+                        <span className="font-medium text-[#1d1d1f]">{ver.defaultRole}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-black/[0.06]">
+              <button
+                onClick={() => setHistoryModalWorkType(null)}
+                className="px-4 py-2 bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#1d1d1f] rounded-full text-xs font-semibold transition"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

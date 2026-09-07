@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useRole } from "@/lib/context/RoleContext";
 import { getAuthoritativePerformanceOverviewAction } from "@/lib/actions/performance";
 import {
@@ -11,19 +12,14 @@ import {
 } from "@/lib/calculations/operationalEngine";
 import { KpiDrilldownModal, DrilldownType } from "@/components/performance/KpiDrilldownModal";
 import {
-  LineChart,
   Users,
   Briefcase,
-  TrendingUp,
   Clock,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Zap,
   ChevronRight,
   Filter,
-  Calendar,
-  Layers,
   ArrowUpRight,
 } from "lucide-react";
 
@@ -34,12 +30,22 @@ const PERIODS: { id: PeriodFilter; label: string }[] = [
   { id: "last_month", label: "Last Month" },
 ];
 
-export default function PerformanceOverviewPage() {
+function PerformanceOverviewContent() {
   const { activeRole } = useRole();
-  const [period, setPeriod] = useState<PeriodFilter>("this_month");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Read authoritative filter params from URL
+  const periodParam = (searchParams.get("period") as PeriodFilter) || "this_month";
+  const roleParam = searchParams.get("role") || "all";
+  const projectParam = searchParams.get("project") || "all";
+
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<TeamPerformanceOverviewDTO | null>(null);
   const [projectScorecards, setProjectScorecards] = useState<ProjectPerformanceScorecard[]>([]);
+  const [availableProjects, setAvailableProjects] = useState<{ id: string; name: string; clientBrand: string }[]>([]);
+  const [availableRoles, setAvailableRoles] = useState<string[]>([]);
 
   // Drilldown Modal State
   const [drilldownModal, setDrilldownModal] = useState<{
@@ -58,17 +64,47 @@ export default function PerformanceOverviewPage() {
 
   useEffect(() => {
     loadPerformanceData();
-  }, [period]);
+  }, [periodParam, roleParam, projectParam]);
 
   const loadPerformanceData = async () => {
     setLoading(true);
-    const res = await getAuthoritativePerformanceOverviewAction(period);
+    const res = await getAuthoritativePerformanceOverviewAction({
+      period: periodParam,
+      role: roleParam !== "all" ? roleParam : undefined,
+      projectId: projectParam !== "all" ? projectParam : undefined,
+    });
     if (res.success && res.overview) {
       setOverview(res.overview);
       setProjectScorecards(res.projectScorecards || []);
+      if (res.availableProjects) setAvailableProjects(res.availableProjects);
+      if (res.availableRoles) setAvailableRoles(res.availableRoles);
     }
     setLoading(false);
   };
+
+  const updateFilters = (updates: { period?: string; role?: string; project?: string }) => {
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    if (updates.period !== undefined) {
+      if (updates.period === "this_month") params.delete("period");
+      else params.set("period", updates.period);
+    }
+    if (updates.role !== undefined) {
+      if (updates.role === "all") params.delete("role");
+      else params.set("role", updates.role);
+    }
+    if (updates.project !== undefined) {
+      if (updates.project === "all") params.delete("project");
+      else params.set("project", updates.project);
+    }
+    const qs = params.toString();
+    router.push(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+  };
+
+  const handleResetFilters = () => {
+    router.push(pathname, { scroll: false });
+  };
+
+  const isFiltered = periodParam !== "this_month" || roleParam !== "all" || projectParam !== "all";
 
   const openDrilldown = (type: DrilldownType, title: string, subtitle?: string) => {
     if (!overview) return;
@@ -89,7 +125,7 @@ export default function PerformanceOverviewPage() {
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-8">
-      {/* Top Header & Navigation Tabs */}
+      {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-black/[0.08] pb-5">
         <div>
           <div className="flex items-center gap-2">
@@ -102,23 +138,6 @@ export default function PerformanceOverviewPage() {
           <p className="text-sm text-[#86868b] mt-1">
             Live team capacity, work allocation, timer actuals, delivery on-time rates, and project health.
           </p>
-        </div>
-
-        {/* Period Filter Buttons */}
-        <div className="flex items-center gap-1.5 bg-[#f5f5f7] p-1 rounded-full border border-black/[0.06] self-start md:self-auto">
-          {PERIODS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setPeriod(p.id)}
-              className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium transition ${
-                period === p.id
-                  ? "bg-white text-[#1d1d1f] shadow-sm font-semibold"
-                  : "text-[#6e6e73] hover:text-[#1d1d1f]"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -149,6 +168,95 @@ export default function PerformanceOverviewPage() {
           Effort Analysis
         </Link>
       </div>
+
+      {/* Authoritative Filter Toolbar: Period | Role | Project */}
+      <div className="bg-[#fbfbfd] p-4 rounded-2xl border border-black/[0.08] shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Period Selector Pills */}
+          <div className="flex items-center gap-1 bg-[#f5f5f7] p-1 rounded-full border border-black/[0.06]">
+            {PERIODS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => updateFilters({ period: p.id })}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition ${
+                  periodParam === p.id
+                    ? "bg-white text-[#1d1d1f] shadow-sm font-semibold"
+                    : "text-[#6e6e73] hover:text-[#1d1d1f]"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Role Filter */}
+          <div className="flex items-center gap-1.5 bg-white px-3.5 py-1.5 rounded-full border border-black/[0.08] shadow-sm text-xs">
+            <span className="text-[#86868b] font-medium">Role:</span>
+            <select
+              value={roleParam}
+              onChange={(e) => updateFilters({ role: e.target.value })}
+              className="bg-transparent font-semibold text-[#1d1d1f] focus:outline-none capitalize cursor-pointer"
+            >
+              <option value="all">All Roles</option>
+              {availableRoles.map((r) => (
+                <option key={r} value={r.toLowerCase()}>
+                  {r.charAt(0).toUpperCase() + r.slice(1).replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Project Filter */}
+          <div className="flex items-center gap-1.5 bg-white px-3.5 py-1.5 rounded-full border border-black/[0.08] shadow-sm text-xs">
+            <span className="text-[#86868b] font-medium">Project:</span>
+            <select
+              value={projectParam}
+              onChange={(e) => updateFilters({ project: e.target.value })}
+              className="bg-transparent font-semibold text-[#1d1d1f] focus:outline-none cursor-pointer max-w-[220px] truncate"
+            >
+              <option value="all">All Projects</option>
+              {availableProjects.map((proj) => (
+                <option key={proj.id} value={proj.id}>
+                  {proj.name} {proj.clientBrand ? `(${proj.clientBrand})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Reset Filters Action */}
+        {isFiltered && (
+          <button
+            onClick={handleResetFilters}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#6e6e73] hover:text-[#1d1d1f] bg-white border border-black/[0.08] shadow-sm hover:bg-[#f5f5f7] transition self-start md:self-auto cursor-pointer"
+          >
+            <RotateCcw className="h-3.5 w-3.5 text-[#86868b]" />
+            <span>Reset filters</span>
+          </button>
+        )}
+      </div>
+
+      {/* Empty State Banner when Filter Intersection Produces No Records */}
+      {!loading && overview?.employeeScorecards.length === 0 && (
+        <div className="p-8 text-center bg-white rounded-2xl border border-black/[0.08] shadow-sm space-y-3">
+          <div className="h-10 w-10 rounded-full bg-[#f5f5f7] flex items-center justify-center mx-auto text-[#86868b]">
+            <Filter className="h-5 w-5" />
+          </div>
+          <h3 className="text-base font-bold text-[#1d1d1f]">No performance data for the selected filters</h3>
+          <p className="text-xs text-[#86868b] max-w-md mx-auto">
+            There are no tracked records or assigned members matching the selected period, role, and project combination.
+          </p>
+          {isFiltered && (
+            <button
+              onClick={handleResetFilters}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#1d1d1f] hover:bg-black text-white rounded-full text-xs font-semibold transition mt-2 cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Reset filters</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Top Authoritative KPI Cards Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
@@ -267,7 +375,7 @@ export default function PerformanceOverviewPage() {
                 </tr>
               ) : overview?.employeeScorecards.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-[#86868b]">No active employees configured.</td>
+                  <td colSpan={10} className="py-8 text-center text-[#86868b]">No performance data for the selected filters.</td>
                 </tr>
               ) : (
                 overview?.employeeScorecards.map((card) => {
@@ -382,7 +490,7 @@ export default function PerformanceOverviewPage() {
                 </tr>
               ) : projectScorecards.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-[#86868b]">No active projects found.</td>
+                  <td colSpan={8} className="py-8 text-center text-[#86868b]">No performance data for the selected filters.</td>
                 </tr>
               ) : (
                 projectScorecards.map((proj) => (
@@ -441,5 +549,13 @@ export default function PerformanceOverviewPage() {
         changeRequests={drilldownModal.changeRequests}
       />
     </div>
+  );
+}
+
+export default function PerformanceOverviewPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-sm text-[#86868b]">Loading performance overview...</div>}>
+      <PerformanceOverviewContent />
+    </Suspense>
   );
 }

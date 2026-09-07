@@ -13,6 +13,7 @@ import {
   effortStandards,
   projectCommitments,
   projectPerformanceInputs,
+  projectMemberships,
 } from "../db/schema";
 import { getAuthoritativeUser } from "../auth/session";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
@@ -280,15 +281,27 @@ async function fetchAuthoritativeWorkspaceEntities(orgId: string, options?: { fr
   };
 }
 
-// 1. Performance Overview Action
+// 1. Performance Overview Action with Bounded PostgreSQL Filtering
+export interface PerformanceOverviewFilterOptions {
+  period?: PeriodFilter;
+  customStart?: string;
+  customEnd?: string;
+  role?: string;
+  projectId?: string;
+}
+
 export async function getAuthoritativePerformanceOverviewAction(
-  filter: PeriodFilter = "this_month",
-  customStart?: string,
-  customEnd?: string
+  filterOrOptions?: PeriodFilter | PerformanceOverviewFilterOptions,
+  argCustomStart?: string,
+  argCustomEnd?: string,
+  argRole?: string,
+  argProjectId?: string
 ): Promise<{
   success: boolean;
   overview?: TeamPerformanceOverviewDTO;
   projectScorecards?: ProjectPerformanceScorecard[];
+  availableProjects?: { id: string; name: string; clientBrand: string }[];
+  availableRoles?: string[];
   error?: string;
 }> {
   try {
@@ -296,25 +309,599 @@ export async function getAuthoritativePerformanceOverviewAction(
     if (!authUser) return { success: false, error: "Unauthorized" };
     if (authUser.organizationRole === "client") return { success: false, error: "Forbidden for client role" };
 
-    const data = await fetchAuthoritativeWorkspaceEntities(authUser.orgId);
+    // Normalize parameters
+    let filter: PeriodFilter = "this_month";
+    let customStart: string | undefined;
+    let customEnd: string | undefined;
+    let selectedRole: string | undefined;
+    let selectedProjectId: string | undefined;
+
+    if (typeof filterOrOptions === "object" && filterOrOptions !== null) {
+      filter = filterOrOptions.period || "this_month";
+      customStart = filterOrOptions.customStart;
+      customEnd = filterOrOptions.customEnd;
+      selectedRole = filterOrOptions.role;
+      selectedProjectId = filterOrOptions.projectId;
+    } else {
+      filter = filterOrOptions || "this_month";
+      customStart = argCustomStart;
+      customEnd = argCustomEnd;
+      selectedRole = argRole;
+      selectedProjectId = argProjectId;
+    }
+
     const period = getPeriodDateRange(filter, customStart, customEnd);
+    const normalizedRole = selectedRole && selectedRole !== "all" ? selectedRole.toLowerCase() : null;
 
-    const overview = calculateTeamPerformanceOverview(
-      data.users,
+    // 1. Resolve Authorized Projects based on Current User Role
+    let authorizedProjects: {
+      id: string;
+      orgId: string;
+      name: string;
+      clientName: string | null;
+      briefMarkdown: string | null;
+      engagementModel: string | null;
+      status: string;
+      createdAt: Date;
+    }[] = [];
+
+    if (authUser.organizationRole === "founder" || authUser.organizationRole === "admin") {
+      authorizedProjects = await db
+        .select({
+          id: projects.id,
+          orgId: projects.orgId,
+          name: projects.name,
+          clientName: projects.clientName,
+          briefMarkdown: projects.briefMarkdown,
+          engagementModel: projects.engagementModel,
+          status: projects.status,
+          createdAt: projects.createdAt,
+        })
+        .from(projects)
+        .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`))
+        .orderBy(projects.name);
+    } else if (authUser.organizationRole === "consultant") {
+      authorizedProjects = await db
+        .select({
+          id: projects.id,
+          orgId: projects.orgId,
+          name: projects.name,
+          clientName: projects.clientName,
+          briefMarkdown: projects.briefMarkdown,
+          engagementModel: projects.engagementModel,
+          status: projects.status,
+          createdAt: projects.createdAt,
+        })
+        .from(projects)
+        .innerJoin(
+          projectMemberships,
+          and(
+            eq(projectMemberships.projectId, projects.id),
+            eq(projectMemberships.userId, authUser.id),
+            eq(projectMemberships.status, "active")
+          )
+        )
+        .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`))
+        .orderBy(projects.name);
+    } else {
+      // Designer / other roles: projects where user has active membership or active/historical assignments
+      const [memberProjects, assignedProjects] = await Promise.all([
+        db
+          .select({
+            id: projects.id,
+            orgId: projects.orgId,
+            name: projects.name,
+            clientName: projects.clientName,
+            briefMarkdown: projects.briefMarkdown,
+            engagementModel: projects.engagementModel,
+            status: projects.status,
+            createdAt: projects.createdAt,
+          })
+          .from(projects)
+          .innerJoin(
+            projectMemberships,
+            and(
+              eq(projectMemberships.projectId, projects.id),
+              eq(projectMemberships.userId, authUser.id),
+              eq(projectMemberships.status, "active")
+            )
+          )
+          .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`)),
+        db
+          .select({
+            id: projects.id,
+            orgId: projects.orgId,
+            name: projects.name,
+            clientName: projects.clientName,
+            briefMarkdown: projects.briefMarkdown,
+            engagementModel: projects.engagementModel,
+            status: projects.status,
+            createdAt: projects.createdAt,
+          })
+          .from(projects)
+          .innerJoin(
+            contentAssignments,
+            and(
+              eq(contentAssignments.projectId, projects.id),
+              eq(contentAssignments.assigneeUserId, authUser.id)
+            )
+          )
+          .where(and(eq(projects.orgId, authUser.orgId), sql`${projects.deletedAt} IS NULL`)),
+      ]);
+
+      const seenIds = new Set<string>();
+      const combined: typeof memberProjects = [];
+      for (const p of [...memberProjects, ...assignedProjects]) {
+        if (!seenIds.has(p.id)) {
+          seenIds.add(p.id);
+          combined.push(p);
+        }
+      }
+      combined.sort((a, b) => a.name.localeCompare(b.name));
+      authorizedProjects = combined;
+    }
+
+    const authorizedProjectMap = new Map(authorizedProjects.map((p) => [p.id, p]));
+    const availableProjects = authorizedProjects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      clientBrand: p.clientName || "",
+    }));
+
+    // 2. Fetch Available Roles in the Organization
+    const roleRows = await db
+      .selectDistinct({ role: users.organizationRole })
+      .from(users)
+      .where(
+        and(
+          eq(users.orgId, authUser.orgId),
+          sql`${users.deletedAt} IS NULL`,
+          sql`${users.organizationRole} != 'client'`
+        )
+      )
+      .orderBy(users.organizationRole);
+    const availableRoles = roleRows.map((r) => r.role);
+
+    // 3. Validate and Scope Selected Project
+    let targetProjectIds: string[];
+    if (selectedProjectId && selectedProjectId !== "all") {
+      if (!authorizedProjectMap.has(selectedProjectId)) {
+        return { success: false, error: "Forbidden: Unauthorized project access" };
+      }
+      targetProjectIds = [selectedProjectId];
+    } else {
+      targetProjectIds = authorizedProjects.map((p) => p.id);
+    }
+
+    // 4. Resolve Scoped Candidate Users
+    let candidateUsers: {
+      id: string;
+      fullName: string;
+      email: string;
+      avatarUrl: string | null;
+      organizationRole: string;
+      status: string;
+      createdAt: Date;
+      updatedAt: Date;
+    }[] = [];
+
+    const roleCondition = normalizedRole
+      ? sql`LOWER(${users.organizationRole}) = ${normalizedRole}`
+      : sql`true`;
+
+    if (authUser.organizationRole === "designer") {
+      // Designers only see their own metrics
+      if (normalizedRole && normalizedRole !== "designer") {
+        candidateUsers = [];
+      } else {
+        const [me] = await db
+          .select({
+            id: users.id,
+            fullName: users.fullName,
+            email: users.email,
+            avatarUrl: users.avatarUrl,
+            organizationRole: users.organizationRole,
+            status: users.status,
+            createdAt: users.createdAt,
+            updatedAt: users.updatedAt,
+          })
+          .from(users)
+          .where(eq(users.id, authUser.id))
+          .limit(1);
+        candidateUsers = me ? [me] : [];
+      }
+    } else if (selectedProjectId && selectedProjectId !== "all") {
+      // Bounded to users who have membership, assignments, or work sessions on this project
+      const memberOrActiveUsers = await db
+        .selectDistinct({
+          id: users.id,
+          fullName: users.fullName,
+          email: users.email,
+          avatarUrl: users.avatarUrl,
+          organizationRole: users.organizationRole,
+          status: users.status,
+          createdAt: users.createdAt,
+          updatedAt: users.updatedAt,
+        })
+        .from(users)
+        .leftJoin(
+          projectMemberships,
+          and(
+            eq(projectMemberships.userId, users.id),
+            eq(projectMemberships.projectId, selectedProjectId),
+            eq(projectMemberships.status, "active")
+          )
+        )
+        .leftJoin(
+          contentAssignments,
+          and(
+            eq(contentAssignments.assigneeUserId, users.id),
+            eq(contentAssignments.projectId, selectedProjectId)
+          )
+        )
+        .leftJoin(
+          workSessions,
+          and(
+            eq(workSessions.userId, users.id),
+            eq(workSessions.projectId, selectedProjectId)
+          )
+        )
+        .where(
+          and(
+            eq(users.orgId, authUser.orgId),
+            sql`${users.deletedAt} IS NULL`,
+            sql`${users.organizationRole} != 'client'`,
+            sql`(${projectMemberships.id} IS NOT NULL OR ${contentAssignments.id} IS NOT NULL OR ${workSessions.id} IS NOT NULL)`,
+            roleCondition
+          )
+        )
+        .orderBy(users.fullName);
+      candidateUsers = memberOrActiveUsers;
+    } else {
+      // All organization active internal users
+      candidateUsers = await db
+        .select({
+          id: users.id,
+          fullName: users.fullName,
+          email: users.email,
+          avatarUrl: users.avatarUrl,
+          organizationRole: users.organizationRole,
+          status: users.status,
+          createdAt: users.createdAt,
+          updatedAt: users.updatedAt,
+        })
+        .from(users)
+        .where(
+          and(
+            eq(users.orgId, authUser.orgId),
+            sql`${users.deletedAt} IS NULL`,
+            eq(users.status, "active"),
+            sql`${users.organizationRole} != 'client'`,
+            roleCondition
+          )
+        )
+        .orderBy(users.fullName);
+    }
+
+    const emptyOverview: TeamPerformanceOverviewDTO = {
       period,
-      data.items,
-      data.assignments,
-      data.workSessions,
-      data.changeRequests,
-      data.schedules,
-      data.adjustments
+      teamCapacityHours: 0,
+      teamAssignedHours: 0,
+      teamActualHours: 0,
+      teamRemainingHours: 0,
+      teamAllocationPercent: 0,
+      teamUtilizationPercent: 0,
+      completedTasksCount: 0,
+      onTimePercent: null,
+      reworkIncidencePercent: null,
+      adHocHours: 0,
+      goodwillHours: 0,
+      overdueTasksCount: 0,
+      activeTimersCount: 0,
+      employeeScorecards: [],
+    };
+
+    // If no candidate users or no target projects match the filter intersection
+    if (candidateUsers.length === 0 || targetProjectIds.length === 0) {
+      return {
+        success: true,
+        overview: emptyOverview,
+        projectScorecards: [],
+        availableProjects,
+        availableRoles,
+      };
+    }
+
+    // 5. Run Scoped, Bounded Parallel PostgreSQL Queries
+    const targetUserIds = candidateUsers.map((u) => u.id);
+
+    const [
+      itemRows,
+      assignmentRows,
+      sessionRows,
+      crRows,
+      scheduleRows,
+      adjustmentRows,
+      commitmentRows,
+      perfInputRows,
+    ] = await Promise.all([
+      db
+        .select()
+        .from(contentItems)
+        .where(
+          and(
+            eq(contentItems.orgId, authUser.orgId),
+            inArray(contentItems.projectId, targetProjectIds),
+            sql`${contentItems.deletedAt} IS NULL`
+          )
+        ),
+      db
+        .select()
+        .from(contentAssignments)
+        .where(
+          and(
+            eq(contentAssignments.orgId, authUser.orgId),
+            inArray(contentAssignments.projectId, targetProjectIds),
+            inArray(contentAssignments.assigneeUserId, targetUserIds)
+          )
+        ),
+      db
+        .select()
+        .from(workSessions)
+        .where(
+          and(
+            eq(workSessions.orgId, authUser.orgId),
+            inArray(workSessions.projectId, targetProjectIds),
+            inArray(workSessions.userId, targetUserIds),
+            sql`(${workSessions.status} = 'active' OR (${workSessions.startedAt}::date >= ${period.startDate} AND ${workSessions.startedAt}::date <= ${period.endDate}))`
+          )
+        ),
+      db
+        .select()
+        .from(changeRequests)
+        .where(
+          and(
+            eq(changeRequests.orgId, authUser.orgId),
+            inArray(changeRequests.projectId, targetProjectIds)
+          )
+        ),
+      db
+        .select()
+        .from(employeeCapacitySchedules)
+        .where(
+          and(
+            eq(employeeCapacitySchedules.orgId, authUser.orgId),
+            inArray(employeeCapacitySchedules.userId, targetUserIds)
+          )
+        ),
+      db
+        .select()
+        .from(capacityAdjustments)
+        .where(
+          and(
+            eq(capacityAdjustments.orgId, authUser.orgId),
+            inArray(capacityAdjustments.userId, targetUserIds),
+            sql`${capacityAdjustments.adjustmentDate} >= ${period.startDate} AND ${capacityAdjustments.adjustmentDate} <= ${period.endDate}`
+          )
+        ),
+      db
+        .select()
+        .from(projectCommitments)
+        .where(
+          and(
+            eq(projectCommitments.orgId, authUser.orgId),
+            inArray(projectCommitments.projectId, targetProjectIds)
+          )
+        ),
+      db
+        .select()
+        .from(projectPerformanceInputs)
+        .where(
+          and(
+            eq(projectPerformanceInputs.orgId, authUser.orgId),
+            inArray(projectPerformanceInputs.projectId, targetProjectIds)
+          )
+        ),
+    ]);
+
+    // 6. Map Domain Models
+    const mappedUsers: User[] = candidateUsers.map((u) => ({
+      id: u.id,
+      name: u.fullName,
+      email: u.email,
+      avatar: u.avatarUrl || "",
+      role: u.organizationRole as any,
+      status: u.status as any,
+      workingHoursPerDay: 8,
+      dateJoined: u.createdAt.toISOString(),
+      createdAt: u.createdAt.toISOString(),
+      updatedAt: u.updatedAt.toISOString(),
+    }));
+
+    const mappedProjects: Project[] = authorizedProjects
+      .filter((p) => targetProjectIds.includes(p.id))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        clientBrand: p.clientName || "",
+        avatar: "",
+        scope: p.briefMarkdown || p.engagementModel || "",
+        timezone: "Asia/Kolkata",
+        status: p.status as any,
+        targetRequirements: { posts: 0, carousels: 0, reels: 0, trialReels: 0 },
+        workflowStages: ["idea", "draft", "in_review", "approved", "published"],
+        createdAt: p.createdAt.toISOString(),
+      }));
+
+    const mappedItems: ContentItem[] = itemRows.map((i) => ({
+      id: i.id,
+      projectId: i.projectId,
+      campaignId: i.campaignId || undefined,
+      contentGroupId: i.contentGroupId || undefined,
+      title: i.title,
+      platform: i.platform as any,
+      contentType: i.contentType as any,
+      workType: i.workType || undefined,
+      workTypeId: i.workTypeId || undefined,
+      contentPillar: i.contentPillar || undefined,
+      topic: i.topic || undefined,
+      brief: i.brief || undefined,
+      referenceLink: i.referenceLink || undefined,
+      priority: (i.priority || "normal") as any,
+      workNature: (i.workNature || "planned") as any,
+      accountOwnerId: i.accountOwnerId || undefined,
+      stage: i.stage as any,
+      accountableOwnerId: "",
+      collaboratorIds: [],
+      deadlines: {
+        submissionDeadline: i.submissionDeadline ? i.submissionDeadline.toISOString() : undefined,
+        resubmissionDeadline: i.resubmissionDeadline ? i.resubmissionDeadline.toISOString() : undefined,
+        approvalTarget: i.approvalTarget ? i.approvalTarget.toISOString() : undefined,
+        scheduledPublicationDate: i.scheduledPublicationDate ? i.scheduledPublicationDate.toISOString() : undefined,
+      },
+      calculatedInternalDeadline: i.calculatedInternalDeadline ? i.calculatedInternalDeadline.toISOString() : undefined,
+      finalInternalDeadline: i.finalInternalDeadline ? i.finalInternalDeadline.toISOString() : undefined,
+      deadlineOverrideReason: i.deadlineOverrideReason || undefined,
+      standardContentSeconds: i.standardContentSeconds ?? undefined,
+      standardProductionSeconds: i.standardProductionSeconds ?? undefined,
+      revisionContentSeconds: i.revisionContentSeconds ?? undefined,
+      revisionProductionSeconds: i.revisionProductionSeconds ?? undefined,
+      finalPlannedSeconds: i.finalPlannedSeconds ?? undefined,
+      isEffortAnchor: i.isEffortAnchor ?? false,
+      completedAt: i.completedAt ? i.completedAt.toISOString() : undefined,
+      currentVersionNumber: i.currentVersionNumber,
+      publishedAt: i.publishedAt ? i.publishedAt.toISOString() : undefined,
+      liveUrl: i.liveUrl || undefined,
+      publishedByUserId: i.publishedByUserId || undefined,
+      clientVisible: i.clientVisible,
+      scopeClassification: i.scopeClassification as any,
+    }));
+
+    const mappedAssignments: ContentAssignment[] = assignmentRows.map((a) => ({
+      id: a.id,
+      projectId: a.projectId,
+      contentItemId: a.contentItemId,
+      assigneeUserId: a.assigneeUserId,
+      assignmentRole: a.assignmentRole as any,
+      status: a.status as any,
+      assignedByUserId: a.assignedByUserId,
+      assignedAt: a.assignedAt.toISOString(),
+      initialDueAt: a.initialDueAt.toISOString(),
+      currentDueAt: a.currentDueAt.toISOString(),
+      createdAt: a.createdAt.toISOString(),
+      updatedAt: a.updatedAt.toISOString(),
+    }));
+
+    const mappedSessions: WorkSession[] = sessionRows.map((s) => ({
+      id: s.id,
+      projectId: s.projectId,
+      contentItemId: s.contentItemId,
+      assignmentId: s.assignmentId,
+      userId: s.userId,
+      startedAt: s.startedAt.toISOString(),
+      endedAt: s.endedAt ? s.endedAt.toISOString() : undefined,
+      accumulatedSeconds: s.accumulatedSeconds,
+      status: s.status as any,
+      adjustments: [],
+      createdAt: s.createdAt.toISOString(),
+      updatedAt: s.updatedAt.toISOString(),
+    }));
+
+    const mappedCRs: ChangeRequest[] = crRows.map((cr) => ({
+      id: cr.id,
+      projectId: cr.projectId,
+      contentItemId: cr.contentItemId,
+      submissionVersionId: cr.submissionVersionId,
+      component: cr.component as any,
+      reviewerUserId: cr.reviewerUserId,
+      reviewerName: "",
+      requestedChange: cr.requestedChange,
+      priority: cr.priority as any,
+      status: cr.status as any,
+      createdAt: cr.createdAt.toISOString(),
+    }));
+
+    const mappedSchedules: EmployeeCapacitySchedule[] = scheduleRows.map((s) => ({
+      id: s.id,
+      orgId: s.orgId,
+      userId: s.userId,
+      effectiveFrom: s.effectiveFrom,
+      effectiveTo: s.effectiveTo,
+      mondayHours: Number(s.mondayHours),
+      tuesdayHours: Number(s.tuesdayHours),
+      wednesdayHours: Number(s.wednesdayHours),
+      thursdayHours: Number(s.thursdayHours),
+      fridayHours: Number(s.fridayHours),
+      saturdayHours: Number(s.saturdayHours),
+      sundayHours: Number(s.sundayHours),
+      primaryFunction: s.primaryFunction,
+      creativeEligibility: s.creativeEligibility as any,
+      createdAt: s.createdAt.toISOString(),
+      updatedAt: s.updatedAt.toISOString(),
+    }));
+
+    const mappedAdjustments: CapacityAdjustment[] = adjustmentRows.map((a) => ({
+      id: a.id,
+      orgId: a.orgId,
+      userId: a.userId,
+      adjustmentDate: a.adjustmentDate,
+      kind: a.kind as any,
+      adjustmentHours: Number(a.adjustmentHours),
+      reason: a.reason,
+      createdByUserId: a.createdByUserId || undefined,
+      createdAt: a.createdAt.toISOString(),
+    }));
+
+    const mappedCommitments: ProjectCommitment[] = commitmentRows.map((c) => ({
+      id: c.id,
+      orgId: c.orgId,
+      projectId: c.projectId,
+      workTypeId: c.workTypeId || undefined,
+      workTypeName: c.workTypeName,
+      committedQuantity: c.committedQuantity,
+      effectiveMonth: c.effectiveMonth,
+      createdAt: c.createdAt.toISOString(),
+      updatedAt: c.updatedAt.toISOString(),
+    }));
+
+    const mappedPerfInputs: ProjectPerformanceInput[] = perfInputRows.map((p) => ({
+      id: p.id,
+      orgId: p.orgId,
+      projectId: p.projectId,
+      campaignId: p.campaignId || undefined,
+      effectiveMonth: p.effectiveMonth,
+      currency: p.currency,
+      adBudget: Number(p.adBudget),
+      adSpend: Number(p.adSpend),
+      leads: p.leads,
+      conversions: p.conversions,
+      createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
+    }));
+
+    // 7. Calculate Aggregations and Scorecards
+    const overview = calculateTeamPerformanceOverview(
+      mappedUsers,
+      period,
+      mappedItems,
+      mappedAssignments,
+      mappedSessions,
+      mappedCRs,
+      mappedSchedules,
+      mappedAdjustments
     );
 
-    const projectScorecards = data.projects.map((p) =>
-      calculateProjectPerformance(p, period, data.items, data.workSessions, data.commitments, data.perfInputs)
+    const projectScorecards = mappedProjects.map((p) =>
+      calculateProjectPerformance(p, period, mappedItems, mappedSessions, mappedCommitments, mappedPerfInputs)
     );
 
-    return { success: true, overview, projectScorecards };
+    return {
+      success: true,
+      overview,
+      projectScorecards,
+      availableProjects,
+      availableRoles,
+    };
   } catch (error: any) {
     return { success: false, error: error.message };
   }

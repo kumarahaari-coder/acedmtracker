@@ -44,6 +44,9 @@ export const effortStandards = pgTable(
       table.workType,
       table.version
     ),
+    idxOneActiveStandardPerWorkType: uniqueIndex("idx_one_active_standard_per_work_type")
+      .on(table.orgId, table.workType)
+      .where(sql`active = true`),
     orgCategoryIdx: index("idx_effort_standards_org_cat").on(table.orgId, table.category),
     activeIdx: index("idx_effort_standards_active").on(table.orgId, table.active),
   })

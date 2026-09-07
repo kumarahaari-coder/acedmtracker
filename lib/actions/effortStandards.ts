@@ -8,7 +8,7 @@ import { EffortStandard } from "../types";
 import { invalidateWorkspaceEntities } from "./revalidation";
 import { invalidateCachedEffortStandards } from "../cache/effortStandardsCache";
 
-export async function getEffortStandardsAction(): Promise<{
+export async function getEffortStandardsAction(options: { activeOnly?: boolean } = { activeOnly: true }): Promise<{
   success: boolean;
   standards: EffortStandard[];
   error?: string;
@@ -17,10 +17,12 @@ export async function getEffortStandardsAction(): Promise<{
     const authUser = await getAuthoritativeUser();
     if (!authUser) return { success: false, standards: [], error: "Unauthorized" };
 
+    const activeFilter = options.activeOnly !== false ? eq(effortStandards.active, true) : sql`true`;
+
     const rows = await db
       .select()
       .from(effortStandards)
-      .where(eq(effortStandards.orgId, authUser.orgId))
+      .where(and(eq(effortStandards.orgId, authUser.orgId), activeFilter))
       .orderBy(effortStandards.category, effortStandards.workType);
 
     const mapped: EffortStandard[] = rows.map((r) => ({
@@ -43,6 +45,49 @@ export async function getEffortStandardsAction(): Promise<{
     return { success: true, standards: mapped };
   } catch (error: any) {
     return { success: false, standards: [], error: error.message };
+  }
+}
+
+export async function getEffortStandardHistoryAction(workType: string): Promise<{
+  success: boolean;
+  history: EffortStandard[];
+  error?: string;
+}> {
+  try {
+    const authUser = await getAuthoritativeUser();
+    if (!authUser) return { success: false, history: [], error: "Unauthorized" };
+
+    const rows = await db
+      .select()
+      .from(effortStandards)
+      .where(
+        and(
+          eq(effortStandards.orgId, authUser.orgId),
+          eq(effortStandards.workType, workType.trim())
+        )
+      )
+      .orderBy(desc(effortStandards.version));
+
+    const mapped: EffortStandard[] = rows.map((r) => ({
+      id: r.id,
+      orgId: r.orgId,
+      category: r.category,
+      workType: r.workType,
+      contentSeconds: r.contentSeconds,
+      productionSeconds: r.productionSeconds,
+      totalSeconds: r.totalSeconds,
+      leadTimeWorkdays: r.leadTimeWorkdays,
+      defaultRole: r.defaultRole,
+      active: r.active,
+      version: r.version,
+      effectiveFrom: r.effectiveFrom.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    }));
+
+    return { success: true, history: mapped };
+  } catch (error: any) {
+    return { success: false, history: [], error: error.message };
   }
 }
 
@@ -135,16 +180,17 @@ export async function updateEffortStandardAction(params: {
     const productionSeconds = Math.round(params.productionHours * 3600);
     const totalSeconds = contentSeconds + productionSeconds;
 
-    // Check if effort changed - if so, version it to preserve history!
-    const effortChanged =
+    // Check if configuration changed (effort, lead time, or role) - version it to preserve history!
+    const configChanged =
       contentSeconds !== existing.contentSeconds ||
       productionSeconds !== existing.productionSeconds ||
-      params.leadTimeWorkdays !== existing.leadTimeWorkdays;
+      params.leadTimeWorkdays !== existing.leadTimeWorkdays ||
+      (params.defaultRole !== undefined && params.defaultRole.trim() !== existing.defaultRole);
 
     let updatedRow: typeof existing;
 
-    if (effortChanged) {
-      // Deactivate older version
+    if (configChanged) {
+      // Deactivate older version first to maintain partial unique index (org_id, work_type) WHERE active = true
       await db
         .update(effortStandards)
         .set({ active: false, updatedAt: new Date() })
@@ -161,7 +207,7 @@ export async function updateEffortStandardAction(params: {
           productionSeconds,
           totalSeconds,
           leadTimeWorkdays: params.leadTimeWorkdays,
-          defaultRole: params.defaultRole || existing.defaultRole,
+          defaultRole: params.defaultRole ? params.defaultRole.trim() : existing.defaultRole,
           active: params.active !== undefined ? params.active : true,
           version: existing.version + 1,
           effectiveFrom: new Date(),
@@ -169,11 +215,10 @@ export async function updateEffortStandardAction(params: {
         .returning();
       updatedRow = newVersion;
     } else {
-      // Simple metadata update without version bump
+      // Simple metadata/status update (e.g. deactivating without changing config)
       const [updated] = await db
         .update(effortStandards)
         .set({
-          defaultRole: params.defaultRole || existing.defaultRole,
           active: params.active !== undefined ? params.active : existing.active,
           updatedAt: new Date(),
         })
