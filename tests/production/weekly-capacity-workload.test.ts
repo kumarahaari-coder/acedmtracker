@@ -28,6 +28,10 @@ describe("TEST C & D — Weekly Team Capacity & Planned Effort Precedence", () =
 
     const [item] = await db.select().from(contentItems).where(eq(contentItems.projectId, testProject.id)).limit(1);
     testItem = item;
+    if (!testItem.finalPlannedSeconds && !testItem.standardContentSeconds) {
+      await db.update(contentItems).set({ finalPlannedSeconds: 11700 }).where(eq(contentItems.id, testItem.id));
+      testItem.finalPlannedSeconds = 11700;
+    }
 
     // Ensure project memberships
     const { projectMemberships } = await import("../../lib/db/schema");
@@ -41,6 +45,8 @@ describe("TEST C & D — Weekly Team Capacity & Planned Effort Precedence", () =
         assignedByUserId: founderUser.id,
         status: "active",
       });
+    } else if (m1[0].status !== "active") {
+      await db.update(projectMemberships).set({ status: "active" }).where(eq(projectMemberships.id, m1[0].id));
     }
 
     const m2 = await db.select().from(projectMemberships).where(and(eq(projectMemberships.projectId, testProject.id), eq(projectMemberships.userId, designerUser2.id)));
@@ -53,6 +59,8 @@ describe("TEST C & D — Weekly Team Capacity & Planned Effort Precedence", () =
         assignedByUserId: founderUser.id,
         status: "active",
       });
+    } else if (m2[0].status !== "active") {
+      await db.update(projectMemberships).set({ status: "active" }).where(eq(projectMemberships.id, m2[0].id));
     }
   });
 
@@ -122,6 +130,9 @@ describe("TEST C & D — Weekly Team Capacity & Planned Effort Precedence", () =
       projectId: i.projectId,
       title: i.title,
       contentType: i.contentType,
+      workType: i.workType,
+      standardContentSeconds: i.standardContentSeconds,
+      standardProductionSeconds: i.standardProductionSeconds,
       stage: i.stage,
       finalPlannedSeconds: (i as any).finalPlannedSeconds || undefined,
       deadlines: {

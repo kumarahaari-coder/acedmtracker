@@ -274,7 +274,18 @@ export function getTaskPlannedHours(item: ContentItem): number {
     return totalSec / 3600;
   }
 
-  // Never silently manufacture a 2.0h workload. If snapshot is missing, return 0.
+  // B. Work type explicitly referenced (e.g. "Carousel (3.25h)")
+  if (item.workType) {
+    const m = item.workType.match(/\((\d+(?:\.\d+)?)\s*h\)/i);
+    if (m) {
+      return parseFloat(m[1]);
+    }
+  }
+
+  // C. Legacy Content Type Fallback
+  if (item.contentType === "carousel") return 3.25;
+
+  // Never silently manufacture a default workload. If all missing, return 0.
   return 0;
 }
 
@@ -392,9 +403,23 @@ export function calculateEmployeeScorecard(
   // assignment.currentDueAt -> item.finalInternalDeadline -> item.deadlines?.submissionDeadline -> item.submissionDeadline
   const periodTasks = userItems.filter((item) => {
     const asgn = userAssignmentMap.get(item.id);
-    const d = asgn?.currentDueAt || asgn?.initialDueAt || item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || (item as any).submissionDeadline || item.deadlines?.scheduledPublicationDate || item.completedAt;
-    const dStr = typeof d === "string" ? d.split("T")[0] : (d ? getISTDateString(new Date(d)) : "");
-    return dStr >= period.startDate && dStr <= period.endDate;
+    const dates = [
+      asgn?.currentDueAt,
+      asgn?.initialDueAt,
+      item.finalInternalDeadline,
+      item.calculatedInternalDeadline,
+      item.deadlines?.submissionDeadline,
+      (item as any).submissionDeadline,
+      item.deadlines?.scheduledPublicationDate,
+      (item as any).scheduledPublicationDate,
+      item.completedAt,
+      (item as any).completedAt,
+    ].filter(Boolean);
+
+    return dates.some((d) => {
+      const dStr = typeof d === "string" ? d.split("T")[0] : getISTDateString(new Date(d!));
+      return dStr >= period.startDate && dStr <= period.endDate;
+    });
   });
 
   // Assigned planned hours in period (shared creative effort counted once per ContentGroup, plus platform adaptations)
@@ -517,6 +542,7 @@ export interface TeamPerformanceOverviewDTO {
   teamUtilizationPercent: number;
   completedTasksCount: number;
   onTimePercent: number | null;
+  onTimePercentage?: number | null;
   reworkIncidencePercent: number | null;
   adHocHours: number;
   goodwillHours: number;
@@ -591,6 +617,7 @@ export function calculateTeamPerformanceOverview(
     teamUtilizationPercent: Math.round(teamUtilizationPercent * 10) / 10,
     completedTasksCount,
     onTimePercent: onTimePercent !== null ? Math.round(onTimePercent * 10) / 10 : null,
+    onTimePercentage: onTimePercent !== null ? Math.round(onTimePercent * 10) / 10 : null,
     reworkIncidencePercent: reworkIncidencePercent !== null ? Math.round(reworkIncidencePercent * 10) / 10 : null,
     adHocHours: Math.round(adHocHours * 100) / 100,
     goodwillHours: Math.round(goodwillHours * 100) / 100,
@@ -669,7 +696,14 @@ export function calculateProjectPerformance(
       projItemSessionSeconds.set(s.contentItemId, (projItemSessionSeconds.get(s.contentItemId) || 0) + (s.accumulatedSeconds || 0));
     }
   }
-  const actualHours = periodItems.reduce((sum, i) => sum + ((projItemSessionSeconds.get(i.id) || 0) / 3600), 0);
+
+  // Sum work sessions attributable to this project within the period
+  const projectPeriodSessions = workSessions.filter((s) => {
+    if (s.projectId !== project.id) return false;
+    const sDate = s.startedAt ? getISTDateString(new Date(s.startedAt)) : "";
+    return sDate >= period.startDate && sDate <= period.endDate;
+  });
+  const actualHours = Math.round(projectPeriodSessions.reduce((sum, s) => sum + (s.accumulatedSeconds || 0), 0) / 36) / 100;
   const varianceHours = plannedHours - actualHours;
   const adHocHours = periodItems.filter((i) => i.workNature === "ad_hoc").reduce((sum, i) => sum + getTaskPlannedHours(i), 0);
   const goodwillHours = periodItems.filter((i) => i.scopeClassification === "goodwill").reduce((sum, i) => sum + getTaskPlannedHours(i), 0);

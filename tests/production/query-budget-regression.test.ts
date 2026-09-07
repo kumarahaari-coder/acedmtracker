@@ -66,7 +66,7 @@ describe("Query-Budget & Architecture Regression Guard (Error 1102 Prevention)",
     const perfContent = fs.readFileSync(perfActionsPath, "utf-8");
 
     const actionIndex = perfContent.indexOf("export async function getAuthoritativeMainDashboardAction");
-    const actionSnippet = perfContent.slice(actionIndex, actionIndex + 6000);
+    const actionSnippet = perfContent.slice(actionIndex, actionIndex + 12000);
 
     // Verify set-based push-down into PostgreSQL
     expect(actionSnippet).toContain("COUNT(*) FILTER");

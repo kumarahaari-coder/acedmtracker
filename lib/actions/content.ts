@@ -165,7 +165,10 @@ export async function createContentItemAction(params: {
 
   if (!standard && matchedWorkType) {
     standard =
-      allStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) || null;
+      allStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) ||
+      (matchedWorkType.toLowerCase().includes("trial reel")
+        ? allStandards.find((s) => s.workType.toLowerCase() === "short-form reel" || s.workType.toLowerCase() === "basic reel - supplied footage") || null
+        : null);
   }
 
   if (!standard) {
@@ -369,7 +372,10 @@ export async function createContentGroupAction(params: {
 
   if (!standard && matchedWorkType) {
     standard =
-      allGroupStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) || null;
+      allGroupStandards.find((s) => s.workType.toLowerCase() === matchedWorkType.toLowerCase()) ||
+      (matchedWorkType.toLowerCase().includes("trial reel")
+        ? allGroupStandards.find((s) => s.workType.toLowerCase() === "short-form reel" || s.workType.toLowerCase() === "basic reel - supplied footage") || null
+        : null);
   }
 
   if (!standard) {

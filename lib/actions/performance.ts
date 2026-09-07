@@ -348,7 +348,7 @@ export async function getAuthoritativePerformanceOverviewAction(
         .orderBy(users.fullName);
     }
 
-    const emptyOverview: TeamPerformanceOverviewDTO = {
+    const emptyOverview: TeamPerformanceOverviewDTO & { onTimePercentage: number | null } = {
       period,
       teamCapacityHours: 0,
       teamAssignedHours: 0,
@@ -358,6 +358,7 @@ export async function getAuthoritativePerformanceOverviewAction(
       teamUtilizationPercent: 0,
       completedTasksCount: 0,
       onTimePercent: null,
+      onTimePercentage: null,
       reworkIncidencePercent: null,
       adHocHours: 0,
       goodwillHours: 0,
@@ -382,15 +383,19 @@ export async function getAuthoritativePerformanceOverviewAction(
     const startTimestamp = `${period.startDate}T00:00:00.000Z`;
     const endTimestamp = `${period.endDate}T23:59:59.999Z`;
 
+    const pSql = sql.join(targetProjectIds.map((id) => sql`${id}::uuid`), sql`, `);
+    const uSql = sql.join(targetUserIds.map((id) => sql`${id}::uuid`), sql`, `);
+
     const queryRes: any = await db.execute(sql`
       WITH
-        p_ids AS (SELECT UNNEST(${targetProjectIds}::uuid[]) AS id),
-        u_ids AS (SELECT UNNEST(${targetUserIds}::uuid[]) AS id),
+        p_ids AS (SELECT UNNEST(ARRAY[${pSql}]) AS id),
+        u_ids AS (SELECT UNNEST(ARRAY[${uSql}]) AS id),
         scoped_items AS (
           SELECT id, project_id, content_group_id, title, platform, content_type, work_type, work_type_id,
                  stage, submission_deadline, scheduled_publication_date, final_planned_seconds,
                  standard_content_seconds, standard_production_seconds, is_effort_anchor,
-                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline
+                 completed_at, published_at, final_internal_deadline, calculated_internal_deadline,
+                 created_at, work_nature, scope_classification
           FROM content_items
           WHERE org_id = ${authUser.orgId}
             AND project_id IN (SELECT id FROM p_ids)
@@ -506,7 +511,8 @@ export async function getAuthoritativePerformanceOverviewAction(
       brief: undefined,
       referenceLink: undefined,
       priority: "normal",
-      workNature: "planned",
+      workNature: (i.work_nature || "planned") as any,
+      scopeClassification: i.scope_classification as any,
       accountOwnerId: undefined,
       stage: i.stage as any,
       accountableOwnerId: "",
@@ -515,16 +521,16 @@ export async function getAuthoritativePerformanceOverviewAction(
         submissionDeadline: i.submission_deadline || undefined,
         scheduledPublicationDate: i.scheduled_publication_date || undefined,
       },
-      finalPlannedSeconds: i.final_planned_seconds,
-      standardContentSeconds: i.standard_content_seconds,
-      standardProductionSeconds: i.standard_production_seconds,
+      finalPlannedSeconds: i.final_planned_seconds !== undefined && i.final_planned_seconds !== null ? Number(i.final_planned_seconds) : undefined,
+      standardContentSeconds: i.standard_content_seconds !== undefined && i.standard_content_seconds !== null ? Number(i.standard_content_seconds) : undefined,
+      standardProductionSeconds: i.standard_production_seconds !== undefined && i.standard_production_seconds !== null ? Number(i.standard_production_seconds) : undefined,
       isEffortAnchor: i.is_effort_anchor,
       completedAt: i.completed_at || undefined,
       publishedAt: i.published_at || undefined,
       finalInternalDeadline: i.final_internal_deadline || undefined,
       calculatedInternalDeadline: i.calculated_internal_deadline || undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: i.created_at ? new Date(i.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: i.created_at ? new Date(i.created_at).toISOString() : new Date().toISOString(),
     }));
 
     const mappedAssignments: ContentAssignment[] = (batch?.assignments || []).map((a: any) => ({
@@ -648,7 +654,10 @@ export async function getAuthoritativePerformanceOverviewAction(
 
     return {
       success: true,
-      overview,
+      overview: {
+        ...overview,
+        onTimePercentage: overview.onTimePercent,
+      },
       projectScorecards,
       availableProjects,
       availableRoles,

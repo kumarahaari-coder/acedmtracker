@@ -40,3 +40,6 @@ next-env.d.ts
 .dev.vars
 
 .env*
+
+# scratch scripts and logs
+/scratch/

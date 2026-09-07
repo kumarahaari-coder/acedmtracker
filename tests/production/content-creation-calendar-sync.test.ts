@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { assertNonProductionEnvironment } from "@/lib/guards/environment-safety";
 
 import { db } from "@/lib/db";
-import { users, projects, contentItems, contentGroups, submissionVersions, contentAssignments } from "@/lib/db/schema";
+import { users, projects, projectMemberships, contentItems, contentGroups, submissionVersions, contentAssignments } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import {
   createContentItemAction,
@@ -42,7 +42,7 @@ describe("Production Content Creation & Calendar Synchronization Architecture", 
     }
 
     // 2. Resolve or provision project
-    const [existingProj] = await db.select().from(projects).limit(1);
+    const [existingProj] = await db.select().from(projects).where(eq(projects.orgId, existingFounder.orgId)).limit(1);
     if (existingProj) {
       projectId = existingProj.id;
     } else {
@@ -52,6 +52,24 @@ describe("Production Content Creation & Calendar Synchronization Architecture", 
         actorUserId: founderId,
       });
       projectId = createdProj.project!.id;
+    }
+
+    // Ensure founder has eligible project membership for assignment
+    const [existingMem] = await db
+      .select()
+      .from(projectMemberships)
+      .where(and(eq(projectMemberships.projectId, projectId), eq(projectMemberships.userId, founderId)));
+    if (!existingMem) {
+      await db.insert(projectMemberships).values({
+        projectId,
+        orgId: existingFounder.orgId,
+        userId: founderId,
+        membershipRole: "collaborator",
+        assignedByUserId: founderId,
+        status: "active",
+      });
+    } else if (existingMem.status !== "active" || !["designer", "video_editor", "collaborator", "consultant"].includes(existingMem.membershipRole)) {
+      await db.update(projectMemberships).set({ status: "active", membershipRole: "collaborator" }).where(eq(projectMemberships.id, existingMem.id));
     }
   });
 

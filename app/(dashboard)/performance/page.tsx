@@ -316,7 +316,13 @@ function PerformanceOverviewContent() {
             {loading ? "..." : overview?.completedTasksCount || 0}
           </div>
           <div className="text-[11px] text-[#86868b] mt-1">
-            On-Time: <span className="font-bold text-[#1d1d1f]">{overview?.onTimePercent !== null ? `${overview?.onTimePercent}%` : "N/A"}</span>
+            On-Time: <span className="font-bold text-[#1d1d1f]">
+              {typeof overview?.onTimePercent === "number"
+                ? `${overview.onTimePercent}%`
+                : typeof (overview as any)?.onTimePercentage === "number"
+                ? `${(overview as any).onTimePercentage}%`
+                : "N/A"}
+            </span>
           </div>
         </button>
 
