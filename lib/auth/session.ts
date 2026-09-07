@@ -44,7 +44,11 @@ export function validateRoleCompatibility(
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Resolves live active user from database to defeat stale JWT claims
+ * Resolves live active user from database to defeat stale JWT claims.
+ * If userId is passed, resolves that specific user if active.
+ * If no userId is passed, inspects the active Auth.js session from cookies.
+ * STRICT SECURITY INVARIANT: NEVER falls back to Founder, Admin, or any default user.
+ * If no valid active user is resolved, returns null.
  */
 export async function getAuthoritativeUser(userId?: string): Promise<AuthoritativeUser | null> {
   const isUuid = userId ? UUID_REGEX.test(userId) : false;
@@ -58,30 +62,30 @@ export async function getAuthoritativeUser(userId?: string): Promise<Authoritati
           email: users.email,
           fullName: users.fullName,
           organizationRole: users.organizationRole,
-        status: users.status,
-      })
-      .from(users)
-      .where(
-        and(
-          isUuid ? eq(users.id, userId) : eq(users.legacyId, userId),
-          eq(users.status, "active")
+          status: users.status,
+        })
+        .from(users)
+        .where(
+          and(
+            isUuid ? eq(users.id, userId) : eq(users.legacyId, userId),
+            eq(users.status, "active")
+          )
         )
-      )
-      .limit(1);
+        .limit(1);
 
-    if (result.length > 0) return result[0];
+      if (result.length > 0) return result[0];
+      return null;
+    }
 
-      if (!isUuid) {
-        const roleMatch = userId.includes("founder")
-          ? "founder"
-          : userId.includes("admin")
-          ? "admin"
-          : userId.includes("consultant")
-          ? "consultant"
-          : null;
-
-        if (roleMatch) {
-          const [fallback] = await db
+    // No userId passed: inspect live session from Auth.js via auth()
+    try {
+      const { auth } = await import("../../auth");
+      const session = await auth();
+      if (session?.user) {
+        const sessionUserId = (session.user as any).id;
+        if (sessionUserId) {
+          const isSessionUuid = UUID_REGEX.test(sessionUserId);
+          const [userById] = await db
             .select({
               id: users.id,
               orgId: users.orgId,
@@ -93,39 +97,41 @@ export async function getAuthoritativeUser(userId?: string): Promise<Authoritati
             .from(users)
             .where(
               and(
-                eq(users.organizationRole, roleMatch as OrganizationRole),
+                isSessionUuid ? eq(users.id, sessionUserId) : eq(users.legacyId, sessionUserId),
                 eq(users.status, "active")
               )
             )
             .limit(1);
-          if (fallback) return fallback;
+          if (userById) return userById;
+        }
+
+        if (session.user.email) {
+          const normalized = session.user.email.toLowerCase().trim();
+          const [userByEmail] = await db
+            .select({
+              id: users.id,
+              orgId: users.orgId,
+              email: users.email,
+              fullName: users.fullName,
+              organizationRole: users.organizationRole,
+              status: users.status,
+            })
+            .from(users)
+            .where(
+              and(
+                eq(users.normalizedEmail, normalized),
+                eq(users.status, "active")
+              )
+            )
+            .limit(1);
+          if (userByEmail) return userByEmail;
         }
       }
-
-      // Explicit userId was provided and was not found / not active
-      return null;
+    } catch (sessionErr) {
+      // In non-request / non-edge contexts auth() may throw; return null
     }
 
-    // Default fallback (no userId passed): return first active founder user
-    const [firstFounder] = await db
-      .select({
-        id: users.id,
-        orgId: users.orgId,
-        email: users.email,
-        fullName: users.fullName,
-        organizationRole: users.organizationRole,
-        status: users.status,
-      })
-      .from(users)
-      .where(
-        and(
-          eq(users.organizationRole, "founder"),
-          eq(users.status, "active")
-        )
-      )
-      .limit(1);
-    if (firstFounder) return firstFounder;
-
+    // No session or unauthenticated: strictly return null (no founder/default fallback)
     return null;
   } catch (err) {
     console.error("Error in getAuthoritativeUser for userId:", userId, err);

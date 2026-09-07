@@ -38,10 +38,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           if (result.context.user) {
             setUserSession({
               id: result.context.user.id,
-              role: (result.context.user.organizationRole as any) || "founder",
+              role: result.context.user.organizationRole as any,
               email: result.context.user.email,
               name: result.context.user.fullName,
             });
+          } else {
+            router.replace("/api/auth/signin");
+            return;
           }
         }
       } catch (err) {

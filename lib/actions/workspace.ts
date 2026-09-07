@@ -74,17 +74,6 @@ export async function getAuthoritativeLayoutContextAction(): Promise<{
     profiler.mark("auth-resolution");
 
     if (!authoritativeUser) {
-      const [firstFounder] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.organizationRole, "founder"), eq(users.status, "active")))
-        .limit(1);
-      if (firstFounder) {
-        authoritativeUser = firstFounder as any;
-      }
-    }
-
-    if (!authoritativeUser) {
       profiler.logSummary();
       return {
         success: true,
@@ -240,26 +229,10 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
       }
     }
 
-    if (!authoritativeUser) {
-      const [firstFounder] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.organizationRole, "founder"), eq(users.status, "active")))
-        .limit(1);
-      if (firstFounder) {
-        authoritativeUser = firstFounder;
-        orgId = firstFounder.orgId;
-      }
-    }
-
-    if (!orgId) {
-      const [firstOrg] = await db.select().from(users).limit(1);
-      if (firstOrg) orgId = firstOrg.orgId;
-    }
-
-    if (!orgId) {
+    if (!authoritativeUser || !orgId) {
       return {
-        success: true,
+        success: false,
+        error: "Unauthorized: No authenticated user session found.",
         state: getEmptyAppState(),
         user: null,
       };
@@ -312,7 +285,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
     ]);
 
     // 3. Role-scoped filtering
-    const role = authoritativeUser?.organizationRole || "founder";
+    const role = authoritativeUser.organizationRole;
     const isClient = role === "client";
     const isDesigner = role === "designer";
 
@@ -528,7 +501,7 @@ export async function getAuthoritativeWorkspaceStateAction(actorUserId?: string)
         component: (dec.component as any) || "creative",
         componentFingerprint: dec.componentFingerprint,
         reviewerUserId: dec.reviewerUserId,
-        reviewerRole: (dec.reviewerRole as any) || "founder",
+        reviewerRole: dec.reviewerRole as any,
         decision: (dec.decision as any) || "approved",
         note: dec.note || undefined,
         decidedAt: dec.decidedAt ? dec.decidedAt.toISOString() : nowIso,
