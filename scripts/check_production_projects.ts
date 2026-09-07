@@ -1,7 +1,10 @@
 import { neon } from "@neondatabase/serverless";
 
 async function main() {
-  const prodUrl = process.env.DATABASE_URL || process.env.DATABASE_URL_UNPOOLED || "";
+  const prodUrl = process.env.DATABASE_URL || process.env.DATABASE_URL_UNPOOLED;
+  if (!prodUrl) {
+    throw new Error("DATABASE_URL or DATABASE_URL_UNPOOLED environment variable is required.");
+  }
   const sql = neon(prodUrl);
 
   console.log("=== Querying Production Neon DB (ep-dry-forest-azifaoyz) ===");

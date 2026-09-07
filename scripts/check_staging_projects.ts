@@ -1,7 +1,10 @@
 import { neon } from "@neondatabase/serverless";
 
 async function main() {
-  const stagingUrl = process.env.DATABASE_URL || process.env.DATABASE_URL_UNPOOLED || "";
+  const stagingUrl = process.env.DATABASE_URL || process.env.DATABASE_URL_UNPOOLED;
+  if (!stagingUrl) {
+    throw new Error("DATABASE_URL or DATABASE_URL_UNPOOLED environment variable is required.");
+  }
   const sql = neon(stagingUrl);
 
   console.log("=== Querying Staging Neon DB (ep-red-waterfall-azbw2scy) ===");
