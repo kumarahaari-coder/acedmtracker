@@ -41,6 +41,31 @@ export function validateMimeAndExtension(
   return { valid: true, extension: ext };
 }
 
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+function getR2Client(): { client: S3Client; bucket: string } | null {
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const bucket = process.env.R2_BUCKET_NAME || process.env.R2_BUCKET || "acecore-vault-production";
+
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    return null;
+  }
+
+  const client = new S3Client({
+    region: "auto",
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+  });
+
+  return { client, bucket };
+}
+
 /**
  * Builds canonical opaque R2 object key using PostgreSQL UUIDs.
  * Format: org/{orgUuid}/project/{projectUuid}/asset/{assetUuid}{ext}
@@ -69,12 +94,19 @@ export async function generatePresignedUploadUrl(params: {
   const objectKey = buildR2ObjectKey(params.orgId, params.projectId, params.assetId, extension);
   const expiresIn = params.expiresInSeconds || 900; // 15 minutes default
 
-  const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
-  // In production with AWS SDK / S3 Client:
-  // const command = new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: objectKey, ContentType: params.mimeType });
-  // const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn });
+  const r2 = getR2Client();
+  if (r2) {
+    const command = new PutObjectCommand({
+      Bucket: r2.bucket,
+      Key: objectKey,
+      ContentType: params.mimeType,
+    });
+    const presignedUrl = await getSignedUrl(r2.client, command, { expiresIn });
+    return { presignedUrl, objectKey };
+  }
 
-  // Deterministic edge/staging compatible presigned URL format:
+  // Deterministic edge/staging/unit-test compatible presigned URL format:
+  const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
   const presignedUrl = `${r2Endpoint}/${objectKey}?X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
 
   return { presignedUrl, objectKey };
@@ -92,8 +124,19 @@ export async function generatePresignedDownloadUrl(params: {
 }): Promise<string> {
   const expiresIn = params.expiresInSeconds || 300; // 5 minutes default
   const disposition = params.inline ? "inline" : `attachment; filename="${encodeURIComponent(params.filename)}"`;
-  const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
 
+  const r2 = getR2Client();
+  if (r2) {
+    const command = new GetObjectCommand({
+      Bucket: r2.bucket,
+      Key: params.objectKey,
+      ResponseContentDisposition: disposition,
+      ResponseContentType: params.mimeType,
+    });
+    return await getSignedUrl(r2.client, command, { expiresIn });
+  }
+
+  const r2Endpoint = process.env.R2_ENDPOINT || "https://staging-r2.aceassured.com";
   return `${r2Endpoint}/${params.objectKey}?response-content-disposition=${encodeURIComponent(disposition)}&X-Amz-Expires=${expiresIn}&X-Amz-Signature=sig_${Date.now()}`;
 }
 
@@ -103,6 +146,13 @@ export async function generatePresignedDownloadUrl(params: {
 export async function deleteR2Object(objectKey: string): Promise<{ success: boolean; error?: string }> {
   try {
     if (!objectKey) return { success: false, error: "No object key provided" };
+    const r2 = getR2Client();
+    if (r2) {
+      await r2.client.send(new DeleteObjectCommand({
+        Bucket: r2.bucket,
+        Key: objectKey,
+      }));
+    }
     console.log(`[R2 Storage] Authoritatively deleted orphaned asset object: ${objectKey}`);
     return { success: true };
   } catch (err: any) {

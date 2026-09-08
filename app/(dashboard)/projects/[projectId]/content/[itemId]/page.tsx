@@ -45,6 +45,7 @@ import {
   User,
   Users,
   X,
+  Loader2,
 } from "lucide-react";
 import { generateExternalReviewTokenAction } from "@/lib/actions/collaboration";
 import { DeleteDeliverableModal } from "@/components/content/DeleteDeliverableModal";
@@ -54,6 +55,11 @@ import {
   createNewVersionDraftAction,
   toggleClientVisibilityAction,
 } from "@/lib/actions/content";
+import {
+  requestCreativeAssetUploadAction,
+  confirmCreativeAssetUploadAction,
+  removeCreativeAssetFromSubmissionAction,
+} from "@/lib/actions/assets";
 import {
   getAuthoritativeContentItemDetailAction,
   ContentItemDetailDTO,
@@ -140,12 +146,17 @@ export default function ContentItemWorkspacePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Creative Asset Upload State
+  const [isUploadingCreative, setIsUploadingCreative] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+
   const loadDetail = useCallback(async () => {
     if (!projectId || !itemId) return;
     setIsLoading(true);
     setLoadError(null);
     try {
-      const res = await getAuthoritativeContentItemDetailAction(projectId, itemId, activeUserId);
+      const res = await getAuthoritativeContentItemDetailAction(projectId, itemId, activeUserId || undefined);
       if (res.success && res.data) {
         setDetailData(res.data);
       } else {
@@ -156,7 +167,7 @@ export default function ContentItemWorkspacePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [projectId, itemId, activeUserId]);
+  }, [projectId, itemId]);
 
   useEffect(() => {
     loadDetail();
@@ -654,34 +665,87 @@ export default function ContentItemWorkspacePage() {
     }
   };
 
-  const handleCreativeFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCreativeFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = (event.target?.result as string) || "";
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const newAsset = {
-        assetId: "ast_" + Math.random().toString(36).substr(2, 9),
-        filename: file.name,
-        previewUrl: dataUrl,
-        fileSizeBytes: file.size,
-        mimeType: file.type || (isPdf ? "application/pdf" : "image/jpeg"),
-        contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
-      };
+    if (file.size > 100 * 1024 * 1024) {
+      setUploadError(`File exceeds maximum size limit of 100MB (${(file.size / (1024 * 1024)).toFixed(1)}MB).`);
+      return;
+    }
 
-      updateDraftVersion(currentVersion.id, {
-        creativeAssets: [newAsset, ...(currentVersion.creativeAssets || [])],
+    setIsUploadingCreative(true);
+    setUploadError(null);
+    setUploadSuccess(null);
+
+    try {
+      // 1. Request upload intent from authoritative server action
+      const intentRes = await requestCreativeAssetUploadAction({
+        projectId,
+        contentItemId: itemId,
+        filename: file.name,
+        mimeType: file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream"),
+        fileSizeBytes: file.size,
+        actorUserId: activeUserId,
       });
-    };
-    reader.readAsDataURL(file);
+
+      if (!intentRes.success || !intentRes.presignedUrl || !intentRes.assetId) {
+        throw new Error(intentRes.error || "Failed to initialize upload authorization.");
+      }
+
+      // 2. Direct browser PUT to Cloudflare R2
+      const putRes = await fetch(intentRes.presignedUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+
+      if (!putRes.ok) {
+        throw new Error(`Upload to storage failed (${putRes.status} ${putRes.statusText})`);
+      }
+
+      // 3. Confirm upload and bind to submission version
+      const confirmRes = await confirmCreativeAssetUploadAction({
+        assetId: intentRes.assetId,
+        submissionVersionId: intentRes.submissionVersionId!,
+        contentItemId: itemId,
+        actorUserId: activeUserId,
+      });
+
+      if (!confirmRes.success) {
+        throw new Error(confirmRes.error || "Failed to finalize asset linkage.");
+      }
+
+      setUploadSuccess(`Successfully uploaded "${file.name}"`);
+      await loadDetail();
+    } catch (err: any) {
+      console.error("[CreativeUpload] Error:", err);
+      setUploadError(err.message || "An unexpected error occurred during upload.");
+    } finally {
+      setIsUploadingCreative(false);
+      if (e.target) e.target.value = "";
+    }
   };
 
-  const handleRemoveAsset = (assetId: string) => {
-    updateDraftVersion(currentVersion.id, {
-      creativeAssets: (currentVersion.creativeAssets || []).filter((a) => a.assetId !== assetId),
-    });
+  const handleRemoveAsset = async (assetId: string) => {
+    if (!currentVersion?.id) return;
+    try {
+      setUploadError(null);
+      const res = await removeCreativeAssetFromSubmissionAction({
+        assetId,
+        submissionVersionId: currentVersion.id,
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        await loadDetail();
+      } else {
+        setUploadError(res.error || "Failed to remove asset.");
+      }
+    } catch (err: any) {
+      setUploadError(err.message || "Failed to remove asset.");
+    }
   };
 
   const handleAddDriveLink = () => {
@@ -1340,6 +1404,38 @@ export default function ContentItemWorkspacePage() {
                 </div>
               )}
             </div>
+
+            {/* Upload Status Feedback Banners */}
+            {isUploadingCreative && (
+              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[#0071e3]/[0.08] border border-[#0071e3]/20 text-[#0071e3] text-[13px] font-medium animate-in fade-in">
+                <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                <span>Uploading creative asset to Cloudflare R2 storage...</span>
+              </div>
+            )}
+
+            {uploadSuccess && (
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl bg-[#e8f5e9] border border-[#c8e6c9] text-[#2e7d32] text-[13px] font-medium animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>{uploadSuccess}</span>
+                </div>
+                <button onClick={() => setUploadSuccess(null)} className="text-[#2e7d32] hover:opacity-70">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+
+            {uploadError && (
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl bg-[#fdf2f2] border border-[#fde8e8] text-[#c81e1e] text-[13px] font-medium animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>Upload failed: {uploadError}</span>
+                </div>
+                <button onClick={() => setUploadError(null)} className="text-[#c81e1e] hover:opacity-70">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
 
             <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-3 shadow-xs">
               {currentVersion.creativeAssets.length > 0 ? (

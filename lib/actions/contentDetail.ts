@@ -291,7 +291,7 @@ export async function getAuthoritativeContentItemDetailAction(
         filename: a.filename,
         fileSizeBytes: Number(a.fileSizeBytes || 0),
         mimeType: a.mimeType,
-        previewUrl: a.previewUrl || "",
+        previewUrl: a.assetId ? `/api/assets/${a.assetId}/preview` : (a.previewUrl || ""),
         contentHash: a.contentHash || "",
         storageKey: a.storageKey || undefined,
       })),

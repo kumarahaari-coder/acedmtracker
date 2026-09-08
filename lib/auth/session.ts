@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { db } from "../db";
 import { users, projectMemberships, projects, OrganizationRole, MembershipRole } from "../db/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
@@ -50,7 +51,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * STRICT SECURITY INVARIANT: NEVER falls back to Founder, Admin, or any default user.
  * If no valid active user is resolved, returns null.
  */
-export async function getAuthoritativeUser(userId?: string): Promise<AuthoritativeUser | null> {
+export const getAuthoritativeUser = cache(async (userId?: string): Promise<AuthoritativeUser | null> => {
   const isUuid = userId ? UUID_REGEX.test(userId) : false;
 
   try {
@@ -137,7 +138,7 @@ export async function getAuthoritativeUser(userId?: string): Promise<Authoritati
     console.error("Error in getAuthoritativeUser for userId:", userId, err);
     return null;
   }
-}
+});
 
 export const APPROVAL_REVIEWER_ROLES = ["founder", "admin", "consultant"] as const;
 export type ApprovalReviewerRole = typeof APPROVAL_REVIEWER_ROLES[number];
