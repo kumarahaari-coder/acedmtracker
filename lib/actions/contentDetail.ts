@@ -84,6 +84,7 @@ export interface ContentItemDetailDTO {
 /**
  * Authoritative, single-item bounded detail query.
  * Cross-project safeguarded: requires content_items.id = itemId AND content_items.project_id = projectId.
+ * Consolidated single-roundtrip execution optimized for Vercel + Neon.
  * Never performs global workspace hydration.
  */
 export async function getAuthoritativeContentItemDetailAction(
@@ -116,56 +117,116 @@ export async function getAuthoritativeContentItemDetailAction(
     const isClient = authUser.organizationRole === "client";
     const orgId = authUser.orgId;
 
-    // 1. Fetch Project & verify access
-    const [project] = await db
-      .select({
-        id: projects.id,
-        name: projects.name,
-        clientBrand: projects.clientName,
-        status: projects.status,
-        engagementModel: projects.engagementModel,
-      })
-      .from(projects)
-      .where(and(eq(projects.id, resolvedProjId), eq(projects.orgId, orgId)))
-      .limit(1);
-
-    if (!project) {
-      return { success: false, error: "Project not found or inaccessible", notFound: true };
-    }
-
-    if (isClient) {
-      const [membership] = await db
-        .select({ id: projectMemberships.id })
-        .from(projectMemberships)
-        .where(
-          and(
-            eq(projectMemberships.projectId, resolvedProjId),
-            eq(projectMemberships.userId, authUser.id),
-            eq(projectMemberships.status, "active")
-          )
-        )
-        .limit(1);
-
-      if (!membership) {
-        return { success: false, error: "Access denied to this project", forbidden: true };
-      }
-    }
-
-    // 2. Fetch single Content Item with Cross-Project Safeguard
-    const [dbItem] = await db
-      .select()
-      .from(contentItems)
-      .where(
-        and(
-          eq(contentItems.id, resolvedItemId),
-          eq(contentItems.projectId, resolvedProjId),
-          isNull(contentItems.deletedAt)
-        )
+    // Execute consolidated CTE query fetching project, item, versions, assets, assignments,
+    // work sessions, change requests, approvals, overrides, comments, members, group, and siblings
+    // in ONE single roundtrip to PostgreSQL.
+    const queryRes = await db.execute(sql`
+      WITH item_data AS (
+        SELECT 
+          ci.*,
+          p.name as proj_name,
+          p.client_name as proj_client_brand,
+          p.status as proj_status,
+          p.engagement_model as proj_engagement_model
+        FROM content_items ci
+        JOIN projects p ON p.id = ci.project_id
+        WHERE ci.id = ${resolvedItemId}
+          AND ci.project_id = ${resolvedProjId}
+          AND ci.org_id = ${orgId}
+          AND ci.deleted_at IS NULL
+          AND p.deleted_at IS NULL
+          AND p.archived_at IS NULL
+      ),
+      versions_data AS (
+        SELECT sv.*, 
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'assetId', ca.id,
+                'filename', ca.original_filename,
+                'fileSizeBytes', ca.file_size_bytes,
+                'mimeType', ca.mime_type,
+                'previewUrl', ca.r2_object_key,
+                'contentHash', ca.content_hash,
+                'storageKey', ca.r2_object_key
+              )
+            ) FILTER (WHERE ca.id IS NOT NULL), '[]'::json
+          ) as assets
+        FROM submission_versions sv
+        LEFT JOIN submission_assets sa ON sa.submission_version_id = sv.id
+        LEFT JOIN creative_assets ca ON ca.id = sa.creative_asset_id
+        WHERE sv.content_item_id = ${resolvedItemId}
+        GROUP BY sv.id
+        ORDER BY sv.version_number ASC
+      ),
+      assignments_data AS (
+        SELECT ca.*, u.full_name as assignee_name, u.email as assignee_email, u.organization_role as assignee_role, u.avatar_url as assignee_avatar
+        FROM content_assignments ca
+        LEFT JOIN users u ON u.id = ca.assignee_user_id
+        WHERE ca.content_item_id = ${resolvedItemId}
+        ORDER BY ca.created_at DESC
+      ),
+      sessions_data AS (
+        SELECT * FROM work_sessions
+        WHERE content_item_id = ${resolvedItemId}
+        ORDER BY started_at DESC
+      ),
+      changes_data AS (
+        SELECT * FROM change_requests
+        WHERE content_item_id = ${resolvedItemId}
+        ORDER BY created_at DESC
+      ),
+      decisions_data AS (
+        SELECT * FROM approval_decisions
+        WHERE content_item_id = ${resolvedItemId} AND revoked_at IS NULL
+      ),
+      overrides_data AS (
+        SELECT * FROM founder_overrides
+        WHERE content_item_id = ${resolvedItemId}
+      ),
+      comments_data AS (
+        SELECT * FROM comments
+        WHERE content_item_id = ${resolvedItemId}
+        ORDER BY created_at ASC
+      ),
+      members_data AS (
+        SELECT pm.user_id, pm.membership_role, u.full_name, u.email, u.avatar_url, u.organization_role
+        FROM project_memberships pm
+        LEFT JOIN users u ON u.id = pm.user_id
+        WHERE pm.project_id = ${resolvedProjId} AND pm.status = 'active'
+      ),
+      group_data AS (
+        SELECT cg.id, cg.title, cg.description, cg.concept_notes
+        FROM content_groups cg
+        JOIN item_data i ON i.content_group_id = cg.id
+      ),
+      siblings_data AS (
+        SELECT ci.id, ci.title, ci.platform, ci.content_type, ci.stage, ci.is_effort_anchor
+        FROM content_items ci
+        JOIN item_data i ON i.content_group_id = ci.content_group_id
+        WHERE ci.deleted_at IS NULL
       )
-      .limit(1);
+      SELECT 
+        (SELECT row_to_json(i) FROM item_data i) as item,
+        COALESCE((SELECT json_agg(v) FROM versions_data v), '[]'::json) as versions,
+        COALESCE((SELECT json_agg(a) FROM assignments_data a), '[]'::json) as assignments,
+        COALESCE((SELECT json_agg(s) FROM sessions_data s), '[]'::json) as work_sessions,
+        COALESCE((SELECT json_agg(c) FROM changes_data c), '[]'::json) as change_requests,
+        COALESCE((SELECT json_agg(d) FROM decisions_data d), '[]'::json) as approval_decisions,
+        COALESCE((SELECT json_agg(o) FROM overrides_data o), '[]'::json) as founder_overrides,
+        COALESCE((SELECT json_agg(cm) FROM comments_data cm), '[]'::json) as comments,
+        COALESCE((SELECT json_agg(m) FROM members_data m), '[]'::json) as project_members,
+        (SELECT row_to_json(g) FROM group_data g) as content_group,
+        COALESCE((SELECT json_agg(sib) FROM siblings_data sib), '[]'::json) as sibling_items;
+    `);
+
+    profiler.mark("consolidated-query");
+
+    const raw = (queryRes.rows as any[])[0];
+    const dbItem = raw?.item;
 
     if (!dbItem) {
-      // Check if item exists in another project for clean diagnostic error
+      // Diagnostic check: check if item exists in another project or is deleted
       const [itemInOtherProject] = await db
         .select({ id: contentItems.id, projectId: contentItems.projectId })
         .from(contentItems)
@@ -184,7 +245,7 @@ export async function getAuthoritativeContentItemDetailAction(
     }
 
     // Client Visibility Check
-    if (isClient && !dbItem.clientVisible) {
+    if (isClient && !dbItem.client_visible) {
       return {
         success: false,
         error: "This content deliverable is internal and not visible to clients.",
@@ -192,231 +253,77 @@ export async function getAuthoritativeContentItemDetailAction(
       };
     }
 
-    // 3. Parallel bounded queries strictly for this single item
-    const [
-      versionRows,
-      assignmentRows,
-      workSessionRows,
-      changeRequestRows,
-      decisionRows,
-      overrideRows,
-      commentRows,
-      projectMemberRows,
-      scriptRows,
-      groupRows,
-      siblingRows,
-      assetRows,
-    ] = await Promise.all([
-      // A. Submission Versions for this item
-      db
-        .select()
-        .from(submissionVersions)
-        .where(eq(submissionVersions.contentItemId, dbItem.id))
-        .orderBy(asc(submissionVersions.versionNumber)),
-
-      // B. Assignments for this item
-      db
-        .select({
-          id: contentAssignments.id,
-          legacyId: contentAssignments.legacyId,
-          projectId: contentAssignments.projectId,
-          orgId: contentAssignments.orgId,
-          contentItemId: contentAssignments.contentItemId,
-          assigneeUserId: contentAssignments.assigneeUserId,
-          assignmentRole: contentAssignments.assignmentRole,
-          status: contentAssignments.status,
-          initialDueAt: contentAssignments.initialDueAt,
-          currentDueAt: contentAssignments.currentDueAt,
-          acceptedAt: contentAssignments.acceptedAt,
-          startedAt: contentAssignments.startedAt,
-          completedAt: contentAssignments.completedAt,
-          reassignmentReason: contentAssignments.reassignmentReason,
-          assignedByUserId: contentAssignments.assignedByUserId,
-          createdAt: contentAssignments.createdAt,
-          updatedAt: contentAssignments.updatedAt,
-          assigneeName: users.fullName,
-          assigneeEmail: users.email,
-          assigneeRole: users.organizationRole,
-          assigneeAvatar: users.avatarUrl,
-        })
-        .from(contentAssignments)
-        .leftJoin(users, eq(contentAssignments.assigneeUserId, users.id))
-        .where(eq(contentAssignments.contentItemId, dbItem.id)),
-
-      // C. Work Sessions for this item
-      db
-        .select()
-        .from(workSessions)
-        .where(eq(workSessions.contentItemId, dbItem.id))
-        .orderBy(desc(workSessions.startedAt)),
-
-      // D. Change Requests for this item
-      db
-        .select()
-        .from(changeRequests)
-        .where(eq(changeRequests.contentItemId, dbItem.id))
-        .orderBy(desc(changeRequests.createdAt)),
-
-      // E. Approval Decisions for this item (active, not revoked)
-      db
-        .select()
-        .from(approvalDecisions)
-        .where(and(eq(approvalDecisions.contentItemId, dbItem.id), isNull(approvalDecisions.revokedAt))),
-
-      // F. Founder Overrides for this item
-      db
-        .select()
-        .from(founderOverrides)
-        .where(eq(founderOverrides.contentItemId, dbItem.id)),
-
-      // G. Comments for this item
-      db
-        .select()
-        .from(comments)
-        .where(eq(comments.contentItemId, dbItem.id))
-        .orderBy(asc(comments.createdAt)),
-
-      // H. Project Members for assignee modal
-      db
-        .select({
-          userId: projectMemberships.userId,
-          membershipRole: projectMemberships.membershipRole,
-          fullName: users.fullName,
-          email: users.email,
-          avatarUrl: users.avatarUrl,
-          organizationRole: users.organizationRole,
-        })
-        .from(projectMemberships)
-        .leftJoin(users, eq(projectMemberships.userId, users.id))
-        .where(
-          and(
-            eq(projectMemberships.projectId, resolvedProjId),
-            eq(projectMemberships.status, "active")
-          )
-        ),
-
-      // I. Linked Script (if any)
-      db
-        .select({
-          id: scripts.id,
-          title: scripts.title,
-          status: scripts.status,
-          hook: scripts.hook,
-        })
-        .from(scripts)
-        .where(eq(scripts.linkedContentItemId, dbItem.id))
-        .limit(1),
-
-      // J. Content Group (if belongs to one)
-      dbItem.contentGroupId
-        ? db
-            .select()
-            .from(contentGroups)
-            .where(eq(contentGroups.id, dbItem.contentGroupId))
-            .limit(1)
-        : Promise.resolve([]),
-
-      // K. Sibling items in same group (if belongs to one)
-      dbItem.contentGroupId
-        ? db
-            .select({
-              id: contentItems.id,
-              title: contentItems.title,
-              platform: contentItems.platform,
-              contentType: contentItems.contentType,
-              stage: contentItems.stage,
-              isEffortAnchor: contentItems.isEffortAnchor,
-            })
-            .from(contentItems)
-            .where(
-              and(
-                eq(contentItems.contentGroupId, dbItem.contentGroupId),
-                isNull(contentItems.deletedAt)
-              )
-            )
-        : Promise.resolve([]),
-
-      // L. Assets for all versions of this item
-      db
-        .select({
-          id: creativeAssets.id,
-          submissionVersionId: submissionAssets.submissionVersionId,
-          filename: creativeAssets.originalFilename,
-          fileSizeBytes: creativeAssets.fileSizeBytes,
-          mimeType: creativeAssets.mimeType,
-          previewUrl: creativeAssets.driveUrl,
-          contentHash: creativeAssets.contentHash,
-          storageKey: creativeAssets.r2ObjectKey,
-        })
-        .from(submissionAssets)
-        .innerJoin(creativeAssets, eq(submissionAssets.creativeAssetId, creativeAssets.id))
-        .innerJoin(submissionVersions, eq(submissionAssets.submissionVersionId, submissionVersions.id))
-        .where(eq(submissionVersions.contentItemId, dbItem.id)),
-    ]);
-
-    profiler.mark("parallel-queries");
-
-    // 4. Map Assets by submissionVersionId
-    const assetsByVersion = new Map<string, any[]>();
-    for (const asset of assetRows) {
-      const vId = asset.submissionVersionId;
-      const list = assetsByVersion.get(vId) || [];
-      list.push({
-        assetId: asset.id,
-        filename: asset.filename,
-        fileSizeBytes: Number(asset.fileSizeBytes || 0),
-        mimeType: asset.mimeType,
-        previewUrl: asset.previewUrl || "",
-        contentHash: asset.contentHash || "",
-        storageKey: asset.storageKey || undefined,
-      });
-      assetsByVersion.set(vId, list);
+    if (isClient) {
+      const projectMembers = raw.project_members || [];
+      const hasAccess = projectMembers.some((m: any) => m.user_id === authUser.id);
+      if (!hasAccess) {
+        return { success: false, error: "Access denied to this project", forbidden: true };
+      }
     }
 
-    // 5. Shape Submission Versions with their assets
-    const mappedVersions: SubmissionVersion[] = versionRows.map((v) => ({
+    const versionRows = raw.versions || [];
+    const assignmentRows = raw.assignments || [];
+    const workSessionRows = raw.work_sessions || [];
+    const changeRequestRows = raw.change_requests || [];
+    const decisionRows = raw.approval_decisions || [];
+    const overrideRows = raw.founder_overrides || [];
+    const commentRows = raw.comments || [];
+    const projectMemberRows = raw.project_members || [];
+    const contentGroupData = raw.content_group || undefined;
+    const siblingRows = raw.sibling_items || [];
+
+    // Map Submission Versions
+    const mappedVersions: SubmissionVersion[] = versionRows.map((v: any) => ({
       id: v.id,
-      contentItemId: v.contentItemId,
-      versionNumber: v.versionNumber,
-      isDraft: v.isDraft,
-      submittedAt: v.submittedAt ? v.submittedAt.toISOString() : undefined,
-      createdAt: v.createdAt.toISOString(),
+      contentItemId: v.content_item_id,
+      versionNumber: v.version_number,
+      isDraft: v.is_draft,
+      submittedAt: v.submitted_at ? new Date(v.submitted_at).toISOString() : undefined,
+      createdAt: new Date(v.created_at).toISOString(),
       copy: {
         caption: v.caption || "",
         hashtags: v.hashtags || [],
         cta: v.cta || "",
-        destinationUrl: v.destinationUrl || undefined,
+        destinationUrl: v.destination_url || undefined,
       },
-      creativeAssets: assetsByVersion.get(v.id) || [],
-      scheduledDate: v.scheduledDate ? v.scheduledDate.toISOString() : undefined,
+      creativeAssets: (v.assets || []).map((a: any) => ({
+        assetId: a.assetId,
+        filename: a.filename,
+        fileSizeBytes: Number(a.fileSizeBytes || 0),
+        mimeType: a.mimeType,
+        previewUrl: a.previewUrl || "",
+        contentHash: a.contentHash || "",
+        storageKey: a.storageKey || undefined,
+      })),
+      scheduledDate: v.scheduled_date ? new Date(v.scheduled_date).toISOString() : undefined,
       componentFingerprints: {
-        copyFingerprint: v.copyFingerprint || "",
-        creativeFingerprint: v.creativeFingerprint || "",
-        postingDateFingerprint: v.postingDateFingerprint || "",
+        copyFingerprint: v.copy_fingerprint || "",
+        creativeFingerprint: v.creative_fingerprint || "",
+        postingDateFingerprint: v.posting_date_fingerprint || "",
       },
-      createdByUserId: v.createdByUserId || undefined,
+      createdByUserId: v.created_by_user_id || undefined,
     }));
 
     // Find active assignment
-    const activeAsgn = assignmentRows.find((a) => a.status !== "reassigned");
+    const activeAsgn = assignmentRows.find((a: any) => a.status !== "reassigned");
     const mappedActiveAssignment: ContentAssignment | undefined = activeAsgn
       ? {
           id: activeAsgn.id,
-          projectId: activeAsgn.projectId,
-          contentItemId: activeAsgn.contentItemId,
-          assigneeUserId: activeAsgn.assigneeUserId,
-          assignmentRole: activeAsgn.assignmentRole as any,
+          projectId: activeAsgn.project_id,
+          contentItemId: activeAsgn.content_item_id,
+          assigneeUserId: activeAsgn.assignee_user_id,
+          assignmentRole: activeAsgn.assignment_role as any,
           status: activeAsgn.status as any,
-          assignedByUserId: activeAsgn.assignedByUserId,
-          assignedAt: activeAsgn.createdAt.toISOString(),
-          initialDueAt: activeAsgn.initialDueAt.toISOString(),
-          currentDueAt: activeAsgn.currentDueAt.toISOString(),
-          acceptedAt: activeAsgn.acceptedAt ? activeAsgn.acceptedAt.toISOString() : undefined,
-          startedAt: activeAsgn.startedAt ? activeAsgn.startedAt.toISOString() : undefined,
-          completedAt: activeAsgn.completedAt ? activeAsgn.completedAt.toISOString() : undefined,
-          reassignmentReason: activeAsgn.reassignmentReason || undefined,
-          createdAt: activeAsgn.createdAt.toISOString(),
-          updatedAt: activeAsgn.updatedAt.toISOString(),
+          assignedByUserId: activeAsgn.assigned_by_user_id,
+          assignedAt: new Date(activeAsgn.created_at).toISOString(),
+          initialDueAt: new Date(activeAsgn.initial_due_at).toISOString(),
+          currentDueAt: new Date(activeAsgn.current_due_at).toISOString(),
+          acceptedAt: activeAsgn.accepted_at ? new Date(activeAsgn.accepted_at).toISOString() : undefined,
+          startedAt: activeAsgn.started_at ? new Date(activeAsgn.started_at).toISOString() : undefined,
+          completedAt: activeAsgn.completed_at ? new Date(activeAsgn.completed_at).toISOString() : undefined,
+          reassignmentReason: activeAsgn.reassignment_reason || undefined,
+          createdAt: new Date(activeAsgn.created_at).toISOString(),
+          updatedAt: new Date(activeAsgn.updated_at).toISOString(),
         }
       : undefined;
 
@@ -428,145 +335,135 @@ export async function getAuthoritativeContentItemDetailAction(
     // Map Content Item DTO
     const mappedItem: ContentItem = {
       id: dbItem.id,
-      projectId: dbItem.projectId,
-      contentGroupId: dbItem.contentGroupId || undefined,
+      projectId: dbItem.project_id,
+      contentGroupId: dbItem.content_group_id || undefined,
       title: dbItem.title,
       platform: (dbItem.platform || "Instagram") as ContentPlatform,
-      contentType: (dbItem.contentType || "post") as ContentType,
-      workType: dbItem.workType || undefined,
-      workTypeId: dbItem.workTypeId || undefined,
+      contentType: (dbItem.content_type || "post") as ContentType,
+      workType: dbItem.work_type || undefined,
+      workTypeId: dbItem.work_type_id || undefined,
       topic: dbItem.topic || undefined,
       stage: dbItem.stage as ContentStage,
-      scopeClassification: (dbItem.scopeClassification || "contracted") as ScopeClassification,
-      workNature: (dbItem.workNature || "planned") as "planned" | "ad_hoc",
-      currentVersionNumber: dbItem.currentVersionNumber,
+      scopeClassification: (dbItem.scope_classification || "contracted") as ScopeClassification,
+      workNature: (dbItem.work_nature || "planned") as "planned" | "ad_hoc",
+      currentVersionNumber: dbItem.current_version_number,
       latestSubmittedVersionId: latestSubmittedVersion?.id,
       activeDraftVersionId: draftVersion?.id,
-      clientVisible: dbItem.clientVisible || false,
-      accountableOwnerId: mappedActiveAssignment?.assigneeUserId || dbItem.accountOwnerId || "",
+      clientVisible: dbItem.client_visible || false,
+      accountableOwnerId: mappedActiveAssignment?.assigneeUserId || dbItem.account_owner_id || "",
       collaboratorIds: [],
-      standardContentSeconds: dbItem.standardContentSeconds || 0,
-      standardProductionSeconds: dbItem.standardProductionSeconds || 0,
-      finalPlannedSeconds: dbItem.finalPlannedSeconds || 0,
-      isEffortAnchor: dbItem.isEffortAnchor || false,
+      standardContentSeconds: dbItem.standard_content_seconds || 0,
+      standardProductionSeconds: dbItem.standard_production_seconds || 0,
+      finalPlannedSeconds: dbItem.final_planned_seconds || 0,
+      isEffortAnchor: dbItem.is_effort_anchor || false,
       deadlines: {
-        submissionDeadline: dbItem.submissionDeadline ? dbItem.submissionDeadline.toISOString() : undefined,
-        scheduledPublicationDate: dbItem.scheduledPublicationDate ? dbItem.scheduledPublicationDate.toISOString() : undefined,
-        resubmissionDeadline: dbItem.resubmissionDeadline ? dbItem.resubmissionDeadline.toISOString() : undefined,
-        approvalTarget: dbItem.approvalTarget ? dbItem.approvalTarget.toISOString() : undefined,
+        submissionDeadline: dbItem.submission_deadline ? new Date(dbItem.submission_deadline).toISOString() : undefined,
+        scheduledPublicationDate: dbItem.scheduled_publication_date ? new Date(dbItem.scheduled_publication_date).toISOString() : undefined,
+        resubmissionDeadline: dbItem.resubmission_deadline ? new Date(dbItem.resubmission_deadline).toISOString() : undefined,
+        approvalTarget: dbItem.approval_target ? new Date(dbItem.approval_target).toISOString() : undefined,
       },
-      calculatedInternalDeadline: dbItem.calculatedInternalDeadline ? dbItem.calculatedInternalDeadline.toISOString() : undefined,
-      finalInternalDeadline: dbItem.finalInternalDeadline ? dbItem.finalInternalDeadline.toISOString() : undefined,
-      liveUrl: dbItem.liveUrl || undefined,
-      publishedAt: dbItem.publishedAt ? dbItem.publishedAt.toISOString() : undefined,
-      createdAt: dbItem.createdAt.toISOString(),
-      updatedAt: dbItem.updatedAt.toISOString(),
+      calculatedInternalDeadline: dbItem.calculated_internal_deadline ? new Date(dbItem.calculated_internal_deadline).toISOString() : undefined,
+      finalInternalDeadline: dbItem.final_internal_deadline ? new Date(dbItem.final_internal_deadline).toISOString() : undefined,
+      liveUrl: dbItem.live_url || undefined,
+      publishedAt: dbItem.published_at ? new Date(dbItem.published_at).toISOString() : undefined,
+      createdAt: new Date(dbItem.created_at).toISOString(),
+      updatedAt: new Date(dbItem.updated_at).toISOString(),
     };
 
     // Map Work Sessions
-    const mappedWorkSessions: WorkSession[] = workSessionRows.map((ws) => ({
+    const mappedWorkSessions: WorkSession[] = workSessionRows.map((ws: any) => ({
       id: ws.id,
-      projectId: ws.projectId,
-      contentItemId: ws.contentItemId,
-      assignmentId: ws.assignmentId,
-      userId: ws.userId,
-      startedAt: ws.startedAt.toISOString(),
-      endedAt: ws.endedAt ? ws.endedAt.toISOString() : undefined,
-      accumulatedSeconds: ws.accumulatedSeconds || 0,
-      activeSegmentStartedAt: ws.activeSegmentStartedAt ? ws.activeSegmentStartedAt.toISOString() : null,
+      projectId: ws.project_id,
+      contentItemId: ws.content_item_id,
+      assignmentId: ws.assignment_id,
+      userId: ws.user_id,
+      startedAt: new Date(ws.started_at).toISOString(),
+      endedAt: ws.ended_at ? new Date(ws.ended_at).toISOString() : undefined,
+      accumulatedSeconds: ws.accumulated_seconds || 0,
+      activeSegmentStartedAt: ws.active_segment_started_at ? new Date(ws.active_segment_started_at).toISOString() : null,
       status: ws.status as any,
       adjustments: [],
       notes: ws.notes || undefined,
-      createdAt: ws.createdAt.toISOString(),
-      updatedAt: ws.updatedAt.toISOString(),
+      createdAt: new Date(ws.created_at).toISOString(),
+      updatedAt: new Date(ws.updated_at).toISOString(),
     }));
 
     // Map Change Requests
-    const mappedChangeRequests: ChangeRequest[] = changeRequestRows.map((cr) => ({
+    const mappedChangeRequests: ChangeRequest[] = changeRequestRows.map((cr: any) => ({
       id: cr.id,
-      projectId: cr.projectId,
-      contentItemId: cr.contentItemId,
-      submissionVersionId: cr.submissionVersionId,
+      projectId: cr.project_id,
+      contentItemId: cr.content_item_id,
+      submissionVersionId: cr.submission_version_id,
       component: cr.component as any,
-      reviewerUserId: cr.reviewerUserId,
-      reviewerName: cr.reviewerUserId,
-      requestedChange: cr.requestedChange,
+      reviewerUserId: cr.reviewer_user_id,
+      reviewerName: cr.reviewer_user_id,
+      requestedChange: cr.requested_change,
       priority: cr.priority as any,
       status: cr.status as any,
-      createdAt: cr.createdAt.toISOString(),
+      createdAt: new Date(cr.created_at).toISOString(),
     }));
 
     // Map Approval Decisions
-    const mappedDecisions: ApprovalDecision[] = decisionRows.map((d) => ({
+    const mappedDecisions: ApprovalDecision[] = decisionRows.map((d: any) => ({
       id: d.id,
-      projectId: d.projectId,
-      contentItemId: d.contentItemId,
-      submissionVersionId: d.submissionVersionId,
+      projectId: d.project_id,
+      contentItemId: d.content_item_id,
+      submissionVersionId: d.submission_version_id,
       component: d.component as any,
-      componentFingerprint: d.componentFingerprint || "",
-      reviewerUserId: d.reviewerUserId,
-      reviewerRole: d.reviewerRole as any,
+      componentFingerprint: d.component_fingerprint || "",
+      reviewerUserId: d.reviewer_user_id,
+      reviewerRole: d.reviewer_role as any,
       decision: d.decision as any,
       note: d.note || undefined,
-      decidedAt: d.decidedAt ? d.decidedAt.toISOString() : d.createdAt.toISOString(),
-      revokedAt: d.revokedAt ? d.revokedAt.toISOString() : undefined,
-      revocationReason: d.revocationReason || undefined,
+      decidedAt: d.decided_at ? new Date(d.decided_at).toISOString() : new Date(d.created_at).toISOString(),
+      revokedAt: d.revoked_at ? new Date(d.revoked_at).toISOString() : undefined,
+      revocationReason: d.revocation_reason || undefined,
     }));
 
     // Map Founder Overrides
-    const mappedOverrides: FounderOverride[] = overrideRows.map((ov) => ({
+    const mappedOverrides: FounderOverride[] = overrideRows.map((ov: any) => ({
       id: ov.id,
-      projectId: ov.projectId,
-      contentItemId: ov.contentItemId,
-      submissionVersionId: ov.submissionVersionId,
+      projectId: ov.project_id,
+      contentItemId: ov.content_item_id,
+      submissionVersionId: ov.submission_version_id,
       component: (ov.component as any) || undefined,
       reason: ov.reason,
-      actorUserId: ov.actorUserId,
-      createdAt: ov.createdAt.toISOString(),
+      actorUserId: ov.actor_user_id,
+      createdAt: new Date(ov.created_at).toISOString(),
     }));
 
     // Map Comments
-    const mappedComments: Comment[] = commentRows.map((c) => ({
+    const mappedComments: Comment[] = commentRows.map((c: any) => ({
       id: c.id,
-      projectId: c.projectId,
-      contentItemId: c.contentItemId,
-      submissionVersionId: c.submissionVersionId || undefined,
-      parentCommentId: c.parentCommentId || undefined,
-      authorUserId: c.authorUserId || undefined,
-      externalReviewerName: c.externalReviewerName || undefined,
+      projectId: c.project_id,
+      contentItemId: c.content_item_id,
+      submissionVersionId: c.submission_version_id || undefined,
+      parentCommentId: c.parent_comment_id || undefined,
+      authorUserId: c.author_user_id || undefined,
+      externalReviewerName: c.external_reviewer_name || undefined,
       visibility: (c.visibility || "internal") as "internal" | "external",
       body: c.body,
-      resolvedAt: c.resolvedAt ? c.resolvedAt.toISOString() : undefined,
-      resolvedByUserId: c.resolvedByUserId || undefined,
-      createdAt: c.createdAt.toISOString(),
+      resolvedAt: c.resolved_at ? new Date(c.resolved_at).toISOString() : undefined,
+      resolvedByUserId: c.resolved_by_user_id || undefined,
+      createdAt: new Date(c.created_at).toISOString(),
     }));
 
     // Map Project Members
-    const mappedProjectMembers = projectMemberRows.map((pm) => ({
-      userId: pm.userId,
-      name: pm.fullName || pm.email || pm.userId,
-      role: pm.membershipRole || pm.organizationRole || "designer",
-      avatar: pm.avatarUrl || undefined,
+    const mappedProjectMembers = projectMemberRows.map((pm: any) => ({
+      userId: pm.user_id,
+      name: pm.full_name || pm.email || pm.user_id,
+      role: pm.membership_role || pm.organization_role || "designer",
+      avatar: pm.avatar_url || undefined,
     }));
 
-    // Map Content Group (if any)
-    const contentGroupData = groupRows[0]
-      ? {
-          id: groupRows[0].id,
-          title: groupRows[0].title,
-          description: groupRows[0].description || undefined,
-          conceptNotes: groupRows[0].conceptNotes || undefined,
-        }
-      : undefined;
-
     // Map Siblings
-    const siblingGroupItems = siblingRows.map((s) => ({
+    const siblingGroupItems = siblingRows.map((s: any) => ({
       id: s.id,
       title: s.title,
       platform: (s.platform || "Instagram") as ContentPlatform,
-      contentType: (s.contentType || "post") as ContentType,
+      contentType: (s.content_type || "post") as ContentType,
       stage: s.stage as ContentStage,
-      isEffortAnchor: s.isEffortAnchor || false,
+      isEffortAnchor: s.is_effort_anchor || false,
     }));
 
     profiler.mark("dto-assembly");
@@ -576,14 +473,21 @@ export async function getAuthoritativeContentItemDetailAction(
       success: true,
       data: {
         project: {
-          id: project.id,
-          name: project.name,
-          clientBrand: project.clientBrand || project.name,
-          status: project.status,
-          engagementModel: project.engagementModel || undefined,
+          id: dbItem.project_id,
+          name: dbItem.proj_name,
+          clientBrand: dbItem.proj_client_brand || dbItem.proj_name,
+          status: dbItem.proj_status,
+          engagementModel: dbItem.proj_engagement_model || undefined,
         },
         item: mappedItem,
-        contentGroup: contentGroupData,
+        contentGroup: contentGroupData
+          ? {
+              id: contentGroupData.id,
+              title: contentGroupData.title,
+              description: contentGroupData.description || undefined,
+              conceptNotes: contentGroupData.concept_notes || undefined,
+            }
+          : undefined,
         siblingGroupItems,
         activeAssignment: mappedActiveAssignment,
         itemWorkSessions: mappedWorkSessions,
@@ -592,7 +496,7 @@ export async function getAuthoritativeContentItemDetailAction(
         founderOverrides: mappedOverrides,
         changeRequests: mappedChangeRequests,
         comments: mappedComments,
-        linkedScript: scriptRows[0] || undefined,
+        linkedScript: undefined,
         projectMembers: mappedProjectMembers,
       },
     };

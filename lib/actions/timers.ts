@@ -1,77 +1,189 @@
 "use server";
 
 import { db, runTransaction } from "../db";
-import { workSessions, workSessionAdjustments, contentAssignments, contentItems, projects } from "../db/schema";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { workSessions, workSessionAdjustments, contentAssignments, contentItems, projects, projectMemberships } from "../db/schema";
+import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveAssignmentId, resolveContentItemId } from "../compat/resolver";
+
+export type TimerErrorCode =
+  | "ASSIGNMENT_NOT_FOUND"
+  | "ACTIVE_TIMER_CONFLICT"
+  | "PROJECT_ACCESS_DENIED"
+  | "DELIVERABLE_INACTIVE"
+  | "UNAUTHORIZED";
+
+export interface StartWorkSessionParams {
+  contentItemId?: string;
+  assignmentId?: string;
+  actorUserId?: string;
+  notes?: string;
+}
+
+export interface StartWorkSessionResult {
+  success: boolean;
+  code?: TimerErrorCode;
+  error?: string;
+  activeTaskTitle?: string;
+  workSession?: any;
+  assignment?: any;
+}
 
 /**
  * 1. Start Work Session Action
  * Authoritative Server-owned timer.
- * Enforces invariant: No overlapping active work sessions for the same user.
- * Automatically pauses any previous active session for this user before starting new one.
+ * Preferred contract: startWorkSessionAction({ contentItemId })
+ * Resolves authenticated user, canonical assignment, validates active project membership,
+ * verifies deliverable is not deleted/archived, strictly enforces 1 active timer per user,
+ * and atomically transitions assignment from 'assigned'/'accepted' to 'in_progress'.
  */
-export async function startWorkSessionAction(params: {
-  actorUserId: string;
-  assignmentId: string;
-  notes?: string;
-}) {
-  const { actorUserId, assignmentId, notes } = params;
+export async function startWorkSessionAction(
+  params: StartWorkSessionParams
+): Promise<StartWorkSessionResult> {
+  const { contentItemId, assignmentId, actorUserId, notes } = params;
 
+  // 1. Resolve authoritative user
   const actor = await getAuthoritativeUser(actorUserId);
-  if (!actor) return { success: false, error: "Unauthorized." };
+  if (!actor) {
+    return { success: false, code: "UNAUTHORIZED", error: "Unauthorized." };
+  }
 
-  const resolvedAsgnId = await resolveAssignmentId(assignmentId);
-  if (!resolvedAsgnId) return { success: false, error: "Assignment not found." };
+  // 2. Resolve assignment authoritatively
+  let resolvedItemId: string | undefined = undefined;
+  if (contentItemId) {
+    resolvedItemId = (await resolveContentItemId(contentItemId)) || contentItemId;
+  }
 
-  const [assignment] = await db
-    .select()
-    .from(contentAssignments)
-    .where(eq(contentAssignments.id, resolvedAsgnId))
+  let assignment: typeof contentAssignments.$inferSelect | undefined = undefined;
+
+  if (resolvedItemId) {
+    const [found] = await db
+      .select()
+      .from(contentAssignments)
+      .where(
+        and(
+          eq(contentAssignments.contentItemId, resolvedItemId),
+          eq(contentAssignments.assigneeUserId, actor.id),
+          inArray(contentAssignments.status, ["assigned", "accepted", "in_progress"])
+        )
+      )
+      .limit(1);
+    assignment = found;
+  }
+
+  if (!assignment && assignmentId) {
+    const resolvedAsgnId = (await resolveAssignmentId(assignmentId)) || assignmentId;
+    const [found] = await db
+      .select()
+      .from(contentAssignments)
+      .where(
+        and(
+          eq(contentAssignments.id, resolvedAsgnId),
+          eq(contentAssignments.assigneeUserId, actor.id),
+          inArray(contentAssignments.status, ["assigned", "accepted", "in_progress"])
+        )
+      )
+      .limit(1);
+    assignment = found;
+  }
+
+  if (!assignment) {
+    return {
+      success: false,
+      code: "ASSIGNMENT_NOT_FOUND",
+      error: "Assignment not found for this deliverable.",
+    };
+  }
+
+  // 3. Ensure deliverable is active and not deleted/archived
+  const [item] = await db
+    .select({
+      id: contentItems.id,
+      title: contentItems.title,
+      status: contentItems.status,
+      deletedAt: contentItems.deletedAt,
+      projectId: contentItems.projectId,
+    })
+    .from(contentItems)
+    .where(eq(contentItems.id, assignment.contentItemId))
     .limit(1);
 
-  if (!assignment) return { success: false, error: "Assignment not found." };
+  if (!item || item.deletedAt !== null || item.status === "archived") {
+    return {
+      success: false,
+      code: "DELIVERABLE_INACTIVE",
+      error: "Deliverable is inactive or archived.",
+    };
+  }
+
+  // 4. Ensure project membership is active
+  const [membership] = await db
+    .select({ id: projectMemberships.id })
+    .from(projectMemberships)
+    .where(
+      and(
+        eq(projectMemberships.projectId, assignment.projectId),
+        eq(projectMemberships.userId, actor.id),
+        eq(projectMemberships.status, "active")
+      )
+    )
+    .limit(1);
+
+  if (!membership) {
+    return {
+      success: false,
+      code: "PROJECT_ACCESS_DENIED",
+      error: "Active project membership required to track work on this project.",
+    };
+  }
+
+  // 5. Concurrency Invariant: Check whether THIS USER already has another active work session
+  const [activeSession] = await db
+    .select({
+      id: workSessions.id,
+      assignmentId: workSessions.assignmentId,
+      contentItemId: workSessions.contentItemId,
+      title: contentItems.title,
+    })
+    .from(workSessions)
+    .leftJoin(contentItems, eq(workSessions.contentItemId, contentItems.id))
+    .where(
+      and(
+        eq(workSessions.userId, actor.id),
+        eq(workSessions.status, "active")
+      )
+    )
+    .limit(1);
+
+  if (activeSession && activeSession.assignmentId !== assignment.id) {
+    return {
+      success: false,
+      code: "ACTIVE_TIMER_CONFLICT",
+      activeTaskTitle: activeSession.title || "another deliverable",
+      error: `Active timer already running on '${activeSession.title || "another deliverable"}'. Please pause or stop it first.`,
+    };
+  }
 
   const now = new Date();
 
   return runTransaction(async (tx) => {
-    // 1. Pause any currently active work session for this user
-    const [activeSession] = await tx
-      .select()
-      .from(workSessions)
-      .where(
-        and(
-          eq(workSessions.userId, actor.id),
-          eq(workSessions.status, "active")
-        )
-      )
-      .limit(1);
-
-    if (activeSession) {
-      const segmentElapsed = activeSession.activeSegmentStartedAt
-        ? Math.floor((now.getTime() - new Date(activeSession.activeSegmentStartedAt).getTime()) / 1000)
-        : 0;
-      const newAccumulated = activeSession.accumulatedSeconds + Math.max(0, segmentElapsed);
-
-      await tx
-        .update(workSessions)
-        .set({
-          status: "paused",
-          accumulatedSeconds: newAccumulated,
-          activeSegmentStartedAt: null,
-          updatedAt: now,
-        })
-        .where(eq(workSessions.id, activeSession.id));
+    // Check if session for this assignment is already active
+    if (activeSession && activeSession.assignmentId === assignment!.id) {
+      const [current] = await tx
+        .select()
+        .from(workSessions)
+        .where(eq(workSessions.id, activeSession.id))
+        .limit(1);
+      return { success: true, workSession: current, assignment };
     }
 
-    // 2. Check if a paused session already exists for this assignment
-    const [existingAsgnSession] = await tx
+    // Check if a paused session already exists for this assignment
+    const [existingPausedSession] = await tx
       .select()
       .from(workSessions)
       .where(
         and(
-          eq(workSessions.assignmentId, assignment.id),
+          eq(workSessions.assignmentId, assignment!.id),
           eq(workSessions.userId, actor.id),
           eq(workSessions.status, "paused")
         )
@@ -80,7 +192,7 @@ export async function startWorkSessionAction(params: {
 
     let sessionRecord;
 
-    if (existingAsgnSession) {
+    if (existingPausedSession) {
       // Resume existing session
       const [resumed] = await tx
         .update(workSessions)
@@ -89,7 +201,7 @@ export async function startWorkSessionAction(params: {
           activeSegmentStartedAt: now,
           updatedAt: now,
         })
-        .where(eq(workSessions.id, existingAsgnSession.id))
+        .where(eq(workSessions.id, existingPausedSession.id))
         .returning();
       sessionRecord = resumed;
     } else {
@@ -98,10 +210,10 @@ export async function startWorkSessionAction(params: {
         .insert(workSessions)
         .values({
           legacyId: generateLegacyId("ws"),
-          projectId: assignment.projectId,
-          orgId: assignment.orgId,
-          contentItemId: assignment.contentItemId,
-          assignmentId: assignment.id,
+          projectId: assignment!.projectId,
+          orgId: assignment!.orgId,
+          contentItemId: assignment!.contentItemId,
+          assignmentId: assignment!.id,
           userId: actor.id,
           startedAt: now,
           accumulatedSeconds: 0,
@@ -114,18 +226,21 @@ export async function startWorkSessionAction(params: {
     }
 
     // Advance assignment status to 'in_progress' if currently 'assigned' or 'accepted'
-    if (assignment.status === "assigned" || assignment.status === "accepted") {
-      await tx
+    let updatedAssignment = assignment!;
+    if (assignment!.status === "assigned" || assignment!.status === "accepted") {
+      const [updated] = await tx
         .update(contentAssignments)
         .set({
           status: "in_progress",
-          startedAt: assignment.startedAt || now,
+          startedAt: assignment!.startedAt || now,
           updatedAt: now,
         })
-        .where(eq(contentAssignments.id, assignment.id));
+        .where(eq(contentAssignments.id, assignment!.id))
+        .returning();
+      updatedAssignment = updated;
     }
 
-    return { success: true, workSession: sessionRecord };
+    return { success: true, workSession: sessionRecord, assignment: updatedAssignment };
   });
 }
 
@@ -133,8 +248,8 @@ export async function startWorkSessionAction(params: {
  * 2. Pause Work Session Action
  */
 export async function pauseWorkSessionAction(params: {
-  actorUserId: string;
   workSessionId: string;
+  actorUserId?: string;
 }) {
   const { actorUserId, workSessionId } = params;
 
@@ -171,11 +286,71 @@ export async function pauseWorkSessionAction(params: {
 }
 
 /**
+ * 2b. Resume Work Session Action
+ */
+export async function resumeWorkSessionAction(params: {
+  workSessionId: string;
+  actorUserId?: string;
+}) {
+  const { actorUserId, workSessionId } = params;
+
+  const actor = await getAuthoritativeUser(actorUserId);
+  if (!actor) return { success: false, code: "UNAUTHORIZED" as const, error: "Unauthorized." };
+
+  const [session] = await db
+    .select()
+    .from(workSessions)
+    .where(eq(workSessions.id, workSessionId))
+    .limit(1);
+
+  if (!session) return { success: false, code: "ASSIGNMENT_NOT_FOUND" as const, error: "Work session not found." };
+  if (session.status === "active") return { success: true, workSession: session };
+
+  // Concurrency check: check if another session is already active
+  const [activeSession] = await db
+    .select({
+      id: workSessions.id,
+      title: contentItems.title,
+    })
+    .from(workSessions)
+    .leftJoin(contentItems, eq(workSessions.contentItemId, contentItems.id))
+    .where(
+      and(
+        eq(workSessions.userId, actor.id),
+        eq(workSessions.status, "active")
+      )
+    )
+    .limit(1);
+
+  if (activeSession && activeSession.id !== session.id) {
+    return {
+      success: false,
+      code: "ACTIVE_TIMER_CONFLICT" as const,
+      activeTaskTitle: activeSession.title || "another deliverable",
+      error: `Active timer already running on '${activeSession.title || "another deliverable"}'. Please pause or stop it first.`,
+    };
+  }
+
+  const now = new Date();
+  const [resumed] = await db
+    .update(workSessions)
+    .set({
+      status: "active",
+      activeSegmentStartedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(workSessions.id, session.id))
+    .returning();
+
+  return { success: true, workSession: resumed };
+}
+
+/**
  * 3. Stop / Complete Work Session Action
  */
 export async function stopWorkSessionAction(params: {
-  actorUserId: string;
   workSessionId: string;
+  actorUserId?: string;
 }) {
   const { actorUserId, workSessionId } = params;
 
@@ -215,7 +390,7 @@ export async function stopWorkSessionAction(params: {
 /**
  * 4. Get Current Active Work Session Action (Browser Refresh Recovery)
  */
-export async function getActiveWorkSessionAction(params: { actorUserId: string }) {
+export async function getActiveWorkSessionAction(params: { actorUserId?: string }) {
   const { actorUserId } = params;
 
   const actor = await getAuthoritativeUser(actorUserId);
@@ -252,10 +427,10 @@ export async function getActiveWorkSessionAction(params: { actorUserId: string }
  * 5. Adjust Work Session Duration Action
  */
 export async function adjustWorkSessionDurationAction(params: {
-  actorUserId: string;
   workSessionId: string;
   newDurationSeconds: number;
   reason: string;
+  actorUserId?: string;
 }) {
   const { actorUserId, workSessionId, newDurationSeconds, reason } = params;
 

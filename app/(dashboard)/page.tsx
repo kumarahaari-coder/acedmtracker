@@ -55,7 +55,7 @@ export default function AuthoritativeDashboardPage() {
 
   const loadDashboardData = async () => {
     setLoading(true);
-    const res = await getAuthoritativeMainDashboardAction();
+    const res = await getAuthoritativeMainDashboardAction(activeUserId);
     if (res.success && res.data) {
       setDashboardData(res.data);
     }
@@ -486,9 +486,17 @@ export default function AuthoritativeDashboardPage() {
           {/* My Day Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
-              <div className="text-xs text-[#86868b]">Due Today</div>
+              <div className="text-xs text-[#86868b] flex items-center justify-between">
+                <span>Due Today</span>
+                {(dashboardData?.employeePersonalView?.overdueTasks?.length || 0) > 0 && (
+                  <span className="text-[10px] font-bold text-[#b42318] bg-[#fff0ee] px-1.5 py-0.5 rounded-full">
+                    {dashboardData?.employeePersonalView?.overdueTasks?.length} Overdue
+                  </span>
+                )}
+              </div>
               <div className="text-2xl font-bold text-[#1d1d1f] mt-1">
-                {dashboardData?.employeePersonalView?.dueTodayTasks.length || 0}
+                {(dashboardData?.employeePersonalView?.dueTodayTasks.length || 0) +
+                  (dashboardData?.employeePersonalView?.overdueTasks?.length || 0)}
               </div>
             </div>
 
@@ -514,11 +522,41 @@ export default function AuthoritativeDashboardPage() {
             </div>
           </div>
 
-          {/* My Queue (Today / Tomorrow / Upcoming) */}
+          {/* My Queue (Overdue / Today / Tomorrow / Upcoming) */}
           <div className="bg-white rounded-2xl border border-black/[0.08] shadow-sm p-6 space-y-4">
             <h3 className="text-base font-bold text-[#1d1d1f]">My Task Queue</h3>
 
             <div className="space-y-4">
+              {/* Overdue */}
+              {dashboardData?.employeePersonalView?.overdueTasks && dashboardData.employeePersonalView.overdueTasks.length > 0 && (
+                <div>
+                  <div className="text-xs font-bold text-[#b42318] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 text-[#b42318]" />
+                    Overdue ({dashboardData.employeePersonalView.overdueTasks.length})
+                  </div>
+                  <div className="space-y-2">
+                    {dashboardData.employeePersonalView.overdueTasks.map((t) => (
+                      <Link
+                        key={t.id}
+                        href={`/projects/${t.projectId}/content/${t.id}`}
+                        className="p-3 bg-[#fff0ee] hover:bg-[#ffe5e1] border border-[#fecdca] rounded-xl flex items-center justify-between text-xs transition block group"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#b42318] group-hover:underline">{t.title}</div>
+                          <div className="text-[11px] text-[#7a271a] flex items-center gap-1 mt-0.5">
+                            <span>Open Deliverable</span>
+                            <ArrowRight className="h-2.5 w-2.5" />
+                          </div>
+                        </div>
+                        <span className="text-[#b42318] font-bold">
+                          {t.finalPlannedSeconds ? `${(t.finalPlannedSeconds / 3600).toFixed(2)}h` : "2h"}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Today */}
               <div>
                 <div className="text-xs font-bold text-[#0071e3] uppercase tracking-wider mb-2">Today</div>
@@ -527,12 +565,22 @@ export default function AuthoritativeDashboardPage() {
                 ) : (
                   <div className="space-y-2">
                     {dashboardData?.employeePersonalView?.queueToday.map((t) => (
-                      <div key={t.id} className="p-3 bg-[#f5f5f7] rounded-xl flex items-center justify-between text-xs">
-                        <div className="font-semibold text-[#1d1d1f]">{t.title}</div>
+                      <Link
+                        key={t.id}
+                        href={`/projects/${t.projectId}/content/${t.id}`}
+                        className="p-3 bg-[#f5f5f7] hover:bg-[#ebebee] rounded-xl flex items-center justify-between text-xs transition block group"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#1d1d1f] group-hover:underline">{t.title}</div>
+                          <div className="text-[11px] text-[#86868b] flex items-center gap-1 mt-0.5">
+                            <span>Open Deliverable</span>
+                            <ArrowRight className="h-2.5 w-2.5" />
+                          </div>
+                        </div>
                         <span className="text-[#0071e3] font-bold">
                           {t.finalPlannedSeconds ? `${(t.finalPlannedSeconds / 3600).toFixed(2)}h` : "2h"}
                         </span>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 )}
@@ -546,12 +594,22 @@ export default function AuthoritativeDashboardPage() {
                 ) : (
                   <div className="space-y-2">
                     {dashboardData?.employeePersonalView?.queueTomorrow.map((t) => (
-                      <div key={t.id} className="p-3 bg-[#f5f5f7] rounded-xl flex items-center justify-between text-xs">
-                        <div className="font-semibold text-[#1d1d1f]">{t.title}</div>
+                      <Link
+                        key={t.id}
+                        href={`/projects/${t.projectId}/content/${t.id}`}
+                        className="p-3 bg-[#f5f5f7] hover:bg-[#ebebee] rounded-xl flex items-center justify-between text-xs transition block group"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#1d1d1f] group-hover:underline">{t.title}</div>
+                          <div className="text-[11px] text-[#86868b] flex items-center gap-1 mt-0.5">
+                            <span>Open Deliverable</span>
+                            <ArrowRight className="h-2.5 w-2.5" />
+                          </div>
+                        </div>
                         <span className="text-[#6e6e73]">
                           {t.finalPlannedSeconds ? `${(t.finalPlannedSeconds / 3600).toFixed(2)}h` : "2h"}
                         </span>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 )}

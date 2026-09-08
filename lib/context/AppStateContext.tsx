@@ -1380,7 +1380,7 @@ export function AppStateProvider({
     const item = state.contentItems.find((i) => i.id === params.contentItemId);
     const now = new Date().toISOString();
 
-    if (!assignment && item && (item.accountableOwnerId === params.userId || item.collaboratorIds.includes(params.userId))) {
+    if (!assignment && (params.assignmentId || (item && (item.accountableOwnerId === params.userId || item.collaboratorIds.includes(params.userId))))) {
       const generatedAsgnId = params.assignmentId || ("asgn_" + Math.random().toString(36).substr(2, 9));
       assignment = {
         id: generatedAsgnId,
@@ -1391,8 +1391,8 @@ export function AppStateProvider({
         status: "in_progress",
         assignedByUserId: params.userId,
         assignedAt: now,
-        initialDueAt: item.deadlines.submissionDeadline || now,
-        currentDueAt: item.deadlines.submissionDeadline || now,
+        initialDueAt: item?.deadlines?.submissionDeadline || now,
+        currentDueAt: item?.deadlines?.submissionDeadline || now,
         createdAt: now,
         updatedAt: now,
       };

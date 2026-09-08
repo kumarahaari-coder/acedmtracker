@@ -266,8 +266,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
   error?: string;
 }> {
   try {
-    const resolvedUserId = (process.env.NODE_ENV === "test" || process.env.VITEST) ? actorUserId : undefined;
-    const authUser = await getAuthoritativeUser(resolvedUserId);
+    const authUser = await getAuthoritativeUser(actorUserId);
     if (!authUser) {
       return { success: false, items: [], projects: [], teamMembers: [], error: "Unauthorized" };
     }
@@ -295,7 +294,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
             END as "approvalStatus",
             ca.assignee_user_id as "assignedOwnerId",
             u.full_name as "assignedOwnerName",
-            COALESCE(ci.final_internal_deadline::text, ci.scheduled_publication_date::text, ci.submission_deadline::text) as "deadline",
+            COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, ci.scheduled_publication_date::text) as "deadline",
             ci.scheduled_publication_date::text as "scheduledPublicationDate",
             ci.submission_deadline::text as "submissionDeadline"
           FROM content_items ci
@@ -310,7 +309,8 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
           LEFT JOIN users u ON u.id = ca.assignee_user_id
           WHERE ci.org_id = ${orgId} 
             AND ci.deleted_at IS NULL
-            AND p.status = 'active'
+            AND p.deleted_at IS NULL
+            AND p.archived_at IS NULL
           ORDER BY ci.created_at DESC
           LIMIT 200
         `),

@@ -1409,6 +1409,7 @@ export interface MainDashboardDataDTO {
   weeklyTeamCapacity: EmployeePeriodScorecard[];
   monthlyProjectHealth: ProjectPerformanceScorecard[];
   employeePersonalView?: {
+    overdueTasks: ContentItem[];
     dueTodayTasks: ContentItem[];
     plannedHoursToday: number;
     loggedHoursToday: number;
@@ -1421,14 +1422,14 @@ export interface MainDashboardDataDTO {
   };
 }
 
-export async function getAuthoritativeMainDashboardAction(): Promise<{
+export async function getAuthoritativeMainDashboardAction(actorUserId?: string): Promise<{
   success: boolean;
   data?: MainDashboardDataDTO;
   error?: string;
 }> {
   const profiler = new ExecutionProfiler("getAuthoritativeMainDashboardAction");
   try {
-    const authUser = await getAuthoritativeUser();
+    const authUser = await getAuthoritativeUser(actorUserId);
     if (!authUser) return { success: false, error: "Unauthorized" };
     profiler.mark("auth-resolution");
 
@@ -1780,9 +1781,15 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
             ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline
           FROM content_items ci
           JOIN content_assignments ca ON ca.content_item_id = ci.id
+          JOIN projects p ON p.id = ci.project_id
+          JOIN project_memberships pm ON pm.project_id = p.id AND pm.user_id = ca.assignee_user_id AND pm.status = 'active'
           WHERE ca.assignee_user_id = ${authUser.id}
             AND ci.org_id = ${orgId}
             AND ci.deleted_at IS NULL
+            AND p.deleted_at IS NULL
+            AND p.archived_at IS NULL
+            AND (ci.status != 'archived')
+            AND (ci.stage != 'published' AND ci.completed_at IS NULL)
             AND ca.status IN ('assigned', 'accepted', 'in_progress')
           ORDER BY ci.priority = 'urgent' DESC, ci.created_at ASC
         `),
@@ -1812,6 +1819,13 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
         deadlines: { submissionDeadline: r.submission_deadline },
       })) as any[];
 
+      const overdueTasks = userItems.filter((i) => {
+        const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
+        if (!dl) return false;
+        const d = new Date(dl);
+        return d < startOfTodayIST;
+      });
+
       const dueTodayTasks = userItems.filter((i) => {
         const dl = i.finalInternalDeadline || i.calculatedInternalDeadline || i.deadlines?.submissionDeadline;
         if (!dl) return false;
@@ -1834,7 +1848,7 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
       });
 
       const loggedToday = parseFloat((userTodayHoursRes.rows[0] as any)?.logged_today || "0");
-      const plannedToday = dueTodayTasks.reduce(
+      const plannedToday = [...overdueTasks, ...dueTodayTasks].reduce(
         (sum, i) => sum + (i.finalPlannedSeconds ? i.finalPlannedSeconds / 3600 : 0),
         0
       );
@@ -1880,6 +1894,7 @@ export async function getAuthoritativeMainDashboardAction(): Promise<{
         } as EmployeePeriodScorecard);
 
       employeePersonalView = {
+        overdueTasks,
         dueTodayTasks,
         plannedHoursToday: Math.round(plannedToday * 100) / 100,
         loggedHoursToday: Math.round(loggedToday * 100) / 100,

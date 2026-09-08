@@ -64,6 +64,12 @@ import {
   revokeApprovalDecisionAction,
 } from "@/lib/actions/approvals";
 import {
+  startWorkSessionAction,
+  pauseWorkSessionAction,
+  resumeWorkSessionAction,
+  stopWorkSessionAction,
+} from "@/lib/actions/timers";
+import {
   createChangeRequestAction,
   respondToChangeRequestAction,
 } from "@/lib/actions/changes";
@@ -105,7 +111,6 @@ export default function ContentItemWorkspacePage() {
     resubmitItemVersion,
     addComment,
     assignContentItem,
-    acceptContentAssignment,
     updateAssignmentDeadline,
     startWorkSession,
     pauseWorkSession,
@@ -223,7 +228,104 @@ export default function ContentItemWorkspacePage() {
   const [adjustReason, setAdjustReason] = useState("");
 
   const [concurrencyErrorMessage, setConcurrencyErrorMessage] = useState<string | null>(null);
+  const [concurrencyTaskTitle, setConcurrencyTaskTitle] = useState<string | null>(null);
+  const [timerActionError, setTimerActionError] = useState<string | null>(null);
+  const [isTimerLoading, setIsTimerLoading] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  const handleStartTimer = async () => {
+    setIsTimerLoading(true);
+    setTimerActionError(null);
+    try {
+      const res = await startWorkSessionAction({
+        contentItemId: itemId,
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        setConcurrencyErrorMessage(null);
+        setConcurrencyTaskTitle(null);
+        await loadDetail();
+      } else {
+        if (res.code === "ACTIVE_TIMER_CONFLICT") {
+          setConcurrencyTaskTitle(res.activeTaskTitle || null);
+          setConcurrencyErrorMessage(res.error || "Active timer already running.");
+        } else {
+          setTimerActionError(res.error || "Failed to start work timer.");
+        }
+      }
+    } catch (err: any) {
+      setTimerActionError(err.message || "Failed to start work timer.");
+    } finally {
+      setIsTimerLoading(false);
+    }
+  };
+
+  const handlePauseTimer = async (sessionId: string) => {
+    setIsTimerLoading(true);
+    setTimerActionError(null);
+    try {
+      const res = await pauseWorkSessionAction({
+        workSessionId: sessionId,
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        await loadDetail();
+      } else {
+        setTimerActionError(res.error || "Failed to pause work session.");
+      }
+    } catch (err: any) {
+      setTimerActionError(err.message || "Failed to pause work session.");
+    } finally {
+      setIsTimerLoading(false);
+    }
+  };
+
+  const handleResumeTimer = async (sessionId: string) => {
+    setIsTimerLoading(true);
+    setTimerActionError(null);
+    try {
+      const res = await resumeWorkSessionAction({
+        workSessionId: sessionId,
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        setConcurrencyErrorMessage(null);
+        setConcurrencyTaskTitle(null);
+        await loadDetail();
+      } else {
+        if (res.code === "ACTIVE_TIMER_CONFLICT") {
+          setConcurrencyTaskTitle(res.activeTaskTitle || null);
+          setConcurrencyErrorMessage(res.error || "Active timer already running.");
+        } else {
+          setTimerActionError(res.error || "Failed to resume work session.");
+        }
+      }
+    } catch (err: any) {
+      setTimerActionError(err.message || "Failed to resume work session.");
+    } finally {
+      setIsTimerLoading(false);
+    }
+  };
+
+  const handleStopTimer = async (sessionId: string) => {
+    setIsTimerLoading(true);
+    setTimerActionError(null);
+    try {
+      const res = await stopWorkSessionAction({
+        workSessionId: sessionId,
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        await loadDetail();
+      } else {
+        setTimerActionError(res.error || "Failed to stop work session.");
+      }
+    } catch (err: any) {
+      setTimerActionError(err.message || "Failed to stop work session.");
+    } finally {
+      setIsTimerLoading(false);
+    }
+  };
 
   // Versions for this item
   const itemVersions = detailData?.itemVersions || state.submissionVersions.filter(
@@ -874,49 +976,14 @@ export default function ContentItemWorkspacePage() {
               />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-[#1d1d1f] text-[13px] truncate">
-                  {assignedMember?.name || "Unassigned"}
+                  {assignedMember?.userId === activeUserId ? "Assigned to you" : assignedMember?.name || "Unassigned"}
                 </div>
                 <div className="text-[11px] text-[#86868b] truncate">
+                  {assignedMember?.userId === activeUserId && assignedMember?.name ? `${assignedMember.name} • ` : ""}
                   Role: {activeAssignment?.assignmentRole || assignedMember?.role || "Designer"}
                 </div>
               </div>
             </div>
-
-            {/* Accept assignment action for assignee */}
-            {((activeAssignment?.status === "assigned" && (activeAssignment.assigneeUserId === activeUserId || !activeAssignment.assigneeUserId)) ||
-              (!activeAssignment && (item.accountableOwnerId === activeUserId || item.collaboratorIds.includes(activeUserId)))) && (
-              <button
-                onClick={() => {
-                  const targetAsgnId = activeAssignment?.id || ("asgn_" + Math.random().toString(36).substr(2, 9));
-                  acceptContentAssignment(targetAsgnId, activeUserId);
-                }}
-                className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#0071e3] hover:bg-[#0077ed] py-2 text-[12px] font-medium text-white shadow-sm transition"
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" /> Accept Deliverable Assignment
-              </button>
-            )}
-
-            {/* Start Work action for accepted assignee */}
-            {((activeAssignment?.status === "accepted" || (!activeAssignment && item.accountableOwnerId === activeUserId)) &&
-              (activeAssignment?.assigneeUserId === activeUserId || item.accountableOwnerId === activeUserId) &&
-              !currentActiveSession) && (
-              <button
-                onClick={() => {
-                  const res = startWorkSession({
-                    projectId,
-                    contentItemId: item.id,
-                    assignmentId: activeAssignment?.id || "",
-                    userId: activeUserId,
-                  });
-                  if (!res.success && res.error) {
-                    setConcurrencyErrorMessage(res.error);
-                  }
-                }}
-                className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-[#1f6f32] hover:bg-[#195a28] py-2 text-[12px] font-medium text-white shadow-sm transition"
-              >
-                <Play className="h-3.5 w-3.5" /> Start Work (Start Timer)
-              </button>
-            )}
 
             {/* Management Actions: Reassign & Edit Deadline */}
             {(activeRole === "founder" || activeRole === "consultant" || activeRole === "admin" || canManageWorkflow) && (
@@ -998,15 +1065,17 @@ export default function ContentItemWorkspacePage() {
                 {currentActiveSession ? (
                   <>
                     <button
-                      onClick={() => pauseWorkSession(currentActiveSession.id, activeUserId)}
-                      className="p-2 rounded-lg bg-[#fff8e6] text-[#9a6700] hover:bg-[#ffe082] transition"
+                      onClick={() => handlePauseTimer(currentActiveSession.id)}
+                      disabled={isTimerLoading}
+                      className="p-2 rounded-lg bg-[#fff8e6] text-[#9a6700] hover:bg-[#ffe082] disabled:opacity-50 transition"
                       title="Pause Timer"
                     >
                       <Pause className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => stopWorkSession(currentActiveSession.id, activeUserId)}
-                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] transition"
+                      onClick={() => handleStopTimer(currentActiveSession.id)}
+                      disabled={isTimerLoading}
+                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] disabled:opacity-50 transition"
                       title="Stop & Complete Session"
                     >
                       <Square className="h-4 w-4" />
@@ -1015,20 +1084,17 @@ export default function ContentItemWorkspacePage() {
                 ) : currentPausedSession ? (
                   <>
                     <button
-                      onClick={() => {
-                        const res = resumeWorkSession(currentPausedSession.id, activeUserId);
-                        if (!res.success && res.error) {
-                          setConcurrencyErrorMessage(res.error);
-                        }
-                      }}
-                      className="p-2 rounded-lg bg-[#eaf6ed] text-[#1f6f32] hover:bg-[#ceead6] transition"
+                      onClick={() => handleResumeTimer(currentPausedSession.id)}
+                      disabled={isTimerLoading}
+                      className="p-2 rounded-lg bg-[#eaf6ed] text-[#1f6f32] hover:bg-[#ceead6] disabled:opacity-50 transition"
                       title="Resume Timer"
                     >
                       <Play className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => stopWorkSession(currentPausedSession.id, activeUserId)}
-                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] transition"
+                      onClick={() => handleStopTimer(currentPausedSession.id)}
+                      disabled={isTimerLoading}
+                      className="p-2 rounded-lg bg-[#fff0ee] text-[#b42318] hover:bg-[#ffd5d0] disabled:opacity-50 transition"
                       title="Stop Session"
                     >
                       <Square className="h-4 w-4" />
@@ -1037,29 +1103,29 @@ export default function ContentItemWorkspacePage() {
                 ) : (
                   (activeRole === "designer" || activeAssignment?.assigneeUserId === activeUserId || canAdmin) && (
                     <button
-                      onClick={() => {
-                        if (!activeAssignment) {
-                          alert("Please assign this deliverable before starting time tracking.");
-                          return;
-                        }
-                        const res = startWorkSession({
-                          projectId,
-                          contentItemId: item.id,
-                          assignmentId: activeAssignment.id,
-                          userId: activeUserId,
-                        });
-                        if (!res.success && res.error) {
-                          setConcurrencyErrorMessage(res.error);
-                        }
-                      }}
-                      className="flex items-center gap-1 rounded-lg bg-[#0071e3] hover:bg-[#0077ed] text-white px-3 py-1.5 text-[12px] font-medium transition shadow-sm"
+                      onClick={handleStartTimer}
+                      disabled={isTimerLoading}
+                      className="flex items-center gap-1 rounded-lg bg-[#0071e3] hover:bg-[#0077ed] disabled:opacity-50 text-white px-3 py-1.5 text-[12px] font-medium transition shadow-sm"
                     >
-                      <Play className="h-3 w-3" /> Start Task Timer
+                      <Play className="h-3 w-3" /> {isTimerLoading ? "Starting..." : "Start Task Timer"}
                     </button>
                   )
                 )}
               </div>
             </div>
+
+            {/* Inline Timer Action Error (e.g. Assignment Not Found, Inactive) */}
+            {timerActionError && (
+              <div className="p-2.5 bg-[#fff0ee] border border-[#fecdca] text-[#b42318] text-[12px] rounded-xl flex items-center justify-between gap-2">
+                <span>{timerActionError}</span>
+                <button
+                  onClick={() => setTimerActionError(null)}
+                  className="text-[#b42318] font-bold text-xs hover:underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* Total Item Tracked Time */}
             <div className="flex items-center justify-between text-[12px] pt-1">
@@ -2283,9 +2349,18 @@ export default function ContentItemWorkspacePage() {
               {concurrencyErrorMessage}
             </p>
 
+            {concurrencyTaskTitle && (
+              <p className="text-[12px] text-[#86868b] px-1">
+                Currently tracking: <strong className="text-[#1d1d1f]">{concurrencyTaskTitle}</strong>
+              </p>
+            )}
+
             <div className="flex justify-end gap-2 pt-2 border-t border-black/[0.06]">
               <button
-                onClick={() => setConcurrencyErrorMessage(null)}
+                onClick={() => {
+                  setConcurrencyErrorMessage(null);
+                  setConcurrencyTaskTitle(null);
+                }}
                 className="rounded-full bg-[#1d1d1f] hover:bg-black px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
               >
                 Understood
