@@ -181,6 +181,187 @@ export async function requestCreativeAssetUploadAction(params: {
 }
 
 /**
+ * Authoritative External / Drive Link Attachment
+ * Validates:
+ * 1. Valid HTTP/HTTPS URL
+ * 2. Authenticated session
+ * 3. Active project membership
+ * 4. Active deliverable status (not deleted/archived)
+ * 5. Active designer assignment (if user is designer)
+ * 6. Resolves/creates draft submission version
+ * 7. Inserts creative_assets record with isDriveLink = true, driveUrl = url, status = 'ready'
+ * 8. Links asset into submission_assets junction table
+ */
+export async function attachExternalAssetAction(params: {
+  projectId: string;
+  contentItemId: string;
+  externalUrl: string;
+  filename?: string;
+  actorUserId?: string;
+}): Promise<{
+  success: boolean;
+  error?: string;
+  assetId?: string;
+  submissionVersionId?: string;
+}> {
+  const { projectId, contentItemId, externalUrl, filename, actorUserId } = params;
+
+  if (!externalUrl || typeof externalUrl !== "string") {
+    return { success: false, error: "External URL is required." };
+  }
+
+  const trimmedUrl = externalUrl.trim();
+  try {
+    const parsed = new URL(trimmedUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { success: false, error: "Invalid URL protocol. Must be HTTP or HTTPS." };
+    }
+  } catch {
+    return { success: false, error: "Please enter a valid URL (e.g. https://drive.google.com/...)." };
+  }
+
+  const resolvedProjId = await resolveProjectId(projectId);
+  if (!resolvedProjId) return { success: false, error: "Project not found." };
+
+  const actor = await getAuthoritativeUser(actorUserId);
+  if (!actor) return { success: false, error: "Unauthorized: Active session required." };
+
+  const access = await requireProjectAccess(actor.id, resolvedProjId);
+  if (!access.allowed || access.role === "client") {
+    return { success: false, error: "Unauthorized: Clients cannot attach assets." };
+  }
+
+  // Authoritative deliverable validation
+  const [item] = await db
+    .select({
+      id: contentItems.id,
+      projectId: contentItems.projectId,
+      status: contentItems.status,
+      deletedAt: contentItems.deletedAt,
+    })
+    .from(contentItems)
+    .where(
+      and(
+        eq(contentItems.id, contentItemId),
+        eq(contentItems.projectId, resolvedProjId),
+        sql`${contentItems.deletedAt} IS NULL`,
+        sql`${contentItems.status} != 'archived'`
+      )
+    )
+    .limit(1);
+
+  if (!item) {
+    return { success: false, error: "Deliverable not found or archived." };
+  }
+
+  // If user is a designer, enforce that they have an active assignment on this deliverable
+  if (actor.organizationRole === "designer") {
+    const [assignment] = await db
+      .select({ id: contentAssignments.id })
+      .from(contentAssignments)
+      .where(
+        and(
+          eq(contentAssignments.contentItemId, contentItemId),
+          eq(contentAssignments.assigneeUserId, actor.id),
+          sql`${contentAssignments.status} IN ('assigned', 'accepted', 'in_progress')`
+        )
+      )
+      .limit(1);
+
+    if (!assignment) {
+      return { success: false, error: "Forbidden: You are not actively assigned to this deliverable." };
+    }
+  }
+
+  // Resolve or create draft submission version
+  let [draftVersion] = await db
+    .select()
+    .from(submissionVersions)
+    .where(
+      and(
+        eq(submissionVersions.contentItemId, contentItemId),
+        eq(submissionVersions.isDraft, true)
+      )
+    )
+    .orderBy(desc(submissionVersions.versionNumber))
+    .limit(1);
+
+  if (!draftVersion) {
+    const [latestVersion] = await db
+      .select({ maxVersion: sql<number>`COALESCE(MAX(${submissionVersions.versionNumber}), 0)` })
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, contentItemId));
+
+    const nextVer = (Number(latestVersion?.maxVersion) || 0) + 1;
+    const [newVer] = await db
+      .insert(submissionVersions)
+      .values({
+        contentItemId,
+        projectId: resolvedProjId,
+        orgId: actor.orgId,
+        versionNumber: nextVer,
+        isDraft: true,
+        createdByUserId: actor.id,
+      })
+      .returning();
+    draftVersion = newVer;
+  }
+
+  const legacyAssetId = generateLegacyId("asset");
+  const assetUuid = crypto.randomUUID();
+
+  // Determine friendly display name if not provided
+  let displayName = filename?.trim();
+  if (!displayName) {
+    if (trimmedUrl.includes("drive.google.com") || trimmedUrl.includes("docs.google.com")) {
+      displayName = "Google Drive Asset Package";
+    } else if (trimmedUrl.includes("figma.com")) {
+      displayName = "Figma Design Package";
+    } else if (trimmedUrl.includes("dropbox.com")) {
+      displayName = "Dropbox Asset Package";
+    } else {
+      displayName = "External Cloud Asset Package";
+    }
+  }
+
+  const [asset] = await db
+    .insert(creativeAssets)
+    .values({
+      id: assetUuid,
+      legacyId: legacyAssetId,
+      projectId: resolvedProjId,
+      orgId: actor.orgId,
+      r2ObjectKey: `external/${assetUuid}`,
+      originalFilename: displayName,
+      fileSizeBytes: 0,
+      mimeType: "text/uri-list",
+      contentHash: `ext_${assetUuid.slice(0, 8)}`,
+      uploadedByUserId: actor.id,
+      status: "ready",
+      isDriveLink: true,
+      driveUrl: trimmedUrl,
+      expiresAt: null,
+    })
+    .returning();
+
+  // Link to draft submission version in submission_assets
+  await db
+    .insert(submissionAssets)
+    .values({
+      submissionVersionId: draftVersion.id,
+      creativeAssetId: asset.id,
+      sortOrder: 0,
+    })
+    .onConflictDoNothing();
+
+  return {
+    success: true,
+    assetId: asset.id,
+    submissionVersionId: draftVersion.id,
+  };
+}
+
+/**
  * Authoritative Creative Asset Confirmation
  * Marks creative_assets as 'ready' and links to draft submission_assets
  */

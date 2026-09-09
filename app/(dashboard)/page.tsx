@@ -260,7 +260,16 @@ export default function AuthoritativeDashboardPage() {
                           <Link href={`/projects/${row.projectId}/content/${row.id}`} className="hover:text-[#0071e3]">
                             {row.title}
                           </Link>
-                          <div className="text-[11px] text-[#86868b] font-normal">{row.projectName}</div>
+                          <div className="flex items-center gap-1.5 text-[11px] text-[#86868b] font-normal mt-0.5">
+                            <span>{row.projectName}</span>
+                            <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                              row.projectType === "ui_design"
+                                ? "bg-[#f3e8ff] text-[#7e22ce]"
+                                : "bg-[#eaf4ff] text-[#0071e3]"
+                            }`}>
+                              {row.projectType === "ui_design" ? "UI Design" : "DM"}
+                            </span>
+                          </div>
                         </td>
 
                         <td className="py-3.5 px-4 text-xs text-[#6e6e73]">

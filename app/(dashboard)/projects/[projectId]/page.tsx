@@ -143,6 +143,8 @@ export default function ProjectDashboardPage() {
     setIsObjectiveModalOpen(false);
   };
 
+  const isUiDesign = project.projectType === "ui_design";
+
   return (
     <div className="p-8 sm:p-10 max-w-7xl mx-auto space-y-8 animate-in fade-in">
       {/* Apple-style Page Title Header */}
@@ -150,6 +152,14 @@ export default function ProjectDashboardPage() {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-[13px] font-medium text-[#0066cc]">
             <span>{project.clientBrand}</span>
+            <span>•</span>
+            <span
+              className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                isUiDesign ? "bg-[#f3e8ff] text-[#7e22ce]" : "bg-[#eaf4ff] text-[#0071e3]"
+              }`}
+            >
+              {isUiDesign ? "UI Design" : "Digital Marketing"}
+            </span>
             <span>•</span>
             <span className="capitalize">{project.engagementModel?.replace("_", "-") || "Deliverable-Based"}</span>
             <span>•</span>
@@ -164,6 +174,16 @@ export default function ProjectDashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {project.masterFigmaUrl && (
+            <a
+              href={project.masterFigmaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-full bg-[#f3e8ff] border border-[#d8b4fe] hover:bg-[#ede9fe] px-4 py-2 text-[13px] font-medium text-[#7e22ce] shadow-xs transition"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Master Figma
+            </a>
+          )}
           <Link
             href={`/projects/${projectId}/calendar`}
             className="flex items-center gap-1.5 rounded-full bg-[#ffffff] border border-black/[0.08] hover:bg-[#f5f5f7] px-4 py-2 text-[13px] font-medium text-[#1d1d1f] shadow-xs transition"
@@ -412,7 +432,7 @@ export default function ProjectDashboardPage() {
           <table className="w-full text-left text-[13px]">
             <thead className="bg-[#f5f5f7] text-[#6e6e73] font-semibold border-b border-black/[0.06]">
               <tr>
-                <th className="px-4 py-3">Deliverable &amp; Platform</th>
+                <th className="px-4 py-3">{isUiDesign ? "Design Task & Screen" : "Deliverable & Platform"}</th>
                 <th className="px-4 py-3">Scope Classification</th>
                 <th className="px-4 py-3">Primary Designer</th>
                 <th className="px-4 py-3">Assignment Status</th>
@@ -425,7 +445,7 @@ export default function ProjectDashboardPage() {
               {filteredDeliverables.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-[#86868b]">
-                    No deliverables match the selected filter criteria.
+                    {isUiDesign ? "No design tasks match the selected filter criteria." : "No deliverables match the selected filter criteria."}
                   </td>
                 </tr>
               ) : (
@@ -445,19 +465,42 @@ export default function ProjectDashboardPage() {
 
                   return (
                     <tr key={item.id} className="hover:bg-[#f5f5f7]/50 transition">
-                      {/* Deliverable & Platform */}
+                      {/* Deliverable & Platform / Design Task & Screen */}
                       <td className="px-4 py-3">
                         <div className="font-semibold text-[#1d1d1f] hover:text-[#0071e3] transition">
                           <Link href={`/projects/${projectId}/content/${item.id}`}>{item.title}</Link>
                         </div>
                         <div className="flex items-center gap-1.5 text-[11px] text-[#86868b] mt-0.5">
-                          <span className="font-medium text-[#1d1d1f]">{item.platform}</span>
-                          <span>•</span>
-                          <span>{item.contentType}</span>
-                          {item.contentType === "trial_reel" && (
-                            <span className="rounded bg-[#f2f2f7] px-1 text-[#0066cc] font-bold">
-                              Trial
-                            </span>
+                          {isUiDesign ? (
+                            <>
+                              <span className="font-medium text-[#7e22ce]">UI Design</span>
+                              <span>•</span>
+                              <span>{item.workType || "Screen"}</span>
+                              {item.figmaUrl && (
+                                <>
+                                  <span>•</span>
+                                  <a
+                                    href={item.figmaUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[#7e22ce] hover:underline flex items-center gap-0.5"
+                                  >
+                                    Figma ↗
+                                  </a>
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <span className="font-medium text-[#1d1d1f]">{item.platform}</span>
+                              <span>•</span>
+                              <span>{item.contentType}</span>
+                              {item.contentType === "trial_reel" && (
+                                <span className="rounded bg-[#f2f2f7] px-1 text-[#0066cc] font-bold">
+                                  Trial
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>
@@ -522,7 +565,12 @@ export default function ProjectDashboardPage() {
 
                       {/* Due Date */}
                       <td className="px-4 py-3 text-[#6e6e73]">
-                        {formatDate(asgn?.currentDueAt || item.deadlines.submissionDeadline)}
+                        <div>{formatDate(asgn?.currentDueAt || item.deadlines.submissionDeadline)}</div>
+                        {isUiDesign && item.clientDeliveryDate && (
+                          <div className="text-[11px] text-[#7e22ce] font-medium">
+                            Client: {formatDate(item.clientDeliveryDate)}
+                          </div>
+                        )}
                       </td>
 
                       {/* Tracked Effort */}

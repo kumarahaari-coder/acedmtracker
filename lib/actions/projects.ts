@@ -15,6 +15,8 @@ export async function createProjectAction(params: {
   legacyId?: string;
   scope?: string;
   engagementModel?: ProjectEngagementModel;
+  projectType?: "digital_marketing" | "ui_design";
+  masterFigmaUrl?: string;
   actorUserId?: string;
 }): Promise<{
   success: boolean;
@@ -23,6 +25,8 @@ export async function createProjectAction(params: {
     legacyId: string | null;
     name: string;
     clientBrand: string;
+    projectType: string;
+    masterFigmaUrl: string | null;
     status: string;
     createdAt: string;
   };
@@ -61,6 +65,8 @@ export async function createProjectAction(params: {
         name: params.name.trim(),
         clientName: params.clientBrand.trim(),
         tier: "tier_1",
+        projectType: params.projectType || "digital_marketing",
+        masterFigmaUrl: params.masterFigmaUrl?.trim() || null,
         engagementModel: params.engagementModel || "deliverable_based",
         status: "active",
       })
@@ -97,6 +103,8 @@ export async function createProjectAction(params: {
         legacyId: created.legacyId,
         name: created.name,
         clientBrand: created.clientName,
+        projectType: created.projectType,
+        masterFigmaUrl: created.masterFigmaUrl,
         status: created.status,
         createdAt: created.createdAt.toISOString(),
       },

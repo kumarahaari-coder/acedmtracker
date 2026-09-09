@@ -55,6 +55,8 @@ export interface Project {
   scope: string;
   timezone: string; // e.g. 'Asia/Kolkata' (IST)
   status: 'active' | 'archived' | 'retention';
+  projectType?: 'digital_marketing' | 'ui_design';
+  masterFigmaUrl?: string;
   engagementModel?: ProjectEngagementModel; // 'deliverable_based' (default) or 'objective_based'
   objectiveConfig?: ProjectObjectiveConfig;
   targetRequirements: TargetRequirements;
@@ -213,6 +215,9 @@ export interface ContentItem {
   topic?: string;
   brief?: string;
   referenceLink?: string;
+  figmaUrl?: string;
+  clientDeliveryDate?: string;
+  projectType?: 'digital_marketing' | 'ui_design';
   priority?: 'urgent' | 'normal' | 'low';
   workNature?: 'planned' | 'ad_hoc';
   accountOwnerId?: string;

@@ -16,6 +16,9 @@ export type RequiredApprovers = (typeof RequiredApproversEnum)[number];
 export const ApprovalModeEnum = ["parallel", "sequential"] as const;
 export type ApprovalMode = (typeof ApprovalModeEnum)[number];
 
+export const ProjectTypeEnum = ["digital_marketing", "ui_design"] as const;
+export type ProjectType = (typeof ProjectTypeEnum)[number];
+
 export const projects = pgTable(
   "projects",
   {
@@ -26,6 +29,8 @@ export const projects = pgTable(
       .references(() => organizations.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     clientName: text("client_name").notNull(),
+    projectType: text("project_type", { enum: ProjectTypeEnum }).notNull().default("digital_marketing"),
+    masterFigmaUrl: text("master_figma_url"),
     tier: text("tier", { enum: ProjectTierEnum }).notNull().default("tier_2"),
     engagementModel: text("engagement_model", { enum: EngagementModelEnum }).notNull().default("deliverable_based"),
     status: text("status", { enum: ProjectStatusEnum }).notNull().default("active"),

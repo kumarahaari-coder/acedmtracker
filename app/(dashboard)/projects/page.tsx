@@ -39,6 +39,8 @@ export default function ProjectsPortfolioPage() {
   const [newClientBrand, setNewClientBrand] = useState("");
   const [newScope, setNewScope] = useState("");
   const [newTimezone, setNewTimezone] = useState("Asia/Kolkata");
+  const [projectType, setProjectType] = useState<"digital_marketing" | "ui_design">("digital_marketing");
+  const [masterFigmaUrl, setMasterFigmaUrl] = useState("");
   const [engagementModel, setEngagementModel] = useState<ProjectEngagementModel>("deliverable_based");
 
   // Deliverable quotas
@@ -97,9 +99,11 @@ export default function ProjectsPortfolioPage() {
       name: newProjectName,
       clientBrand: newClientBrand,
       avatar: avatar || "PR",
-      scope: newScope || "Comprehensive marketing operations & social content delivery.",
+      scope: newScope || (projectType === "ui_design" ? "Product & Web UI design deliverables." : "Comprehensive marketing operations & social content delivery."),
       timezone: newTimezone,
       status: "active",
+      projectType,
+      masterFigmaUrl: projectType === "ui_design" && masterFigmaUrl.trim() ? masterFigmaUrl.trim() : undefined,
       engagementModel,
       objectiveConfig: objectiveConfigData,
       targetRequirements: {
@@ -121,6 +125,8 @@ export default function ProjectsPortfolioPage() {
     setNewProjectName("");
     setNewClientBrand("");
     setNewScope("");
+    setMasterFigmaUrl("");
+    setProjectType("digital_marketing");
     handleSelectProject(res.project.id);
   };
 
@@ -248,13 +254,22 @@ export default function ProjectsPortfolioPage() {
                       </p>
                     </div>
 
-                    {/* Engagement Model Badge */}
-                    <div className="flex items-center gap-2">
+                    {/* Project Type & Engagement Model Badges */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                          project.projectType === "ui_design"
+                            ? "bg-[#f3e8ff] text-[#7e22ce] border border-[#e9d5ff]"
+                            : "bg-[#eaf4ff] text-[#0071e3] border border-[#d0e5ff]"
+                        }`}
+                      >
+                        {project.projectType === "ui_design" ? "UI Design" : "Digital Marketing"}
+                      </span>
                       <span
                         className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
                           isObjective
                             ? "bg-[#1d1d1f] text-white"
-                            : "bg-[#eaf4ff] text-[#0071e3] border border-[#d0e5ff]"
+                            : "bg-[#f2f2f7] text-[#6e6e73]"
                         }`}
                       >
                         {isObjective ? <Target className="h-3 w-3" /> : <Layers className="h-3 w-3" />}
@@ -357,7 +372,18 @@ export default function ProjectsPortfolioPage() {
                     return (
                       <tr key={project.id} className="hover:bg-[#f5f5f7]/60 transition">
                         <td className="p-4 pl-6">
-                          <div className="font-semibold text-[#1d1d1f]">{project.name}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[#1d1d1f]">{project.name}</span>
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                project.projectType === "ui_design"
+                                  ? "bg-[#f3e8ff] text-[#7e22ce]"
+                                  : "bg-[#eaf4ff] text-[#0071e3]"
+                              }`}
+                            >
+                              {project.projectType === "ui_design" ? "UI Design" : "DM"}
+                            </span>
+                          </div>
                           <div className="text-[12px] text-[#86868b]">{project.clientBrand}</div>
                         </td>
                         <td className="p-4">
@@ -436,10 +462,54 @@ export default function ProjectsPortfolioPage() {
                 </div>
 
                 <div>
+                  <label className="block text-[#1d1d1f] font-medium mb-1.5">Project Type *</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setProjectType("digital_marketing")}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        projectType === "digital_marketing"
+                          ? "bg-[#eaf4ff] border-[#0071e3] text-[#0071e3]"
+                          : "bg-white border-black/[0.12] text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      <div className="font-bold text-[13px]">Digital Marketing</div>
+                      <div className="text-[11px] opacity-80 mt-0.5">Social media, posts, carousels, reels & campaigns</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProjectType("ui_design")}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        projectType === "ui_design"
+                          ? "bg-[#f3e8ff] border-[#9333ea] text-[#7e22ce]"
+                          : "bg-white border-black/[0.12] text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      <div className="font-bold text-[13px]">UI Design</div>
+                      <div className="text-[11px] opacity-80 mt-0.5">Product & web UI design, screens & Figma sync</div>
+                    </button>
+                  </div>
+                </div>
+
+                {projectType === "ui_design" && (
+                  <div>
+                    <label className="block text-[#1d1d1f] font-medium mb-1.5">Master Figma File URL (Optional)</label>
+                    <input
+                      type="url"
+                      placeholder="https://www.figma.com/design/..."
+                      value={masterFigmaUrl}
+                      onChange={(e) => setMasterFigmaUrl(e.target.value)}
+                      className="w-full rounded-xl border border-black/[0.12] bg-[#ffffff] p-3 text-[#1d1d1f] focus:outline-none focus:border-[#7e22ce]"
+                    />
+                    <p className="text-[12px] text-[#86868b] mt-1">Designers on this project will have quick access to this master file.</p>
+                  </div>
+                )}
+
+                <div>
                   <label className="block text-[#1d1d1f] font-medium mb-1.5">Scope &amp; Strategic Goals</label>
                   <textarea
                     rows={3}
-                    placeholder="Describe content delivery objectives and platforms..."
+                    placeholder={projectType === "ui_design" ? "Describe design systems, target screens, and user workflows..." : "Describe content delivery objectives and platforms..."}
                     value={newScope}
                     onChange={(e) => setNewScope(e.target.value)}
                     className="w-full rounded-xl border border-black/[0.12] bg-[#ffffff] p-3 text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"

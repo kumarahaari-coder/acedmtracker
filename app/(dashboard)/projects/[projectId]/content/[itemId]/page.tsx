@@ -59,6 +59,7 @@ import {
   requestCreativeAssetUploadAction,
   confirmCreativeAssetUploadAction,
   removeCreativeAssetFromSubmissionAction,
+  attachExternalAssetAction,
 } from "@/lib/actions/assets";
 import {
   getAuthoritativeContentItemDetailAction,
@@ -382,6 +383,7 @@ export default function ContentItemWorkspacePage() {
 
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
   const [driveUrlInput, setDriveUrlInput] = useState("");
+  const [isAttachingDrive, setIsAttachingDrive] = useState(false);
 
   // Designer Response Draft state
   const [designerResponses, setDesignerResponses] = useState<Record<string, string>>({});
@@ -748,23 +750,30 @@ export default function ContentItemWorkspacePage() {
     }
   };
 
-  const handleAddDriveLink = () => {
+  const handleAddDriveLink = async () => {
     if (!driveUrlInput.trim()) return;
-    const newAsset = {
-      assetId: "ast_" + Math.random().toString(36).substr(2, 9),
-      filename: "External Cloud Asset Package",
-      previewUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
-      fileSizeBytes: 20 * 1024 * 1024,
-      mimeType: "application/octet-stream",
-      contentHash: "hash_" + Math.random().toString(36).substr(2, 9),
-      isDriveLink: true,
-      driveUrl: driveUrlInput.trim(),
-    };
-    updateDraftVersion(currentVersion.id, {
-      creativeAssets: [newAsset, ...(currentVersion.creativeAssets || [])],
-    });
-    setDriveUrlInput("");
-    setIsDriveModalOpen(false);
+    setIsAttachingDrive(true);
+    setUploadError(null);
+    try {
+      const res = await attachExternalAssetAction({
+        projectId,
+        contentItemId: item.id,
+        externalUrl: driveUrlInput.trim(),
+        actorUserId: activeUserId,
+      });
+      if (res.success) {
+        setUploadSuccess("External link attached successfully!");
+        setDriveUrlInput("");
+        setIsDriveModalOpen(false);
+        await loadDetail();
+      } else {
+        setUploadError(res.error || "Failed to attach external link.");
+      }
+    } catch (err: any) {
+      setUploadError(err.message || "Failed to attach external link.");
+    } finally {
+      setIsAttachingDrive(false);
+    }
   };
 
   const handlePostComment = () => {
@@ -783,6 +792,7 @@ export default function ContentItemWorkspacePage() {
   const linkedScript = detailData?.linkedScript || state.scripts.find((s) => s.linkedContentItemId === item.id);
 
   const assignedMember = projectMembers.find((m) => m.userId === item.accountableOwnerId);
+  const isUiDesign = detailData?.project?.projectType === "ui_design" || item.projectType === "ui_design";
 
   return (
     <div className="flex-1 flex flex-col bg-[#ffffff] min-h-[calc(100vh-3.5rem)]">
@@ -799,7 +809,7 @@ export default function ContentItemWorkspacePage() {
           <div>
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#1d1d1f]">
-                {item.platform} • {item.contentType}
+                {isUiDesign ? `UI Design • ${item.workType || "Screen"}` : `${item.platform} • ${item.contentType}`}
               </span>
               <h1 className="text-[17px] font-semibold text-[#1d1d1f] truncate max-w-md">
                 {item.title}
@@ -1047,6 +1057,24 @@ export default function ContentItemWorkspacePage() {
                   Role: {activeAssignment?.assignmentRole || assignedMember?.role || "Designer"}
                 </div>
               </div>
+            </div>
+
+            {/* Deadlines Display */}
+            <div className="space-y-1.5 pt-2 border-t border-black/[0.06] text-[12px]">
+              <div className="flex items-center justify-between text-[#6e6e73]">
+                <span>Internal Deadline:</span>
+                <span className="font-semibold text-[#1d1d1f]">
+                  {formatDate(activeAssignment?.currentDueAt || item.finalInternalDeadline || item.deadlines.submissionDeadline || "")}
+                </span>
+              </div>
+              {item.clientDeliveryDate && (
+                <div className="flex items-center justify-between text-[#6e6e73]">
+                  <span>Client Delivery Date:</span>
+                  <span className="font-semibold text-[#0071e3]">
+                    {formatDate(item.clientDeliveryDate)}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Management Actions: Reassign & Edit Deadline */}
@@ -1374,7 +1402,9 @@ export default function ContentItemWorkspacePage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-semibold text-[#1d1d1f] tracking-tight">Creative Asset</h2>
+                <h2 className="text-[15px] font-semibold text-[#1d1d1f] tracking-tight">
+                  {isUiDesign ? "Design Asset" : "Creative Asset"}
+                </h2>
                 <span className="rounded-full bg-[#f2f2f7] px-2 py-0.5 text-[11px] font-medium text-[#86868b]">
                   {currentVersion.creativeAssets.length} file{currentVersion.creativeAssets.length === 1 ? "" : "s"}
                 </span>
@@ -1440,7 +1470,32 @@ export default function ContentItemWorkspacePage() {
             <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-3 shadow-xs">
               {currentVersion.creativeAssets.length > 0 ? (
                 <div className="space-y-2">
-                  {currentVersion.creativeAssets[0].mimeType === "application/pdf" ||
+                  {currentVersion.creativeAssets[0].isDriveLink ? (
+                    /* Google Drive / External Asset Preview Card */
+                    <div className="rounded-xl bg-white p-6 border border-black/[0.04] text-center space-y-3 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+                      <div className="mx-auto h-14 w-14 rounded-2xl bg-[#e8f0fe] text-[#1a73e8] flex items-center justify-center font-bold text-[16px] border border-[#d2e3fc]">
+                        <LinkIcon className="h-7 w-7" />
+                      </div>
+                      <div>
+                        <div className="font-semibold text-[14px] text-[#1d1d1f] truncate max-w-sm mx-auto">
+                          {currentVersion.creativeAssets[0].filename}
+                        </div>
+                        <div className="text-[12px] text-[#86868b] mt-0.5 break-all max-w-md mx-auto truncate font-mono">
+                          {currentVersion.creativeAssets[0].driveUrl}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                        <a
+                          href={currentVersion.creativeAssets[0].driveUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-4 py-1.5 text-[12px] font-medium shadow-xs transition active:scale-[0.98]"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" /> Open External Link ↗
+                        </a>
+                      </div>
+                    </div>
+                  ) : currentVersion.creativeAssets[0].mimeType === "application/pdf" ||
                   currentVersion.creativeAssets[0].filename?.toLowerCase().endsWith(".pdf") ? (
                     /* PDF Document Preview Card */
                     <div className="rounded-xl bg-white p-6 border border-black/[0.04] text-center space-y-3 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
@@ -1491,7 +1546,9 @@ export default function ContentItemWorkspacePage() {
                     </span>
                     <div className="flex items-center gap-3">
                       <span>
-                        {(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                        {currentVersion.creativeAssets[0].isDriveLink
+                          ? "External Cloud Link"
+                          : `${(currentVersion.creativeAssets[0].fileSizeBytes / (1024 * 1024)).toFixed(2)} MB`}
                       </span>
                       <button
                         onClick={() => handleRemoveAsset(currentVersion.creativeAssets[0].assetId)}
@@ -1539,112 +1596,163 @@ export default function ContentItemWorkspacePage() {
             </div>
           </div>
 
-          {/* Copy / Caption Section */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Copy & Captions</h2>
-              {!isEditingDraft && (
-                <button
-                  onClick={() => setIsEditingDraft(true)}
-                  className="text-[13px] text-[#0066cc] hover:text-[#0077ed] font-medium"
-                >
-                  Edit Copy / Create Revision
-                </button>
+          {/* Context Section: UI Design Context vs DM Copy & Captions */}
+          {isUiDesign ? (
+            <div className="space-y-4">
+              {/* Figma / Design Link */}
+              <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-5 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ExternalLink className="h-4 w-4 text-[#0071e3]" />
+                    <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Figma / Design URL</h3>
+                  </div>
+                  {(item.figmaUrl || detailData?.project?.masterFigmaUrl) && (
+                    <a
+                      href={item.figmaUrl || detailData?.project?.masterFigmaUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-3.5 py-1 text-[12px] font-medium shadow-xs transition active:scale-[0.98]"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" /> Open in Figma ↗
+                    </a>
+                  )}
+                </div>
+                <p className="text-[12.5px] text-[#1d1d1f] font-mono break-all bg-white p-3 rounded-xl border border-black/[0.06]">
+                  {item.figmaUrl || detailData?.project?.masterFigmaUrl || "No Figma URL provided for this task."}
+                </p>
+              </div>
+
+              {/* Brief / Description */}
+              <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-5 shadow-xs space-y-2">
+                <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Task Brief &amp; Scope</h3>
+                <p className="text-[13.5px] text-[#1d1d1f] leading-relaxed whitespace-pre-wrap">
+                  {item.brief || "No detailed brief provided."}
+                </p>
+              </div>
+
+              {/* Reference Links */}
+              {item.referenceLink && (
+                <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-5 shadow-xs space-y-2">
+                  <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Reference Links</h3>
+                  <a
+                    href={item.referenceLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[13px] text-[#0071e3] hover:underline flex items-center gap-1 break-all"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0" /> {item.referenceLink}
+                  </a>
+                </div>
               )}
             </div>
-
-            {isEditingDraft ? (
-              <div className="space-y-4 rounded-2xl border border-black/[0.12] bg-[#fbfbfd] p-5">
-                <div>
-                  <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
-                    Caption Content
-                  </label>
-                  <textarea
-                    rows={6}
-                    value={draftCaption}
-                    onChange={(e) => setDraftCaption(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-3 text-[14px] text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
-                    Hashtags (space separated)
-                  </label>
-                  <input
-                    type="text"
-                    value={draftHashtags}
-                    onChange={(e) => setDraftHashtags(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[14px] text-[#1d1d1f]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
-                    Call to Action (CTA)
-                  </label>
-                  <input
-                    type="text"
-                    value={draftCTA}
-                    onChange={(e) => setDraftCTA(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[14px] text-[#1d1d1f]"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
+          ) : (
+            /* Copy / Caption Section for Digital Marketing */
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Copy &amp; Captions</h2>
+                {!isEditingDraft && (
                   <button
-                    onClick={() => setIsEditingDraft(false)}
-                    className="rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-4 py-1.5 text-[13px] font-medium text-[#1d1d1f]"
+                    onClick={() => setIsEditingDraft(true)}
+                    className="text-[13px] text-[#0066cc] hover:text-[#0077ed] font-medium"
                   >
-                    Cancel
+                    Edit Copy / Create Revision
                   </button>
-                  <button
-                    onClick={handleResubmit}
-                    disabled={!canResubmit}
-                    className="rounded-full bg-[#0071e3] disabled:opacity-50 hover:bg-[#0077ed] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm transition"
-                  >
-                    Submit as New Version
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-5 space-y-4">
-                <p className="text-[15px] text-[#1d1d1f] leading-relaxed whitespace-pre-wrap font-normal">
-                  {currentVersion.copy.caption}
-                </p>
-
-                {currentVersion.copy.hashtags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-2 border-t border-black/[0.06]">
-                    {currentVersion.copy.hashtags.map((h) => (
-                      <span
-                        key={h}
-                        className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[12px] font-medium text-[#0066cc]"
-                      >
-                        #{h}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {currentVersion.copy.cta && (
-                  <div className="text-[13px] text-[#6e6e73] font-medium">
-                    CTA: <span className="text-[#1d1d1f]">{currentVersion.copy.cta}</span>
-                  </div>
                 )}
               </div>
-            )}
-          </div>
+
+              {isEditingDraft ? (
+                <div className="space-y-4 rounded-2xl border border-black/[0.12] bg-[#fbfbfd] p-5">
+                  <div>
+                    <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
+                      Caption Content
+                    </label>
+                    <textarea
+                      rows={6}
+                      value={draftCaption}
+                      onChange={(e) => setDraftCaption(e.target.value)}
+                      className="w-full rounded-xl border border-black/[0.12] bg-white p-3 text-[14px] text-[#1d1d1f] focus:outline-none focus:border-[#0071e3]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
+                      Hashtags (space separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={draftHashtags}
+                      onChange={(e) => setDraftHashtags(e.target.value)}
+                      className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[14px] text-[#1d1d1f]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[13px] font-medium text-[#1d1d1f] mb-1">
+                      Call to Action (CTA)
+                    </label>
+                    <input
+                      type="text"
+                      value={draftCTA}
+                      onChange={(e) => setDraftCTA(e.target.value)}
+                      className="w-full rounded-xl border border-black/[0.12] bg-white p-2.5 text-[14px] text-[#1d1d1f]"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <button
+                      onClick={() => setIsEditingDraft(false)}
+                      className="rounded-full bg-[#f5f5f7] hover:bg-[#e8e8ed] px-4 py-1.5 text-[13px] font-medium text-[#1d1d1f]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleResubmit}
+                      disabled={!canResubmit}
+                      className="rounded-full bg-[#0071e3] disabled:opacity-50 hover:bg-[#0077ed] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm transition"
+                    >
+                      Submit as New Version
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-black/[0.08] bg-[#fbfbfd] p-5 space-y-4">
+                  <p className="text-[15px] text-[#1d1d1f] leading-relaxed whitespace-pre-wrap font-normal">
+                    {currentVersion.copy.caption}
+                  </p>
+
+                  {currentVersion.copy.hashtags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-black/[0.06]">
+                      {currentVersion.copy.hashtags.map((h) => (
+                        <span
+                          key={h}
+                          className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[12px] font-medium text-[#0066cc]"
+                        >
+                          #{h}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {currentVersion.copy.cta && (
+                    <div className="text-[13px] text-[#6e6e73] font-medium">
+                      CTA: <span className="text-[#1d1d1f]">{currentVersion.copy.cta}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ======================================================== */}
         {/* COLUMN 3: 3-Component Approval Matrix & Change Requests (4 cols) */}
         {/* ======================================================== */}
         <div className="lg:col-span-4 bg-[#fbfbfd] p-6 space-y-6 overflow-y-auto max-h-[calc(100vh-7.5rem)]">
-          {/* 3-Component Approval Matrix Card */}
+          {/* 3-Component Approval Matrix Card / Design Review Card */}
           <div className="bg-[#ffffff] border border-black/[0.08] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-[16px] font-semibold text-[#1d1d1f]">
-                3-Component Approval Matrix
+                {isUiDesign ? "Design Review" : "3-Component Approval Matrix"}
               </h3>
               {approvalSummary.isOverridden && (
                 <span className="status-approved rounded-full px-2 py-0.5 text-[11px] font-bold">
@@ -1654,9 +1762,16 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             <div className="space-y-3">
-              {(["copy", "creative", "posting_date"] as ApprovalComponentType[]).map((comp) => {
+              {(isUiDesign
+                ? ([{ comp: "creative", label: "Design Deliverable (UI / Assets)" }] as const)
+                : ([
+                    { comp: "copy", label: "Copy" },
+                    { comp: "creative", label: "Creative" },
+                    { comp: "posting_date", label: "Posting Date" },
+                  ] as const)
+              ).map(({ comp, label }) => {
                 const compSummary = getComponentApprovalSummary(
-                  comp,
+                  comp as ApprovalComponentType,
                   currentVersion,
                   state.approvalDecisions
                 );
@@ -1667,8 +1782,8 @@ export default function ContentItemWorkspacePage() {
                     className="p-3.5 rounded-xl border border-black/[0.06] bg-[#fbfbfd] space-y-2.5"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-[13px] text-[#1d1d1f] capitalize">
-                        {comp.replace("_", " ")}
+                      <span className="font-semibold text-[13px] text-[#1d1d1f]">
+                        {label}
                       </span>
                       {compSummary.isFullyApproved ? (
                         <span className="status-approved rounded-full px-2 py-0.5 text-[11px] font-bold">

@@ -44,6 +44,8 @@ export interface ContentItemDetailDTO {
     clientBrand: string;
     status: string;
     engagementModel?: string;
+    projectType?: "digital_marketing" | "ui_design";
+    masterFigmaUrl?: string;
   };
   item: ContentItem;
   contentGroup?: {
@@ -127,7 +129,9 @@ export async function getAuthoritativeContentItemDetailAction(
           p.name as proj_name,
           p.client_name as proj_client_brand,
           p.status as proj_status,
-          p.engagement_model as proj_engagement_model
+          p.engagement_model as proj_engagement_model,
+          p.project_type as proj_project_type,
+          p.master_figma_url as proj_master_figma_url
         FROM content_items ci
         JOIN projects p ON p.id = ci.project_id
         WHERE ci.id = ${resolvedItemId}
@@ -148,7 +152,9 @@ export async function getAuthoritativeContentItemDetailAction(
                 'mimeType', ca.mime_type,
                 'previewUrl', ca.r2_object_key,
                 'contentHash', ca.content_hash,
-                'storageKey', ca.r2_object_key
+                'storageKey', ca.r2_object_key,
+                'isDriveLink', ca.is_drive_link,
+                'driveUrl', ca.drive_url
               )
             ) FILTER (WHERE ca.id IS NOT NULL), '[]'::json
           ) as assets
@@ -291,9 +297,11 @@ export async function getAuthoritativeContentItemDetailAction(
         filename: a.filename,
         fileSizeBytes: Number(a.fileSizeBytes || 0),
         mimeType: a.mimeType,
-        previewUrl: a.assetId ? `/api/assets/${a.assetId}/preview` : (a.previewUrl || ""),
+        previewUrl: a.isDriveLink ? (a.driveUrl || "") : (a.assetId ? `/api/assets/${a.assetId}/preview` : (a.previewUrl || "")),
         contentHash: a.contentHash || "",
         storageKey: a.storageKey || undefined,
+        isDriveLink: !!a.isDriveLink,
+        driveUrl: a.driveUrl || undefined,
       })),
       scheduledDate: v.scheduled_date ? new Date(v.scheduled_date).toISOString() : undefined,
       componentFingerprints: {
@@ -343,6 +351,11 @@ export async function getAuthoritativeContentItemDetailAction(
       workType: dbItem.work_type || undefined,
       workTypeId: dbItem.work_type_id || undefined,
       topic: dbItem.topic || undefined,
+      brief: dbItem.brief || undefined,
+      referenceLink: dbItem.reference_link || undefined,
+      figmaUrl: dbItem.figma_url || undefined,
+      clientDeliveryDate: dbItem.client_delivery_date ? new Date(dbItem.client_delivery_date).toISOString() : undefined,
+      projectType: dbItem.proj_project_type || "digital_marketing",
       stage: dbItem.stage as ContentStage,
       scopeClassification: (dbItem.scope_classification || "contracted") as ScopeClassification,
       workNature: (dbItem.work_nature || "planned") as "planned" | "ad_hoc",
@@ -478,6 +491,8 @@ export async function getAuthoritativeContentItemDetailAction(
           clientBrand: dbItem.proj_client_brand || dbItem.proj_name,
           status: dbItem.proj_status,
           engagementModel: dbItem.proj_engagement_model || undefined,
+          projectType: dbItem.proj_project_type || "digital_marketing",
+          masterFigmaUrl: dbItem.proj_master_figma_url || undefined,
         },
         item: mappedItem,
         contentGroup: contentGroupData

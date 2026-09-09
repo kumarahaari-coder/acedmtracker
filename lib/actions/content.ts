@@ -51,6 +51,8 @@ export async function createContentItemAction(params: {
   topic?: string;
   brief?: string;
   referenceLink?: string;
+  figmaUrl?: string;
+  clientDeliveryDate?: string;
   priority?: "urgent" | "normal" | "low";
   workNature?: "planned" | "ad_hoc";
   accountOwnerId?: string;
@@ -78,6 +80,8 @@ export async function createContentItemAction(params: {
     topic,
     brief,
     referenceLink,
+    figmaUrl,
+    clientDeliveryDate,
     priority = "normal",
     workNature = "planned",
     accountOwnerId,
@@ -189,7 +193,8 @@ export async function createContentItemAction(params: {
   const copy = initialCopy || { caption: `Draft copy for ${title}`, hashtags: [], cta: "" };
   const fingerprints = computeFingerprints(copy, scheduledPublicationDate);
 
-  const schedDate = scheduledPublicationDate ? new Date(scheduledPublicationDate) : null;
+  const clientDate = clientDeliveryDate ? new Date(clientDeliveryDate) : null;
+  const schedDate = scheduledPublicationDate ? new Date(scheduledPublicationDate) : clientDate;
   const calculatedDeadline = schedDate ? calculateInternalDeadline(schedDate, leadTimeWorkdays) : null;
   const finalDeadline = finalInternalDeadlineOverride
     ? new Date(finalInternalDeadlineOverride)
@@ -215,6 +220,8 @@ export async function createContentItemAction(params: {
           topic: topic || title,
           brief: brief || null,
           referenceLink: referenceLink || null,
+          figmaUrl: figmaUrl || null,
+          clientDeliveryDate: clientDate,
           priority: priority || "normal",
           workNature: workNature || "planned",
           accountOwnerId: accountOwnerId || null,

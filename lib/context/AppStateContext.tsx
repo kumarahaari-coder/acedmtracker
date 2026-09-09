@@ -480,6 +480,8 @@ export function AppStateProvider({
         clientBrand: projectData.clientBrand,
         scope: projectData.scope,
         engagementModel: projectData.engagementModel,
+        projectType: projectData.projectType,
+        masterFigmaUrl: projectData.masterFigmaUrl,
         actorUserId,
       });
 
@@ -495,6 +497,8 @@ export function AppStateProvider({
         name: res.project.name,
         clientBrand: res.project.clientBrand,
         status: (res.project.status as any) || "active",
+        projectType: (res.project.projectType as any) || projectData.projectType || "digital_marketing",
+        masterFigmaUrl: res.project.masterFigmaUrl ?? projectData.masterFigmaUrl,
         createdAt: res.project.createdAt,
       };
 
@@ -719,6 +723,8 @@ export function AppStateProvider({
         topic: itemData.topic,
         brief: itemData.brief,
         referenceLink: itemData.referenceLink,
+        figmaUrl: itemData.figmaUrl,
+        clientDeliveryDate: itemData.clientDeliveryDate,
         priority: itemData.priority,
         workNature: itemData.workNature,
         accountOwnerId: itemData.accountOwnerId,
@@ -741,6 +747,9 @@ export function AppStateProvider({
         scopeClassification: (res.item.scopeClassification as any) || itemData.scopeClassification || "contracted",
         workType: res.item.workType || itemData.workType,
         workTypeId: res.item.workTypeId || itemData.workTypeId,
+        figmaUrl: res.item.figmaUrl ?? itemData.figmaUrl,
+        clientDeliveryDate: res.item.clientDeliveryDate ?? itemData.clientDeliveryDate,
+        projectType: res.item.projectType ?? itemData.projectType,
         standardContentSeconds: res.item.standardContentSeconds ?? itemData.standardContentSeconds,
         standardProductionSeconds: res.item.standardProductionSeconds ?? itemData.standardProductionSeconds,
         finalPlannedSeconds: res.item.finalPlannedSeconds ?? itemData.finalPlannedSeconds,

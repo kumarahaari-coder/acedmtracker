@@ -241,6 +241,7 @@ export interface OrganizationCalendarItem {
   id: string;
   projectId: string;
   projectName: string;
+  projectType?: string;
   title: string;
   workType: string;
   platform: string;
@@ -251,6 +252,8 @@ export interface OrganizationCalendarItem {
   deadline?: string;
   scheduledPublicationDate?: string;
   submissionDeadline?: string;
+  clientDeliveryDate?: string;
+  plannedHours?: number;
 }
 
 /**
@@ -282,6 +285,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
             ci.id,
             ci.project_id as "projectId",
             p.name as "projectName",
+            p.project_type as "projectType",
             ci.title,
             COALESCE(ci.work_type, ci.content_type) as "workType",
             ci.platform,
@@ -296,7 +300,9 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
             u.full_name as "assignedOwnerName",
             COALESCE(ci.final_internal_deadline::text, ci.calculated_internal_deadline::text, ci.submission_deadline::text, ci.scheduled_publication_date::text) as "deadline",
             ci.scheduled_publication_date::text as "scheduledPublicationDate",
-            ci.submission_deadline::text as "submissionDeadline"
+            ci.submission_deadline::text as "submissionDeadline",
+            ci.client_delivery_date::text as "clientDeliveryDate",
+            ROUND((ci.final_planned_seconds::numeric / 3600.0), 2)::float as "plannedHours"
           FROM content_items ci
           JOIN projects p ON ci.project_id = p.id
           JOIN project_memberships pm ON pm.project_id = p.id 
@@ -330,6 +336,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
         id: r.id,
         projectId: r.projectId,
         projectName: r.projectName,
+        projectType: r.projectType || "digital_marketing",
         title: r.title,
         workType: r.workType || "Standard",
         platform: r.platform || "Instagram",
@@ -340,6 +347,8 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
         deadline: r.deadline || undefined,
         scheduledPublicationDate: r.scheduledPublicationDate || undefined,
         submissionDeadline: r.submissionDeadline || undefined,
+        clientDeliveryDate: r.clientDeliveryDate || undefined,
+        plannedHours: r.plannedHours ? Number(r.plannedHours) : undefined,
       }));
 
       const projectsList: Array<{ id: string; name: string }> = (projectRows.rows as any[]).map((p) => ({
@@ -363,6 +372,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
           ci.id,
           ci.project_id as "projectId",
           p.name as "projectName",
+          p.project_type as "projectType",
           ci.title,
           COALESCE(ci.work_type, ci.content_type) as "workType",
           ci.platform,
@@ -377,7 +387,9 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
           u.full_name as "assignedOwnerName",
           COALESCE(ci.final_internal_deadline::text, ci.scheduled_publication_date::text, ci.submission_deadline::text) as "deadline",
           ci.scheduled_publication_date::text as "scheduledPublicationDate",
-          ci.submission_deadline::text as "submissionDeadline"
+          ci.submission_deadline::text as "submissionDeadline",
+          ci.client_delivery_date::text as "clientDeliveryDate",
+          ROUND((ci.final_planned_seconds::numeric / 3600.0), 2)::float as "plannedHours"
         FROM content_items ci
         JOIN projects p ON ci.project_id = p.id
         LEFT JOIN content_assignments ca ON ca.content_item_id = ci.id 
@@ -401,6 +413,7 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
       id: r.id,
       projectId: r.projectId,
       projectName: r.projectName,
+      projectType: r.projectType || "digital_marketing",
       title: r.title,
       workType: r.workType || "Standard",
       platform: r.platform || "Instagram",
@@ -411,6 +424,8 @@ export async function getAuthoritativeOrganizationCalendarAction(actorUserId?: s
       deadline: r.deadline || undefined,
       scheduledPublicationDate: r.scheduledPublicationDate || undefined,
       submissionDeadline: r.submissionDeadline || undefined,
+      clientDeliveryDate: r.clientDeliveryDate || undefined,
+      plannedHours: r.plannedHours ? Number(r.plannedHours) : undefined,
     }));
 
     return {

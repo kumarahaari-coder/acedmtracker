@@ -97,6 +97,8 @@ export const contentItems = pgTable(
     topic: varchar("topic", { length: 255 }),
     brief: text("brief"),
     referenceLink: text("reference_link"),
+    figmaUrl: text("figma_url"),
+    clientDeliveryDate: timestamp("client_delivery_date", { withTimezone: true }),
     priority: varchar("priority", { length: 50 }),
     workNature: varchar("work_nature", { length: 50 }),
     accountOwnerId: uuid("account_owner_id"),

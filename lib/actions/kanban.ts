@@ -58,6 +58,8 @@ export interface ProjectKanbanDTO {
     name: string;
     clientBrand: string;
     status: string;
+    projectType: string;
+    masterFigmaUrl?: string | null;
   };
   columns: KanbanColumnDTO[];
   cards: KanbanCardDTO[];
@@ -109,6 +111,8 @@ export async function getAuthoritativeProjectKanbanAction(
         name: projects.name,
         clientBrand: projects.clientName,
         status: projects.status,
+        projectType: projects.projectType,
+        masterFigmaUrl: projects.masterFigmaUrl,
       })
       .from(projects)
       .where(and(eq(projects.id, projectId), eq(projects.orgId, orgId)))
@@ -347,7 +351,19 @@ export async function getAuthoritativeProjectKanbanAction(
     });
 
     // 5. Shape Columns DTO with Counts
-    const columns: KanbanColumnDTO[] = KANBAN_STAGES.map((col) => ({
+    const isUiDesign = project.projectType === "ui_design";
+    const stagesToUse = isUiDesign
+      ? [
+          { stage: "draft" as ContentStage, title: "1. TO DO" },
+          { stage: "submitted" as ContentStage, title: "2. Submitted" },
+          { stage: "in_review" as ContentStage, title: "3. Internal Review" },
+          { stage: "changes_requested" as ContentStage, title: "4. Changes Requested" },
+          { stage: "approved" as ContentStage, title: "5. Approved" },
+          { stage: "published" as ContentStage, title: "6. Completed" },
+        ]
+      : KANBAN_STAGES;
+
+    const columns: KanbanColumnDTO[] = stagesToUse.map((col) => ({
       stage: col.stage,
       title: col.title,
       cardCount: cards.filter((c) => c.stage === col.stage).length,
@@ -364,6 +380,8 @@ export async function getAuthoritativeProjectKanbanAction(
           name: project.name,
           clientBrand: project.clientBrand || project.name,
           status: project.status,
+          projectType: project.projectType || "digital_marketing",
+          masterFigmaUrl: project.masterFigmaUrl || null,
         },
         columns,
         cards,

@@ -1394,6 +1394,7 @@ export interface MainDashboardDataDTO {
     id: string;
     projectId: string;
     projectName: string;
+    projectType?: string;
     topic: string;
     title: string;
     workType: string;
@@ -1511,6 +1512,7 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
           ci.id,
           ci.project_id AS "projectId",
           p.name AS "projectName",
+          p.project_type AS "projectType",
           COALESCE(ci.topic, ci.title) AS "topic",
           ci.title,
           COALESCE(ci.work_type, ci.content_type) AS "workType",

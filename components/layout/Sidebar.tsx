@@ -19,6 +19,7 @@ import {
   Layers,
 } from "lucide-react";
 import { useRole } from "@/lib/context/RoleContext";
+import { useAppState } from "@/lib/context/AppStateContext";
 
 interface SidebarProps {
   projectId: string;
@@ -27,7 +28,11 @@ interface SidebarProps {
 export function Sidebar({ projectId }: SidebarProps) {
   const pathname = usePathname();
   const { canViewAuditHistory, activeRole } = useRole();
+  const { state } = useAppState();
   const isManagement = activeRole === "founder" || activeRole === "admin" || activeRole === "consultant";
+
+  const currentProject = state.projects?.find((p) => p.id === projectId);
+  const isUiDesign = currentProject?.projectType === "ui_design";
 
   // Persistent user preference for sidebar collapse
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -62,11 +67,15 @@ export function Sidebar({ projectId }: SidebarProps) {
     { label: "Calendar", href: `/projects/${projectId}/calendar`, icon: Calendar },
     { label: "Kanban & Timeline", href: `/projects/${projectId}/kanban`, icon: Trello },
     ...(isManagement
-      ? [{ label: "Approvals Queue", href: `/projects/${projectId}/approvals`, icon: CheckCircle2 }]
+      ? [{ label: isUiDesign ? "Design Reviews" : "Approvals Queue", href: `/projects/${projectId}/approvals`, icon: CheckCircle2 }]
       : []),
-    { label: "Script Library", href: `/projects/${projectId}/scripts`, icon: FileCode2 },
-    { label: "Asset Vault", href: `/projects/${projectId}/assets`, icon: FolderKanban },
-    { label: "Analytics Hub", href: `/projects/${projectId}/analytics`, icon: BarChart2 },
+    ...(!isUiDesign
+      ? [{ label: "Script Library", href: `/projects/${projectId}/scripts`, icon: FileCode2 }]
+      : []),
+    { label: isUiDesign ? "Design Vault" : "Asset Vault", href: `/projects/${projectId}/assets`, icon: FolderKanban },
+    ...(!isUiDesign
+      ? [{ label: "Analytics Hub", href: `/projects/${projectId}/analytics`, icon: BarChart2 }]
+      : []),
     ...(isManagement
       ? [{ label: "Performance", href: `/projects/${projectId}/performance`, icon: LineChart }]
       : []),

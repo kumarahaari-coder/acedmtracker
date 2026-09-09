@@ -211,7 +211,7 @@ describe("Planned Effort Snapshot, Project-Scoped Assignee & Group Effort Accept
     expect(dbCustom.finalPlannedSeconds).toBe(3600);
 
     // Verify Main Dashboard DTO reflects exact hours (1.50h, 3.75h, 1.00h)
-    const dashRes = await getAuthoritativeMainDashboardAction();
+    const dashRes = await getAuthoritativeMainDashboardAction(founderUser.id);
     expect(dashRes.success).toBe(true);
 
     const posterRow = dashRes.data?.todaysWorkload.find((r) => r.id === dbPoster.id);
