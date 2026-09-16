@@ -8,6 +8,8 @@ import {
   founderOverrides,
   approvalDecisions,
   changeRequests,
+  creativeAssets,
+  submissionAssets,
 } from "../../lib/db/schema";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { getAuthoritativeContentItemDetailAction } from "../../lib/actions/contentDetail";
@@ -22,7 +24,7 @@ import {
   submitVersionAction,
   createNewVersionDraftAction,
 } from "../../lib/actions/content";
-import { createChangeRequestAction } from "../../lib/actions/changes";
+import { createChangeRequestAction, respondToChangeRequestAction } from "../../lib/actions/changes";
 import { enforceTestSafetyGuard } from "../helpers/safetyGuard";
 
 describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Content Detail & Approval Queue", () => {
@@ -186,6 +188,36 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
       v = (draftRes as any).version;
     }
 
+    // Ensure draft has a valid creative asset attached
+    const [existingAsset] = await db
+      .select()
+      .from(submissionAssets)
+      .where(eq(submissionAssets.submissionVersionId, v.id))
+      .limit(1);
+
+    if (!existingAsset) {
+      const [ca] = await db
+        .insert(creativeAssets)
+        .values({
+          id: crypto.randomUUID(),
+          projectId: targetProjectId,
+          orgId: founderUser.orgId,
+          r2ObjectKey: `test/sync_${Date.now()}`,
+          originalFilename: "test_creative.png",
+          fileSizeBytes: 1024,
+          mimeType: "image/png",
+          contentHash: "hash_" + Math.random().toString(36),
+          uploadedByUserId: founderUser.id,
+          status: "ready",
+        })
+        .returning();
+
+      await db.insert(submissionAssets).values({
+        submissionVersionId: v.id,
+        creativeAssetId: ca.id,
+      });
+    }
+
     const submitRes = await submitVersionAction({
       actorUserId: founderUser.id,
       submissionVersionId: v.id,
@@ -241,10 +273,33 @@ describe("CRITICAL — Deliverable Lifecycle Synchronization Across Kanban, Cont
   });
 
   it("9. Acceptance Step 4: Designer submits revision -> returns to review in both approval queues", async () => {
-    // Auto-create or create revision version and submit
+    const [v] = await db
+      .select()
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, targetItemId))
+      .orderBy(desc(submissionVersions.versionNumber))
+      .limit(1);
+
+    // Designer responds to open change request before submitting revision
+    const [openCr] = await db
+      .select()
+      .from(changeRequests)
+      .where(eq(changeRequests.contentItemId, targetItemId))
+      .limit(1);
+
+    if (openCr) {
+      await respondToChangeRequestAction({
+        actorUserId: founderUser.id,
+        changeRequestId: openCr.id,
+        responseText: "Addressed contrast adjustment",
+      });
+    }
+
+    // Create revision version with baseVersionId so assets are inherited
     const draftRes = await createNewVersionDraftAction({
       actorUserId: founderUser.id,
       contentItemId: targetItemId,
+      baseVersionId: v.id,
     });
     expect(draftRes.success).toBe(true);
 

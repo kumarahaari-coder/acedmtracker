@@ -11,12 +11,16 @@ import {
   projects,
   projectMemberships,
   users,
+  creativeAssets,
+  submissionAssets,
+  changeRequests,
+  changeRequestResponses,
   ContentPlatform,
   ContentType,
   ScopeClassification,
 } from "../db/schema";
 import { effortStandards } from "../db/schema/operational";
-import { eq, and, sql, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, sql, inArray, isNotNull, desc, asc, isNull } from "drizzle-orm";
 import { getAuthoritativeUser, requireProjectAccess } from "../auth/session";
 import { generateLegacyId, resolveProjectId, resolveContentItemId, resolveUserId } from "../compat/resolver";
 import { calculateInternalDeadline, resolveDeliverableLeadTimeWorkdays } from "../calculations/operationalEngine";
@@ -734,33 +738,310 @@ export async function saveDraftVersionAction(params: {
   return { success: true, version: updated };
 }
 
-/**
- * 4. Submit Version (Freezes draft and advances stage to 'in_review')
- */
-export async function submitVersionAction(params: {
-  actorUserId: string;
-  submissionVersionId: string;
-}) {
-  const { actorUserId, submissionVersionId } = params;
+export interface SubmissionEligibilityResult {
+  eligible: boolean;
+  blockers: string[];
+  activeDraftVersionId: string | null;
+  hasCreativeAsset: boolean;
+  hasCopy: boolean;
+  hasPostingDate: boolean;
+  canSubmit: boolean;
+  stage: string;
+  itemTitle: string;
+  projectId: string;
+}
 
-  const [version] = await db
+/**
+ * Authoritative internal server eligibility resolver.
+ * Used by both read queries (getSubmissionEligibilityAction) and mutation transactions (submitVersionAction).
+ */
+export async function resolveSubmissionEligibility(
+  executor: typeof db | any,
+  contentItemId: string,
+  actorUserId: string
+): Promise<{ success: boolean; data?: SubmissionEligibilityResult; error?: string }> {
+  const resolvedItemId = (await resolveContentItemId(contentItemId)) || contentItemId;
+
+  const [item] = await executor
     .select()
-    .from(submissionVersions)
-    .where(eq(submissionVersions.id, submissionVersionId))
+    .from(contentItems)
+    .where(and(eq(contentItems.id, resolvedItemId), isNull(contentItems.deletedAt)))
     .limit(1);
 
-  if (!version) return { success: false, error: "Submission version not found." };
-  if (!version.isDraft) return { success: true, version }; // Already submitted
-
-  const access = await requireProjectAccess(actorUserId, version.projectId);
-  if (!access.allowed || access.role === "client") {
-    return { success: false, error: "Unauthorized: Clients cannot submit versions." };
+  if (!item) {
+    return { success: false, error: "Content deliverable not found." };
   }
 
-  const now = new Date();
+  const blockers: string[] = [];
 
-  // Freeze version and advance contentItem stage in transaction
-  const result = await runTransaction(async (tx) => {
+  // 1. Stage eligibility
+  if (item.stage !== "draft" && item.stage !== "changes_requested") {
+    blockers.push(`Deliverable cannot be submitted when stage is '${item.stage}'. Must be 'draft' or 'changes_requested'.`);
+  }
+
+  // 2. Authorization check
+  const [actorUser] = await executor
+    .select({
+      id: users.id,
+      orgId: users.orgId,
+      organizationRole: users.organizationRole,
+      status: users.status,
+    })
+    .from(users)
+    .where(and(eq(users.id, actorUserId), eq(users.status, "active")))
+    .limit(1);
+
+  if (!actorUser) {
+    return { success: false, error: "Unauthorized: Invalid user account." };
+  }
+
+  let canSubmit = false;
+  if (actorUser.orgId === item.orgId && ["founder", "admin"].includes(actorUser.organizationRole)) {
+    canSubmit = true;
+  } else {
+    // Check project membership
+    const [membership] = await executor
+      .select()
+      .from(projectMemberships)
+      .where(
+        and(
+          eq(projectMemberships.projectId, item.projectId),
+          eq(projectMemberships.userId, actorUserId),
+          eq(projectMemberships.status, "active")
+        )
+      )
+      .limit(1);
+
+    if (!membership) {
+      blockers.push("Unauthorized: User is not an active member of this project.");
+    } else if (membership.membershipRole === "client") {
+      blockers.push("Unauthorized: Clients cannot submit deliverables.");
+    } else if (["founder", "admin", "consultant"].includes(membership.membershipRole)) {
+      canSubmit = true;
+    } else {
+      // Designer / video_editor / collaborator: must be assigned or accountable owner
+      const [assignment] = await executor
+        .select()
+        .from(contentAssignments)
+        .where(
+          and(
+            eq(contentAssignments.contentItemId, item.id),
+            eq(contentAssignments.assigneeUserId, actorUserId),
+            inArray(contentAssignments.status, ["assigned", "accepted", "in_progress"])
+          )
+        )
+        .limit(1);
+
+      if (assignment || item.accountOwnerId === actorUserId) {
+        canSubmit = true;
+      } else {
+        blockers.push("Unauthorized: Only the assigned team member or management can submit this deliverable for review.");
+      }
+    }
+  }
+
+  // 3. Resolve active draft version
+  const [draftVer] = await executor
+    .select()
+    .from(submissionVersions)
+    .where(
+      and(
+        eq(submissionVersions.contentItemId, item.id),
+        eq(submissionVersions.isDraft, true)
+      )
+    )
+    .limit(1);
+
+  if (!draftVer) {
+    blockers.push("No active draft version available for submission.");
+  }
+
+  // 4. Check unaddressed change requests
+  if (item.stage === "changes_requested") {
+    const openRequests = await executor
+      .select({
+        id: changeRequests.id,
+        status: changeRequests.status,
+      })
+      .from(changeRequests)
+      .where(
+        and(
+          eq(changeRequests.contentItemId, item.id),
+          eq(changeRequests.status, "open")
+        )
+      );
+
+    if (openRequests.length > 0) {
+      const openIds = openRequests.map((r: any) => r.id);
+      const responses = await executor
+        .select({
+          changeRequestId: changeRequestResponses.changeRequestId,
+        })
+        .from(changeRequestResponses)
+        .where(inArray(changeRequestResponses.changeRequestId, openIds));
+
+      const respondedSet = new Set(responses.map((res: any) => res.changeRequestId));
+      const unaddressed = openRequests.filter((r: any) => !respondedSet.has(r.id));
+      if (unaddressed.length > 0 && !["founder", "admin"].includes(actorUser.organizationRole)) {
+        blockers.push("Cannot resubmit while open change requests remain without a designer response.");
+      }
+    }
+  }
+
+  // 5. Check creative work attached to the active draft version
+  let hasCreativeAsset = false;
+  if (draftVer) {
+    const linkedAssets = await executor
+      .select({
+        subAssetId: submissionAssets.id,
+        creativeAssetId: creativeAssets.id,
+        status: creativeAssets.status,
+        isDriveLink: creativeAssets.isDriveLink,
+        driveUrl: creativeAssets.driveUrl,
+        r2ObjectKey: creativeAssets.r2ObjectKey,
+      })
+      .from(submissionAssets)
+      .innerJoin(creativeAssets, eq(submissionAssets.creativeAssetId, creativeAssets.id))
+      .where(eq(submissionAssets.submissionVersionId, draftVer.id));
+
+    // Valid creative asset criteria:
+    // status === 'ready' AND
+    // ( (isDriveLink === true AND valid https url) OR (r2ObjectKey is not null) )
+    const validAsset = linkedAssets.find((a: any) => {
+      if (a.status !== "ready") return false;
+      if (a.isDriveLink) {
+        return typeof a.driveUrl === "string" && a.driveUrl.trim().toLowerCase().startsWith("https://");
+      }
+      return Boolean(a.r2ObjectKey);
+    });
+
+    if (validAsset) {
+      hasCreativeAsset = true;
+    }
+  }
+
+  if (!hasCreativeAsset) {
+    blockers.push("Creative work must be attached before submitting for review.");
+  }
+
+  // 6. Check copy and posting date (audited business rule: informational reporting, not mandatory)
+  const hasCopy = Boolean(draftVer?.caption && draftVer.caption.trim().length > 0);
+  const hasPostingDate = Boolean(draftVer?.scheduledDate || item.scheduledPublicationDate);
+
+  const eligible = blockers.length === 0 && canSubmit;
+
+  return {
+    success: true,
+    data: {
+      eligible,
+      blockers,
+      activeDraftVersionId: draftVer?.id || null,
+      hasCreativeAsset,
+      hasCopy,
+      hasPostingDate,
+      canSubmit,
+      stage: item.stage,
+      itemTitle: item.title,
+      projectId: item.projectId,
+    },
+  };
+}
+
+/**
+ * Public action for querying deliverable submission eligibility
+ */
+export async function getSubmissionEligibilityAction(params: {
+  contentItemId: string;
+  actorUserId?: string;
+}) {
+  const authUser = await getAuthoritativeUser(params.actorUserId);
+  const actorUserId = authUser?.id || params.actorUserId;
+  if (!actorUserId) {
+    return { success: false, error: "Unauthorized: Invalid session." };
+  }
+  return await resolveSubmissionEligibility(db, params.contentItemId, actorUserId);
+}
+
+/**
+ * 4. Submit Version (Freezes draft and advances stage to 'in_review')
+ * Concurrency-safe, atomic transaction with canonical eligibility resolver.
+ */
+export async function submitVersionAction(params: {
+  actorUserId?: string;
+  submissionVersionId?: string;
+  contentItemId?: string;
+}) {
+  const authUser = await getAuthoritativeUser(params.actorUserId);
+  const actorUserId = authUser?.id || params.actorUserId;
+  if (!actorUserId) {
+    return { success: false, error: "Unauthorized: Invalid session." };
+  }
+
+  const { submissionVersionId, contentItemId } = params;
+
+  return await runTransaction(async (tx) => {
+    // 1. Resolve version and parent item with row lock
+    let version: any = null;
+    let itemId = contentItemId ? await resolveContentItemId(contentItemId) : null;
+
+    if (submissionVersionId) {
+      const [v] = await tx
+        .select()
+        .from(submissionVersions)
+        .where(eq(submissionVersions.id, submissionVersionId))
+        .for("update");
+      version = v;
+      if (version) itemId = version.contentItemId;
+    } else if (itemId) {
+      const [v] = await tx
+        .select()
+        .from(submissionVersions)
+        .where(
+          and(
+            eq(submissionVersions.contentItemId, itemId),
+            eq(submissionVersions.isDraft, true)
+          )
+        )
+        .for("update");
+      version = v;
+    }
+
+    if (!itemId) {
+      return { success: false, error: "Content deliverable not found." };
+    }
+
+    // Lock the parent contentItems row
+    const [item] = await tx
+      .select()
+      .from(contentItems)
+      .where(eq(contentItems.id, itemId))
+      .for("update");
+
+    if (!item) {
+      return { success: false, error: "Content deliverable not found." };
+    }
+
+    // Double-click idempotency: if version is already submitted and not draft, return success
+    if (version && !version.isDraft && version.submittedAt !== null) {
+      return { success: true, version, item, alreadySubmitted: true };
+    }
+
+    if (!version) {
+      return { success: false, error: "No active draft version available to submit." };
+    }
+
+    // 2. Canonical server eligibility check
+    const eligibilityRes = await resolveSubmissionEligibility(tx, item.id, actorUserId);
+    if (!eligibilityRes.success || !eligibilityRes.data?.eligible) {
+      const errorMsg = eligibilityRes.data?.blockers?.length
+        ? eligibilityRes.data.blockers.join("; ")
+        : eligibilityRes.error || "Deliverable is not eligible for submission.";
+      return { success: false, error: errorMsg };
+    }
+
+    const now = new Date();
+
+    // 3. Freeze the submitted draft version
     const [frozen] = await tx
       .update(submissionVersions)
       .set({
@@ -771,25 +1052,231 @@ export async function submitVersionAction(params: {
       .where(eq(submissionVersions.id, version.id))
       .returning();
 
-    const [item] = await tx
+    // 4. Advance contentItem stage to 'in_review' (canonical review stage)
+    const [updatedItem] = await tx
       .update(contentItems)
       .set({
         stage: "in_review",
         updatedAt: now,
       })
-      .where(eq(contentItems.id, version.contentItemId))
+      .where(eq(contentItems.id, item.id))
       .returning();
 
-    return { version: frozen, item };
-  });
+    // 5. Work ownership invariant: Do not mutate assignment status.
+    // Record firstSubmittedAt if null without changing status.
+    await tx
+      .update(contentAssignments)
+      .set({
+        firstSubmittedAt: sql`COALESCE(${contentAssignments.firstSubmittedAt}, ${now})`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(contentAssignments.contentItemId, item.id),
+          inArray(contentAssignments.status, ["assigned", "accepted", "in_progress"])
+        )
+      );
 
-  await invalidateWorkspaceEntities({
-    projectId: version.projectId,
-    userId: actorUserId,
-    orgId: version.orgId,
-  });
+    // 6. Write audit ledger record
+    const [actorUser] = await tx
+      .select({ fullName: users.fullName, organizationRole: users.organizationRole })
+      .from(users)
+      .where(eq(users.id, actorUserId))
+      .limit(1);
 
-  return { success: true, ...result };
+    await tx.insert(auditRecords).values({
+      orgId: item.orgId,
+      projectId: item.projectId,
+      actorUserId: actorUserId,
+      actorName: actorUser?.fullName || "Team Member",
+      actorRole: actorUser?.organizationRole || "designer",
+      action: "deliverable_submitted",
+      entityType: "submission_version",
+      entityId: frozen.id,
+      summary: `Submitted Version ${frozen.versionNumber} of "${item.title}" for review`,
+      beforeState: { stage: item.stage, isDraft: version.isDraft },
+      afterState: { stage: updatedItem.stage, isDraft: frozen.isDraft, submittedAt: frozen.submittedAt },
+    });
+
+    // Invalidate workspace cache
+    await invalidateWorkspaceEntities({
+      projectId: item.projectId,
+      userId: actorUserId,
+      orgId: item.orgId,
+    });
+
+    return { success: true, version: frozen, item: updatedItem };
+  });
+}
+
+/**
+ * Synchronize content group fields (creative assets, copy, scheduled date)
+ * PostgreSQL-authoritative transaction across sibling draft deliverables.
+ */
+export async function syncContentGroupFieldsAction(params: {
+  contentGroupId: string;
+  sourceItemId: string;
+  targetItemIds?: string[];
+  syncCopy?: boolean;
+  syncCreative?: boolean;
+  syncScheduledDate?: boolean;
+  actorUserId?: string;
+  reason?: string;
+}): Promise<{ success: true; affectedItemCount: number } | { success: false; error: string }> {
+  const authUser = await getAuthoritativeUser(params.actorUserId);
+  const actorUserId = authUser?.id || params.actorUserId;
+  if (!actorUserId) {
+    return { success: false, error: "Unauthorized: Invalid session." };
+  }
+
+  const { contentGroupId, sourceItemId, targetItemIds, syncCopy, syncCreative, syncScheduledDate, reason } = params;
+
+  return await runTransaction(async (tx) => {
+    const [group] = await tx
+      .select()
+      .from(contentGroups)
+      .where(eq(contentGroups.id, contentGroupId))
+      .limit(1);
+
+    if (!group) return { success: false, error: "Content group not found." };
+
+    const access = await requireProjectAccess(actorUserId, group.projectId);
+    if (!access.allowed || access.role === "client") {
+      return { success: false, error: "Unauthorized to synchronize deliverables." };
+    }
+
+    const resolvedSourceItemId = (await resolveContentItemId(sourceItemId)) || sourceItemId;
+    const [sourceItem] = await tx
+      .select()
+      .from(contentItems)
+      .where(eq(contentItems.id, resolvedSourceItemId))
+      .limit(1);
+
+    if (!sourceItem) return { success: false, error: "Source deliverable not found." };
+
+    const sourceVersions = await tx
+      .select()
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, sourceItem.id))
+      .orderBy(desc(submissionVersions.versionNumber));
+
+    const sourceVer = sourceVersions.find((v) => v.isDraft) || sourceVersions[0];
+    if (!sourceVer) return { success: false, error: "Source deliverable has no versions to sync from." };
+
+    let sourceAssetIds: string[] = [];
+    if (syncCreative) {
+      const sourceSubAssets = await tx
+        .select({ creativeAssetId: submissionAssets.creativeAssetId })
+        .from(submissionAssets)
+        .where(eq(submissionAssets.submissionVersionId, sourceVer.id));
+      sourceAssetIds = sourceSubAssets.map((sa) => sa.creativeAssetId);
+    }
+
+    const siblings = await tx
+      .select()
+      .from(contentItems)
+      .where(
+        and(
+          eq(contentItems.contentGroupId, contentGroupId),
+          isNull(contentItems.deletedAt)
+        )
+      );
+
+    const targetItems = siblings.filter((sib) =>
+      targetItemIds && targetItemIds.length > 0
+        ? targetItemIds.includes(sib.id)
+        : sib.id !== sourceItem.id
+    );
+
+    let affectedItemCount = 0;
+    const now = new Date();
+
+    for (const targetItem of targetItems) {
+      // Find target's active draft version (never mutate immutable submitted versions!)
+      const [targetDraft] = await tx
+        .select()
+        .from(submissionVersions)
+        .where(
+          and(
+            eq(submissionVersions.contentItemId, targetItem.id),
+            eq(submissionVersions.isDraft, true)
+          )
+        )
+        .limit(1);
+
+      if (!targetDraft) {
+        continue;
+      }
+
+      // Sync Creative: Authoritative PostgreSQL linkage
+      if (syncCreative && sourceAssetIds.length > 0) {
+        for (let i = 0; i < sourceAssetIds.length; i++) {
+          const assetId = sourceAssetIds[i];
+          const [existing] = await tx
+            .select({ id: submissionAssets.id })
+            .from(submissionAssets)
+            .where(
+              and(
+                eq(submissionAssets.submissionVersionId, targetDraft.id),
+                eq(submissionAssets.creativeAssetId, assetId)
+              )
+            )
+            .limit(1);
+
+          if (!existing) {
+            await tx.insert(submissionAssets).values({
+              submissionVersionId: targetDraft.id,
+              creativeAssetId: assetId,
+              sortOrder: i,
+            });
+          }
+        }
+      }
+
+      // Sync Copy
+      if (syncCopy) {
+        await tx
+          .update(submissionVersions)
+          .set({
+            caption: sourceVer.caption,
+            hashtags: sourceVer.hashtags,
+            cta: sourceVer.cta,
+            destinationUrl: sourceVer.destinationUrl,
+            updatedAt: now,
+          })
+          .where(eq(submissionVersions.id, targetDraft.id));
+      }
+
+      // Sync Scheduled Date
+      if (syncScheduledDate && sourceItem.scheduledPublicationDate) {
+        await tx
+          .update(contentItems)
+          .set({
+            scheduledPublicationDate: sourceItem.scheduledPublicationDate,
+            updatedAt: now,
+          })
+          .where(eq(contentItems.id, targetItem.id));
+
+        await tx
+          .update(submissionVersions)
+          .set({
+            scheduledDate: sourceVer.scheduledDate || sourceItem.scheduledPublicationDate,
+            updatedAt: now,
+          })
+          .where(eq(submissionVersions.id, targetDraft.id));
+      }
+
+      affectedItemCount++;
+    }
+
+    await invalidateWorkspaceEntities({
+      projectId: group.projectId,
+      userId: actorUserId,
+      orgId: group.orgId,
+    });
+
+    return { success: true, affectedItemCount };
+  });
 }
 
 /**
@@ -843,15 +1330,30 @@ export async function createNewVersionDraftAction(params: {
     const maxVer = Number(maxVersionResult[0]?.maxVer || 0);
     const nextVerNum = maxVer > 0 ? maxVer + 1 : 1;
 
-    // 4. Retrieve base copy if specified
+    // 4. Retrieve base copy if specified or fallback to latest existing version
+    let effectiveBaseVersionId = baseVersionId;
+    if (!effectiveBaseVersionId && maxVer > 0) {
+      const [prevVer] = await tx
+        .select({ id: submissionVersions.id })
+        .from(submissionVersions)
+        .where(
+          and(
+            eq(submissionVersions.contentItemId, item.id),
+            eq(submissionVersions.versionNumber, maxVer)
+          )
+        )
+        .limit(1);
+      effectiveBaseVersionId = prevVer?.id;
+    }
+
     let copy = { caption: "", hashtags: [] as string[], cta: "", destinationUrl: undefined as string | undefined };
     let scheduledDate = item.scheduledPublicationDate;
 
-    if (baseVersionId) {
+    if (effectiveBaseVersionId) {
       const [base] = await tx
         .select()
         .from(submissionVersions)
-        .where(eq(submissionVersions.id, baseVersionId))
+        .where(eq(submissionVersions.id, effectiveBaseVersionId))
         .limit(1);
       if (base) {
         copy = { caption: base.caption, hashtags: [...base.hashtags], cta: base.cta, destinationUrl: base.destinationUrl || undefined };
@@ -884,7 +1386,24 @@ export async function createNewVersionDraftAction(params: {
       })
       .returning();
 
-    // 6. Update cached current_version_number on parent item
+    // 6. Inherit base creative assets if effectiveBaseVersionId specified
+    if (effectiveBaseVersionId) {
+      const baseAssets = await tx
+        .select()
+        .from(submissionAssets)
+        .where(eq(submissionAssets.submissionVersionId, effectiveBaseVersionId))
+        .orderBy(asc(submissionAssets.sortOrder));
+
+      for (const ba of baseAssets) {
+        await tx.insert(submissionAssets).values({
+          submissionVersionId: newVersion.id,
+          creativeAssetId: ba.creativeAssetId,
+          sortOrder: ba.sortOrder,
+        });
+      }
+    }
+
+    // 7. Update cached current_version_number on parent item
     await tx
       .update(contentItems)
       .set({

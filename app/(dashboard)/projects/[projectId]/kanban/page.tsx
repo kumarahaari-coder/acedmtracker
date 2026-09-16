@@ -85,7 +85,7 @@ export default function KanbanBoardPage() {
     // Enforce business action invariants: transitions requiring business actions cannot be done directly
     if (card.stage === "draft" && (targetStage === "submitted" || targetStage === "in_review")) {
       setTransitionError(
-        `Direct transition disabled: Deliverable '${card.title}' must be submitted for review from the deliverable page with creative work attached.`
+        `Direct transition disabled: Deliverable '${card.title}' must be submitted via the 'Submit for Review' action on the deliverable page.`
       );
       return;
     }

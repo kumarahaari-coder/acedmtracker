@@ -55,6 +55,8 @@ import {
   createNewVersionDraftAction,
   toggleClientVisibilityAction,
   updateInternalDeadlineAction,
+  getSubmissionEligibilityAction,
+  syncContentGroupFieldsAction,
 } from "@/lib/actions/content";
 import {
   requestCreativeAssetUploadAction,
@@ -458,6 +460,11 @@ export default function ContentItemWorkspacePage() {
   );
   const canResubmit = unaddressedOpenRequests.length === 0;
 
+  const isOwner = activeUserId === activeAssignment?.assigneeUserId || activeUserId === item.accountOwnerId;
+  const isManagement = ["founder", "admin", "consultant"].includes(activeRole);
+  const canSubmitReview = (isOwner || isManagement) && (item.stage === "draft" || item.stage === "changes_requested");
+  const [isSubmittingForReview, setIsSubmittingForReview] = useState(false);
+
   // Comments for this item (Internal + External)
   const itemComments = detailData?.comments || state.comments.filter((c) => c.contentItemId === item.id);
   const projectMembers = detailData?.projectMembers || [];
@@ -590,20 +597,21 @@ export default function ContentItemWorkspacePage() {
     }
   };
 
-  const handleResubmit = async () => {
-    if (!canResubmit) {
+  const handleSubmitForReview = async () => {
+    if (item.stage === "changes_requested" && !canResubmit) {
       alert("Cannot resubmit while open change requests remain without a designer response.");
       return;
     }
 
+    setIsSubmittingForReview(true);
     try {
       // 1. Check if current version is already a draft; if not, create a new version draft for revision
-      let draftVersionId = currentVersion.id;
-      if (!currentVersion.isDraft) {
+      let draftVersionId = currentVersion?.id;
+      if (!currentVersion?.isDraft) {
         const createRes = await createNewVersionDraftAction({
           actorUserId: activeUserId,
           contentItemId: item.id,
-          baseVersionId: currentVersion.id,
+          baseVersionId: currentVersion?.id,
         });
         if (!createRes.success || !(createRes as any).version) {
           alert(createRes.error || "Failed to create new revision version draft.");
@@ -612,39 +620,46 @@ export default function ContentItemWorkspacePage() {
         draftVersionId = (createRes as any).version.id;
       }
 
-      // 2. Save draft copy details in PostgreSQL
-      const saveRes = await saveDraftVersionAction({
-        actorUserId: activeUserId,
-        submissionVersionId: draftVersionId,
-        updates: {
-          caption: draftCaption,
-          hashtags: draftHashtags.split(" ").filter((h) => h.trim().length > 0),
-          cta: draftCTA,
-        },
-      });
+      // 2. If user is currently editing draft copy, persist it
+      if (isEditingDraft && draftVersionId) {
+        const saveRes = await saveDraftVersionAction({
+          actorUserId: activeUserId,
+          submissionVersionId: draftVersionId,
+          updates: {
+            caption: draftCaption,
+            hashtags: draftHashtags.split(" ").filter((h) => h.trim().length > 0),
+            cta: draftCTA,
+          },
+        });
 
-      if (!saveRes.success) {
-        alert(saveRes.error || "Failed to save draft version copy.");
-        return;
+        if (!saveRes.success) {
+          alert(saveRes.error || "Failed to save draft version copy.");
+          return;
+        }
       }
 
-      // 3. Freeze version and submit for review in PostgreSQL
+      // 3. Freeze version and submit for review in PostgreSQL atomically
       const submitRes = await submitVersionAction({
         actorUserId: activeUserId,
+        contentItemId: item.id,
         submissionVersionId: draftVersionId,
       });
 
       if (submitRes.success) {
-        setSelectedVersionId(draftVersionId);
+        if (draftVersionId) setSelectedVersionId(draftVersionId);
         setIsEditingDraft(false);
         await loadDetail();
       } else {
-        alert(submitRes.error || "Failed to submit version for review.");
+        alert(submitRes.error || "Failed to submit deliverable for review.");
       }
     } catch (e: any) {
-      alert(e.message || "Failed to resubmit.");
+      alert(e.message || "Failed to submit deliverable for review.");
+    } finally {
+      setIsSubmittingForReview(false);
     }
   };
+
+  const handleResubmit = handleSubmitForReview;
 
   const handleGenerateShareLink = async () => {
     if (!currentVersion?.id) {
@@ -815,6 +830,42 @@ export default function ContentItemWorkspacePage() {
               <h1 className="text-[17px] font-semibold text-[#1d1d1f] truncate max-w-md">
                 {item.title}
               </h1>
+              {/* Authoritative Lifecycle Badge */}
+              {item.stage === "draft" && (
+                <span className="inline-flex items-center rounded-full bg-[#f2f2f7] px-2.5 py-0.5 text-[11px] font-semibold text-[#6e6e73] border border-black/[0.06]">
+                  Draft {currentVersion?.versionNumber ? `(V${currentVersion.versionNumber})` : ""}
+                </span>
+              )}
+              {item.stage === "submitted" && (
+                <span className="inline-flex items-center rounded-full bg-[#eaf4ff] px-2.5 py-0.5 text-[11px] font-semibold text-[#0066cc] border border-[#b8daff]">
+                  Submitted
+                </span>
+              )}
+              {item.stage === "in_review" && (
+                <span className="status-badge status-in-review rounded-full px-2.5 py-0.5 text-[11px] font-semibold flex items-center gap-1">
+                  <Sparkles className="h-3 w-3" /> In Review
+                </span>
+              )}
+              {item.stage === "changes_requested" && (
+                <span className="status-changes rounded-full px-2.5 py-0.5 text-[11px] font-bold">
+                  Changes Requested
+                </span>
+              )}
+              {item.stage === "approved" && (
+                <span className="status-approved rounded-full px-2.5 py-0.5 text-[11px] font-bold flex items-center gap-1">
+                  <Check className="h-3 w-3" /> Approved
+                </span>
+              )}
+              {item.stage === "scheduled" && (
+                <span className="rounded-full bg-[#e8f5e9] text-[#2e7d32] border border-[#c8e6c9] px-2.5 py-0.5 text-[11px] font-semibold">
+                  Scheduled
+                </span>
+              )}
+              {item.stage === "published" && (
+                <span className="rounded-full bg-[#f3e5f5] text-[#7b1fa2] border border-[#e1bee7] px-2.5 py-0.5 text-[11px] font-semibold">
+                  Published
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -846,7 +897,37 @@ export default function ContentItemWorkspacePage() {
           )}
 
           {/* Primary Action Button */}
-          {approvalSummary.allComponentsApproved ? (
+          {item.stage === "draft" && canSubmitReview ? (
+            <button
+              onClick={handleSubmitForReview}
+              disabled={isSubmittingForReview}
+              className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-1.5 text-[13px] font-semibold text-white shadow-sm transition flex items-center gap-1.5 disabled:opacity-50 active:scale-[0.98]"
+            >
+              {isSubmittingForReview ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              <span>Submit for Review</span>
+            </button>
+          ) : item.stage === "draft" ? (
+            <span className="rounded-full bg-[#f2f2f7] px-3.5 py-1.5 text-[13px] font-medium text-[#6e6e73] border border-black/[0.06]">
+              Draft (WIP)
+            </span>
+          ) : item.stage === "changes_requested" && canSubmitReview ? (
+            <button
+              onClick={handleSubmitForReview}
+              disabled={isSubmittingForReview}
+              className="rounded-full bg-[#0071e3] hover:bg-[#0077ed] px-4 py-1.5 text-[13px] font-semibold text-white shadow-sm transition flex items-center gap-1.5 disabled:opacity-50 active:scale-[0.98]"
+            >
+              {isSubmittingForReview ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              <span>Submit Revision</span>
+            </button>
+          ) : approvalSummary.allComponentsApproved ? (
             <span className="status-approved rounded-full px-3.5 py-1.5 text-[13px] font-semibold flex items-center gap-1.5">
               <Check className="h-4 w-4" /> Approved for Schedule
             </span>
@@ -859,7 +940,7 @@ export default function ContentItemWorkspacePage() {
             </button>
           ) : (
             <span className="status-badge status-in-review rounded-full px-3.5 py-1.5 text-[13px] font-semibold flex items-center gap-1.5">
-              <Sparkles className="h-3.5 w-3.5" /> Pending Review
+              <Sparkles className="h-3.5 w-3.5" /> In Review
             </span>
           )}
         </div>
@@ -1560,6 +1641,26 @@ export default function ContentItemWorkspacePage() {
                       </button>
                     </div>
                   </div>
+
+                  {item.stage === "draft" && canSubmitReview && (
+                    <div className="pt-2.5 mt-2 flex items-center justify-between border-t border-black/[0.06]">
+                      <span className="text-[12px] text-[#2e7d32] font-medium flex items-center gap-1">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Creative work ready
+                      </span>
+                      <button
+                        onClick={handleSubmitForReview}
+                        disabled={isSubmittingForReview}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-[#0071e3] hover:bg-[#0077ed] text-white px-3.5 py-1.5 text-[12px] font-medium shadow-xs transition disabled:opacity-50 active:scale-[0.98]"
+                      >
+                        {isSubmittingForReview ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Send className="h-3.5 w-3.5" />
+                        )}
+                        <span>Submit for Review</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 /* Apple-style Empty Dropzone Card */
@@ -1786,7 +1887,11 @@ export default function ContentItemWorkspacePage() {
                       <span className="font-semibold text-[13px] text-[#1d1d1f]">
                         {label}
                       </span>
-                      {compSummary.isFullyApproved ? (
+                      {item.stage === "draft" ? (
+                        <span className="rounded-full bg-[#f2f2f7] text-[#86868b] px-2 py-0.5 text-[11px] font-medium border border-black/[0.06]">
+                          Draft WIP
+                        </span>
+                      ) : compSummary.isFullyApproved ? (
                         <span className="status-approved rounded-full px-2 py-0.5 text-[11px] font-bold">
                           Approved
                         </span>
@@ -1819,18 +1924,26 @@ export default function ContentItemWorkspacePage() {
                     {/* Action buttons for Consultant/Founder */}
                     {canApprove && (
                       <div className="flex items-center justify-end gap-1.5 pt-1">
-                        <button
-                          onClick={() => handleDecision(comp, "approved")}
-                          className="rounded-full bg-[#eaf6ed] hover:bg-[#d5eed9] text-[#1f6f32] px-3 py-1 text-[12px] font-medium transition"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => handleDecision(comp, "changes_requested")}
-                          className="rounded-full bg-[#fff0ee] hover:bg-[#ffe0dc] text-[#b42318] px-3 py-1 text-[12px] font-medium transition"
-                        >
-                          Reject
-                        </button>
+                        {item.stage === "draft" || currentVersion.isDraft ? (
+                          <span className="text-[11px] text-[#86868b] italic">
+                            Actionable once submitted for review
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleDecision(comp, "approved")}
+                              className="rounded-full bg-[#eaf6ed] hover:bg-[#d5eed9] text-[#1f6f32] px-3 py-1 text-[12px] font-medium transition"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleDecision(comp, "changes_requested")}
+                              className="rounded-full bg-[#fff0ee] hover:bg-[#ffe0dc] text-[#b42318] px-3 py-1 text-[12px] font-medium transition"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1839,7 +1952,7 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             {/* Revoke Approval Action */}
-            {canApprove && (
+            {canApprove && item.stage !== "draft" && !currentVersion.isDraft && (
               <div className="pt-2 border-t border-black/[0.06] text-right">
                 <button
                   onClick={() => setIsRevokeModalOpen(true)}
@@ -2601,13 +2714,13 @@ export default function ContentItemWorkspacePage() {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (!syncCopyCheck && !syncCreativeCheck && !syncDateCheck) {
                   alert("Please select at least one component to synchronize.");
                   return;
                 }
-                const res = syncContentGroupFields({
+                const res = await syncContentGroupFieldsAction({
                   contentGroupId: contentGroup.id,
                   sourceItemId: item.id,
                   syncCopy: syncCopyCheck,
@@ -2618,7 +2731,8 @@ export default function ContentItemWorkspacePage() {
                 });
                 if (res.success) {
                   setIsSyncModalOpen(false);
-                  alert(`Successfully synchronized selected components across ${res.affectedItemCount} platform items.`);
+                  await loadDetail();
+                  alert(`Successfully synchronized selected components across ${(res as any).affectedItemCount ?? 0} platform items.`);
                 } else {
                   alert(res.error || "Failed to synchronize platform items.");
                 }

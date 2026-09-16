@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { db } from "../../lib/db";
-import { contentItems, contentAssignments, users } from "../../lib/db/schema";
+import { contentItems, contentAssignments, users, submissionVersions } from "../../lib/db/schema";
 import { updateContentItemStageAction } from "../../lib/actions/content";
 import { eq } from "drizzle-orm";
 
@@ -36,6 +36,38 @@ describe("TEST E — Designer Submit for Review Workflow & Security", () => {
       initialDueAt: new Date(),
       currentDueAt: new Date(),
     });
+
+    // Ensure item has a submitted version to satisfy invariant
+    const [existingVer] = await db
+      .select()
+      .from(submissionVersions)
+      .where(eq(submissionVersions.contentItemId, testItem.id))
+      .limit(1);
+
+    if (existingVer) {
+      await db
+        .update(submissionVersions)
+        .set({ isDraft: false, submittedAt: new Date() })
+        .where(eq(submissionVersions.id, existingVer.id));
+    } else {
+      await db.insert(submissionVersions).values({
+        id: crypto.randomUUID(),
+        legacyId: `ver_${Date.now()}`,
+        contentItemId: testItem.id,
+        projectId: testItem.projectId,
+        orgId: designerUser.orgId,
+        versionNumber: 1,
+        isDraft: false,
+        submittedAt: new Date(),
+        caption: "Test",
+        hashtags: [],
+        cta: "",
+        copyFingerprint: "fp_test",
+        creativeFingerprint: "fp_test",
+        postingDateFingerprint: "fp_test",
+        createdByUserId: designerUser.id,
+      });
+    }
   });
 
   it("1. Designer can submit draft deliverable assigned to self", async () => {

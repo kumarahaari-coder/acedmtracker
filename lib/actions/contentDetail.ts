@@ -232,6 +232,17 @@ export async function getAuthoritativeContentItemDetailAction(
     const dbItem = raw?.item;
 
     if (!dbItem) {
+      // Check if project exists and belongs to org
+      const [proj] = await db
+        .select({ id: projects.id })
+        .from(projects)
+        .where(and(eq(projects.id, resolvedProjId), eq(projects.orgId, orgId), isNull(projects.deletedAt)))
+        .limit(1);
+
+      if (!proj) {
+        return { success: false, error: "Project not found or inaccessible", notFound: true };
+      }
+
       // Diagnostic check: check if item exists in another project or is deleted
       const [itemInOtherProject] = await db
         .select({ id: contentItems.id, projectId: contentItems.projectId })

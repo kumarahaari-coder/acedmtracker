@@ -7,6 +7,8 @@ import {
   projectMemberships,
   users,
   externalReviewTokens,
+  creativeAssets,
+  submissionAssets,
 } from "../../lib/db/schema";
 import {
   getAuthoritativeActiveDraftAction,
@@ -107,6 +109,28 @@ describe("Production Content Lifecycle, Client Portal & External Guest Review E2
       },
     });
     expect(saveRes.success).toBe(true);
+
+    // Attach creative asset to satisfy submission requirement
+    const [ca] = await db
+      .insert(creativeAssets)
+      .values({
+        id: crypto.randomUUID(),
+        projectId: testProject.id,
+        orgId: founderUser.orgId,
+        r2ObjectKey: `test/portal_${Date.now()}`,
+        originalFilename: "portal_creative.png",
+        fileSizeBytes: 2048,
+        mimeType: "image/png",
+        contentHash: "hash_portal_" + Math.random().toString(36),
+        uploadedByUserId: founderUser.id,
+        status: "ready",
+      })
+      .returning();
+
+    await db.insert(submissionAssets).values({
+      submissionVersionId: v1DraftId,
+      creativeAssetId: ca.id,
+    });
 
     // Verify persistence in PostgreSQL
     const [dbVer] = await db.select().from(submissionVersions).where(eq(submissionVersions.id, v1DraftId));
