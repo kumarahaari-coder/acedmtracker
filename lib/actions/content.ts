@@ -1942,7 +1942,7 @@ export async function updateContentItemStageAction(params: {
         };
       }
 
-      if (targetStage === "submitted") {
+      if (targetStage === "submitted" || targetStage === "in_review") {
         if (currentStage !== "draft" && currentStage !== "changes_requested") {
           return {
             success: false,

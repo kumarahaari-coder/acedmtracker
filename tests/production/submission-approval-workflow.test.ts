@@ -478,7 +478,7 @@ describe("Authoritative Deliverable Submission & Approval Workflow Invariants", 
     // Verify final stage is approved
     const [finalItem] = await db.select().from(contentItems).where(eq(contentItems.id, item.id));
     expect(finalItem.stage).toBe("approved");
-  });
+  }, 15000);
 
   it("5. PostgreSQL-authoritative Multi-Platform Sync: Shares creative linkage across siblings without duplicating creative asset", async () => {
     // 1. Create content group

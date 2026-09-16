@@ -20,34 +20,40 @@ describe("TEST B — Kanban Workflow Stage Persistence & Validation", () => {
     designerUser = activeUsers.find((u) => u.organizationRole === "designer") || activeUsers[1];
     expect(founderUser).toBeDefined();
 
-    const [item] = await db.select().from(contentItems).where(eq(contentItems.orgId, founderUser.orgId)).limit(1);
-    expect(item).toBeDefined();
+    const [proj] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.orgId, founderUser.orgId))
+      .limit(1);
+    expect(proj).toBeDefined();
+
+    const [item] = await db
+      .insert(contentItems)
+      .values({
+        id: crypto.randomUUID(),
+        legacyId: `kbn_test_${Date.now()}`,
+        projectId: proj.id,
+        orgId: founderUser.orgId,
+        title: `Kanban Persistence Test (${Date.now()})`,
+        platform: "Instagram",
+        contentType: "post",
+        stage: "draft",
+        currentVersionNumber: 1,
+      })
+      .returning();
     testItem = item;
 
     // Invariant requirement: item must have an immutable submitted version to transition to submitted/in_review
-    const [existingVer] = await db
-      .select()
-      .from(submissionVersions)
-      .where(eq(submissionVersions.contentItemId, testItem.id))
-      .limit(1);
-
-    if (existingVer) {
-      await db
-        .update(submissionVersions)
-        .set({ isDraft: false, submittedAt: new Date() })
-        .where(eq(submissionVersions.id, existingVer.id));
-    } else {
-      await db.insert(submissionVersions).values({
-        id: crypto.randomUUID(),
-        orgId: founderUser.orgId,
-        projectId: testItem.projectId,
-        contentItemId: testItem.id,
-        versionNumber: 1,
-        isDraft: false,
-        submittedAt: new Date(),
-        createdByUserId: founderUser.id,
-      });
-    }
+    await db.insert(submissionVersions).values({
+      id: crypto.randomUUID(),
+      orgId: founderUser.orgId,
+      projectId: testItem.projectId,
+      contentItemId: testItem.id,
+      versionNumber: 1,
+      isDraft: false,
+      submittedAt: new Date(),
+      createdByUserId: founderUser.id,
+    });
   });
 
   it("1. Legal transition (draft -> submitted) updates content_items.stage in PostgreSQL", async () => {
