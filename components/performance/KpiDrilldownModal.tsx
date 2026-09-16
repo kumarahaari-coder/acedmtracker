@@ -18,6 +18,7 @@ import { ContentItem, WorkSession, ChangeRequest } from "@/lib/types";
 export type DrilldownType =
   | "actual_hours"
   | "overdue_tasks"
+  | "today_tasks"
   | "adhoc_hours"
   | "rework_evidence"
   | "completed_tasks"
@@ -29,7 +30,7 @@ interface KpiDrilldownModalProps {
   title: string;
   subtitle?: string;
   type: DrilldownType;
-  items?: ContentItem[];
+  items?: any[];
   workSessions?: WorkSession[];
   changeRequests?: ChangeRequest[];
   extraData?: any;
@@ -105,25 +106,64 @@ export function KpiDrilldownModal({
                 <div className="py-8 text-center text-sm text-[#86868b]">Zero overdue tasks! All work is on track.</div>
               ) : (
                 <div className="space-y-2">
-                  {items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-3 bg-[#ff3b30]/5 border border-[#ff3b30]/15 rounded-xl flex items-center justify-between text-xs"
-                    >
-                      <div>
-                        <div className="font-semibold text-[#1d1d1f]">{item.title}</div>
-                        <div className="text-[11px] text-[#86868b] mt-0.5">
-                          {item.workType || item.contentType} • {item.platform}
+                  {items.map((item) => {
+                    const dl = item.internalDeadline || item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline;
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-3 bg-[#ff3b30]/5 border border-[#ff3b30]/15 rounded-xl flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#1d1d1f]">{item.title}</div>
+                          <div className="text-[11px] text-[#86868b] mt-0.5">
+                            {item.projectName ? `${item.projectName} • ` : ""}{item.workType || item.contentType || "Deliverable"} • {item.platform || "Standard"}
+                            {item.assigneeName ? ` • ${item.assigneeName}` : ""}
+                          </div>
+                          <div className="text-[11px] text-[#ff3b30] font-medium mt-1">
+                            Deadline: {dl ? new Date(dl).toLocaleDateString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" }) : "Past Due"}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-[#ff3b30] font-medium mt-1">
-                          Deadline: {item.finalInternalDeadline ? new Date(item.finalInternalDeadline).toLocaleDateString() : "Past Due"}
-                        </div>
+                        <span className="px-2 py-0.5 bg-[#ff3b30]/10 text-[#d70015] rounded-full text-[10px] font-semibold">
+                          Overdue
+                        </span>
                       </div>
-                      <span className="px-2 py-0.5 bg-[#ff3b30]/10 text-[#d70015] rounded-full text-[10px] font-semibold">
-                        Overdue
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 2b. Tasks Due Today Drilldown */}
+          {type === "today_tasks" && (
+            <div>
+              {items.length === 0 ? (
+                <div className="py-8 text-center text-sm text-[#86868b]">Zero tasks due today.</div>
+              ) : (
+                <div className="space-y-2">
+                  {items.map((item) => {
+                    const dl = item.internalDeadline || item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline;
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-3 bg-[#0071e3]/5 border border-[#0071e3]/15 rounded-xl flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#1d1d1f]">{item.title}</div>
+                          <div className="text-[11px] text-[#86868b] mt-0.5">
+                            {item.projectName ? `${item.projectName} • ` : ""}{item.workType || item.contentType || "Deliverable"} • {item.platform || "Standard"}
+                            {item.assigneeName ? ` • ${item.assigneeName}` : ""}
+                          </div>
+                          <div className="text-[11px] text-[#0071e3] font-medium mt-1">
+                            Due Today: {dl ? new Date(dl).toLocaleDateString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }) : "Today"}
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 bg-[#0071e3]/10 text-[#0071e3] rounded-full text-[10px] font-semibold">
+                          Due Today
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

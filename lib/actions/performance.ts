@@ -1383,6 +1383,38 @@ export async function getAuthoritativeEffortAnalysisAction(
   }
 }
 
+export interface WorkloadItemDTO {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectType?: string;
+  topic: string;
+  title: string;
+  workType: string;
+  platform?: string;
+  internalDeadline: string;
+  postingDate: string;
+  assigneeName: string;
+  assigneeUserId?: string;
+  plannedHours: number | null;
+  finalPlannedSeconds?: number;
+  status: string;
+  priority: string;
+  timing: "overdue" | "today" | "tomorrow" | "upcoming";
+  isEffortAnchor?: boolean;
+  scopeClassification?: string;
+  finalInternalDeadline?: string;
+  calculatedInternalDeadline?: string;
+  submissionDeadline?: string;
+}
+
+export interface AuthoritativeWorkloadPartitionDTO {
+  overdue: WorkloadItemDTO[];
+  today: WorkloadItemDTO[];
+  tomorrow: WorkloadItemDTO[];
+  upcoming: WorkloadItemDTO[];
+}
+
 // 6. Main Live Dashboard Action (Management & Employee View)
 export interface MainDashboardDataDTO {
   isManagement: boolean;
@@ -1390,35 +1422,22 @@ export interface MainDashboardDataDTO {
   overdueOpenTasksCount: number;
   adHocHoursThisMonth: number;
   completedThisMonthCount: number;
-  todaysWorkload: {
-    id: string;
-    projectId: string;
-    projectName: string;
-    projectType?: string;
-    topic: string;
-    title: string;
-    workType: string;
-    internalDeadline: string;
-    postingDate: string;
-    assigneeName: string;
-    plannedHours: number | null;
-    status: string;
-    priority: string;
-    timing?: "overdue" | "today";
-    isEffortAnchor?: boolean;
-  }[];
+  workload: AuthoritativeWorkloadPartitionDTO;
+  todaysWorkload: WorkloadItemDTO[];
+  completedThisMonthItems: WorkloadItemDTO[];
+  adHocItemsThisMonth: WorkloadItemDTO[];
   weeklyTeamCapacity: EmployeePeriodScorecard[];
   monthlyProjectHealth: ProjectPerformanceScorecard[];
   employeePersonalView?: {
-    overdueTasks: ContentItem[];
-    dueTodayTasks: ContentItem[];
+    overdueTasks: any[];
+    dueTodayTasks: any[];
     plannedHoursToday: number;
     loggedHoursToday: number;
-    urgentTasks: ContentItem[];
+    urgentTasks: any[];
     activeTimer?: WorkSession;
-    queueToday: ContentItem[];
-    queueTomorrow: ContentItem[];
-    queueUpcoming: ContentItem[];
+    queueToday: any[];
+    queueTomorrow: any[];
+    queueUpcoming: any[];
     weekScorecard: EmployeePeriodScorecard;
   };
 }
@@ -1498,15 +1517,15 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
             AND (p.deleted_at IS NULL)
             AND (p.archived_at IS NULL)
             AND (ci.work_nature = 'ad_hoc')
-            AND (COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
-                 AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz)
+            AND (COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
+                 AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz)
           ), 0)::int AS ad_hoc_planned_seconds
         FROM content_items ci
         JOIN projects p ON ci.project_id = p.id
         WHERE ci.org_id = ${orgId}
       `),
 
-      // 2. Today's Workload Rows Query (joins project, assignment, user in PostgreSQL)
+      // 2. Authoritative Workload Rows Query (All active deliverables with canonical operational deadlines)
       db.execute(sql`
         SELECT 
           ci.id,
@@ -1516,19 +1535,22 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
           COALESCE(ci.topic, ci.title) AS "topic",
           ci.title,
           COALESCE(ci.work_type, ci.content_type) AS "workType",
+          ci.platform,
+          ci.scope_classification AS "scopeClassification",
           COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) AS "internalDeadline",
+          ci.final_internal_deadline AS "finalInternalDeadline",
+          ci.calculated_internal_deadline AS "calculatedInternalDeadline",
+          ci.submission_deadline AS "submissionDeadline",
           ci.scheduled_publication_date AS "postingDate",
           COALESCE(u.full_name, 'Unassigned') AS "assigneeName",
+          ca.assignee_user_id AS "assigneeUserId",
           CASE 
             WHEN ci.final_planned_seconds IS NOT NULL THEN ROUND((ci.final_planned_seconds::numeric / 3600.0), 2)
             ELSE NULL
           END AS "plannedHours",
+          ci.final_planned_seconds AS "finalPlannedSeconds",
           ci.stage AS "status",
           ci.priority,
-          CASE 
-            WHEN COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTodayIST.toISOString()}::timestamptz THEN 'overdue'
-            ELSE 'today'
-          END AS "timing",
           ci.is_effort_anchor AS "isEffortAnchor"
         FROM content_items ci
         JOIN projects p ON ci.project_id = p.id
@@ -1541,11 +1563,8 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
           AND ci.status != 'archived'
           AND ci.stage != 'published'
           AND ci.completed_at IS NULL
-          AND (ca.status IS NULL OR ca.status IN ('assigned', 'accepted', 'in_progress'))
-          AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTomorrowIST.toISOString()}::timestamptz
           AND (ci.content_group_id IS NULL OR ci.is_effort_anchor = true OR COALESCE(ci.final_planned_seconds, 0) > 0)
         ORDER BY 
-          CASE WHEN COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) < ${startOfTodayIST.toISOString()}::timestamptz THEN 0 ELSE 1 END,
           ci.priority = 'urgent' DESC,
           COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline) ASC
       `),
@@ -1614,8 +1633,8 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
           FROM content_items ci
           WHERE ci.org_id = ${orgId}
             AND ci.deleted_at IS NULL
-            AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.submission_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
-            AND COALESCE(ci.scheduled_publication_date, ci.final_internal_deadline, ci.submission_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz
+            AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline, ci.completed_at) >= ${startOfMonthIST.toISOString()}::timestamptz
+            AND COALESCE(ci.final_internal_deadline, ci.calculated_internal_deadline, ci.submission_deadline, ci.completed_at) < ${startOfNextMonthIST.toISOString()}::timestamptz
           GROUP BY ci.project_id
         ),
         proj_actuals AS (
@@ -1755,23 +1774,63 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
       };
     });
 
-    // Format Today's Workload rows
-    const todaysWorkload = workloadRows.map((row) => ({
-      id: row.id,
-      projectId: row.projectId,
-      projectName: row.projectName,
-      topic: row.topic,
-      title: row.title,
-      workType: row.workType,
-      internalDeadline: row.internalDeadline ? new Date(row.internalDeadline).toISOString() : "Today",
-      postingDate: row.postingDate ? new Date(row.postingDate).toISOString() : "TBD",
-      assigneeName: row.assigneeName,
-      plannedHours: row.plannedHours !== null ? parseFloat(row.plannedHours) : null,
-      status: row.status,
-      priority: row.priority || "normal",
-      timing: row.timing as "overdue" | "today",
-      isEffortAnchor: row.isEffortAnchor ?? true,
-    }));
+    // Partition Workload Authoritatively by Canonical Operational Deadline
+    const workload: AuthoritativeWorkloadPartitionDTO = {
+      overdue: [],
+      today: [],
+      tomorrow: [],
+      upcoming: [],
+    };
+
+    const allWorkloadItems: WorkloadItemDTO[] = workloadRows.map((row) => {
+      const dl = row.internalDeadline ? new Date(row.internalDeadline) : null;
+      let timing: "overdue" | "today" | "tomorrow" | "upcoming" = "upcoming";
+      if (dl && !isNaN(dl.getTime())) {
+        if (dl < startOfTodayIST) {
+          timing = "overdue";
+        } else if (dl < startOfTomorrowIST) {
+          timing = "today";
+        } else if (dl < endOfTomorrowIST) {
+          timing = "tomorrow";
+        } else {
+          timing = "upcoming";
+        }
+      }
+
+      return {
+        id: row.id,
+        projectId: row.projectId,
+        projectName: row.projectName,
+        projectType: row.projectType,
+        topic: row.topic,
+        title: row.title,
+        workType: row.workType,
+        platform: row.platform,
+        internalDeadline: row.internalDeadline ? new Date(row.internalDeadline).toISOString() : "Unset",
+        postingDate: row.postingDate ? new Date(row.postingDate).toISOString() : "TBD",
+        assigneeName: row.assigneeName,
+        assigneeUserId: row.assigneeUserId || undefined,
+        plannedHours: row.plannedHours !== null ? parseFloat(row.plannedHours) : null,
+        finalPlannedSeconds: row.finalPlannedSeconds !== null ? Number(row.finalPlannedSeconds) : undefined,
+        status: row.status,
+        priority: row.priority || "normal",
+        timing,
+        isEffortAnchor: row.isEffortAnchor ?? true,
+        scopeClassification: row.scopeClassification || "contracted",
+        finalInternalDeadline: row.finalInternalDeadline ? new Date(row.finalInternalDeadline).toISOString() : undefined,
+        calculatedInternalDeadline: row.calculatedInternalDeadline ? new Date(row.calculatedInternalDeadline).toISOString() : undefined,
+        submissionDeadline: row.submissionDeadline ? new Date(row.submissionDeadline).toISOString() : undefined,
+      };
+    });
+
+    for (const item of allWorkloadItems) {
+      workload[item.timing].push(item);
+    }
+
+    // Single source of truth: KPI counts === workload partition lengths
+    const tasksDueTodayCount = workload.today.length;
+    const overdueOpenTasksCount = workload.overdue.length;
+    const todaysWorkload = [...workload.overdue, ...workload.today];
 
     // 5. Lightweight Employee Personal View (if employee)
     let employeePersonalView: MainDashboardDataDTO["employeePersonalView"] = undefined;
@@ -1916,11 +1975,14 @@ export async function getAuthoritativeMainDashboardAction(actorUserId?: string):
       success: true,
       data: {
         isManagement,
-        tasksDueTodayCount: topCardRow.tasks_due_today || 0,
-        overdueOpenTasksCount: topCardRow.overdue_tasks || 0,
+        tasksDueTodayCount,
+        overdueOpenTasksCount,
         adHocHoursThisMonth: Math.round(((topCardRow.ad_hoc_planned_seconds || 0) / 3600) * 100) / 100,
         completedThisMonthCount: topCardRow.completed_this_month || 0,
+        workload,
         todaysWorkload,
+        completedThisMonthItems: [],
+        adHocItemsThisMonth: [],
         weeklyTeamCapacity,
         monthlyProjectHealth,
         employeePersonalView,

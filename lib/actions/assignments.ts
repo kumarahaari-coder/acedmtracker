@@ -200,7 +200,9 @@ export async function acceptContentAssignmentAction(params: {
 
 /**
  * 3. Update Assignment Due Date (Extension) Action
- * Appends an entry into normalized assignment_deadline_history.
+ * Delegates to authoritative atomic internal deadline service:
+ * Updates content_items.final_internal_deadline, preserves calculated deadline,
+ * synchronizes content_assignments.current_due_at, and records assignment_deadline_history.
  */
 export async function updateAssignmentDueDateAction(params: {
   actorUserId: string;
@@ -208,49 +210,6 @@ export async function updateAssignmentDueDateAction(params: {
   newDueAt: string;
   reason: string;
 }) {
-  const { actorUserId, assignmentId, newDueAt, reason } = params;
-
-  const actor = await getAuthoritativeUser(actorUserId);
-  if (!actor) return { success: false, error: "Unauthorized." };
-
-  // Designers cannot modify due dates
-  if (actor.organizationRole === "designer" || actor.organizationRole === "client") {
-    return { success: false, error: "Unauthorized: Designers cannot modify due dates." };
-  }
-
-  const [assignment] = await db
-    .select()
-    .from(contentAssignments)
-    .where(eq(contentAssignments.id, assignmentId))
-    .limit(1);
-
-  if (!assignment) return { success: false, error: "Assignment not found." };
-
-  const now = new Date();
-  const targetDue = new Date(newDueAt);
-
-  return runTransaction(async (tx) => {
-    // Record in normalized history table
-    await tx.insert(assignmentDeadlineHistory).values({
-      assignmentId: assignment.id,
-      projectId: assignment.projectId,
-      orgId: assignment.orgId,
-      previousDueAt: assignment.currentDueAt,
-      newDueAt: targetDue,
-      changedByUserId: actor.id,
-      reason,
-      changedAt: now,
-    });
-
-    const [updated] = await tx
-      .update(contentAssignments)
-      .set({
-        currentDueAt: targetDue,
-        updatedAt: now,
-      })
-      .where(eq(contentAssignments.id, assignment.id))
-      .returning();
-
-    return { success: true, assignment: updated };
-  });
+  const { updateAuthoritativeInternalDeadlineService } = await import("./content");
+  return updateAuthoritativeInternalDeadlineService(params);
 }

@@ -80,16 +80,14 @@ export default function AuthoritativeDashboardPage() {
     ? state.contentItems.find((i) => i.id === activeWorkSession.contentItemId)
     : null;
 
-  const openDrilldown = (type: DrilldownType, title: string, subtitle?: string) => {
-    const allItems = state.contentItems;
-    const allSessions = state.workSessions;
+  const openDrilldown = (type: DrilldownType, title: string, subtitle?: string, customItems?: any[]) => {
     setDrilldownModal({
       isOpen: true,
       title,
       subtitle,
       type,
-      items: allItems,
-      workSessions: allSessions,
+      items: customItems ?? state.contentItems,
+      workSessions: state.workSessions,
     });
   };
 
@@ -163,8 +161,11 @@ export default function AuthoritativeDashboardPage() {
         <div className="space-y-8">
           {/* Top 4 Authoritative Live Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {/* 1. Tasks Due Today */}
-            <div className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm">
+            {/* 1. Tasks Due Today (Clickable Drilldown) */}
+            <button
+              onClick={() => openDrilldown("today_tasks", "Tasks Due Today", "Tasks scheduled for today's operational deadline", dashboardData?.workload?.today)}
+              className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm text-left hover:border-[#0071e3]/40 transition group cursor-pointer"
+            >
               <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">
                 <span>Tasks Due Today</span>
                 <Clock className="h-4 w-4 text-[#0071e3]" />
@@ -172,12 +173,12 @@ export default function AuthoritativeDashboardPage() {
               <div className="text-2xl font-bold text-[#1d1d1f] mt-2">
                 {loading ? "..." : dashboardData?.tasksDueTodayCount || 0}
               </div>
-              <div className="text-[11px] text-[#86868b] mt-1">Scheduled for today's deadline</div>
-            </div>
+              <div className="text-[11px] text-[#0071e3] font-medium mt-1">Click to view today's tasks</div>
+            </button>
 
             {/* 2. Overdue Open Tasks (Clickable Drilldown) */}
             <button
-              onClick={() => openDrilldown("overdue_tasks", "Overdue Open Tasks", "Tasks past their authoritative internal deadline")}
+              onClick={() => openDrilldown("overdue_tasks", "Overdue Open Tasks", "Tasks past their authoritative internal deadline", dashboardData?.workload?.overdue)}
               className="p-4 bg-white rounded-2xl border border-black/[0.08] shadow-sm text-left hover:border-[#ff3b30]/40 transition group cursor-pointer"
             >
               <div className="flex items-center justify-between text-xs text-[#86868b] font-medium">

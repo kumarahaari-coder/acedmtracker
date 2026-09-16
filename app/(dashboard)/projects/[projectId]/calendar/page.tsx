@@ -493,6 +493,11 @@ export default function CalendarPage() {
                             {item.stage.replace("_", " ")}
                           </span>
                         </div>
+                        {dateLayer === "scheduled_publication" && (item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline) && (
+                          <div className="text-[9px] text-[#0066cc] font-medium truncate">
+                            Int: {formatDate(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || "")}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -559,6 +564,11 @@ export default function CalendarPage() {
                         <div className="font-semibold text-[#1d1d1f] truncate text-[12px]">
                           {item.title}
                         </div>
+                        {dateLayer === "scheduled_publication" && (item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline) && (
+                          <div className="text-[9px] text-[#0066cc] font-medium truncate">
+                            Int: {formatDate(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || "")}
+                          </div>
+                        )}
                       </div>
                     ))
                   )}

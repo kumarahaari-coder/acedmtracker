@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAppState } from "@/lib/context/AppStateContext";
@@ -32,6 +32,7 @@ import { formatDate, formatDurationHuman } from "@/lib/formatters";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { ContentPlatform, ContentType, ScopeClassification } from "@/lib/types";
 import { DeleteDeliverableModal } from "@/components/content/DeleteDeliverableModal";
+import { getAuthoritativeProjectDashboardAction, ProjectDashboardDTO } from "@/lib/actions/projectDashboard";
 
 export default function ProjectDashboardPage() {
   const params = useParams();
@@ -39,23 +40,56 @@ export default function ProjectDashboardPage() {
   const { state, updateProjectObjective } = useAppState();
   const { activeRole, activeUserId, canApprove } = useRole();
 
-  const isManagement = activeRole === "founder" || activeRole === "consultant" || activeRole === "admin";
+  const [dashboardData, setDashboardData] = useState<ProjectDashboardDTO | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const project = state.projects.find((p) => p.id === projectId);
+  const loadData = useCallback(async () => {
+    if (!projectId) return;
+    setLoading(true);
+    try {
+      const res = await getAuthoritativeProjectDashboardAction(projectId, activeUserId);
+      if (res.success && res.data) {
+        setDashboardData(res.data);
+      }
+    } catch (err) {
+      console.error("[ProjectDashboardPage] Error loading authoritative dashboard:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, activeUserId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const isManagement = dashboardData?.isManagement ?? (activeRole === "founder" || activeRole === "consultant" || activeRole === "admin");
+
+  const project = dashboardData?.project || state.projects.find((p) => p.id === projectId);
+  if (loading && !project) {
+    return (
+      <div className="p-8 sm:p-10 max-w-7xl mx-auto flex items-center justify-center min-h-[400px]">
+        <div className="text-center space-y-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#0071e3] border-t-transparent mx-auto" />
+          <p className="text-[13px] text-[#86868b]">Loading authoritative project data...</p>
+        </div>
+      </div>
+    );
+  }
   if (!project) return null;
 
-  const projectItems = state.contentItems.filter((i) => i.projectId === projectId);
-  const projectMembers = state.projectMemberships
-    .filter((m) => m.projectId === projectId && m.status === "active")
-    .map((m) => {
-      const user = state.users.find((u) => u.id === m.userId);
-      return {
-        userId: m.userId,
-        name: user?.name || m.userId,
-        role: m.membershipRole || user?.role || "designer",
-        avatar: user?.avatar || "U",
-      };
-    });
+  const projectMembers = dashboardData?.members && dashboardData.members.length > 0
+    ? dashboardData.members
+    : state.projectMemberships
+        .filter((m) => m.projectId === projectId && m.status === "active")
+        .map((m) => {
+          const user = state.users.find((u) => u.id === m.userId);
+          return {
+            userId: m.userId,
+            name: user?.name || m.userId,
+            role: m.membershipRole || user?.role || "designer",
+            avatar: user?.avatar || "U",
+          };
+        });
 
   // Filters for Assigned Work view
   const [filterDesigner, setFilterDesigner] = useState<string>("all");
@@ -70,68 +104,40 @@ export default function ProjectDashboardPage() {
   );
   const [itemToDelete, setItemToDelete] = useState<any | null>(null);
 
-  // Deliverables by stage
-  const publishedItems = projectItems.filter((i) => i.stage === "published");
-  const inReviewItems = projectItems.filter((i) => i.stage === "in_review" || i.stage === "submitted");
-  const changesReqItems = projectItems.filter((i) => i.stage === "changes_requested");
-  const scheduledItems = projectItems.filter((i) => i.stage === "scheduled");
+  const metrics = dashboardData?.metrics;
+  const assignedWork = dashboardData?.assignedWork || [];
 
-  // Contracted vs Goodwill vs Additional Billable breakdown
-  const contractedItems = projectItems.filter(
-    (i) => !i.scopeClassification || i.scopeClassification === "contracted"
-  );
-  const goodwillItems = projectItems.filter((i) => i.scopeClassification === "goodwill");
-  const additionalBillableItems = projectItems.filter((i) => i.scopeClassification === "additional_billable");
-
-  const completedContracted = contractedItems.filter((i) => i.stage === "published" || i.stage === "approved");
-  const completedGoodwill = goodwillItems.filter((i) => i.stage === "published" || i.stage === "approved");
-  const completedAdditional = additionalBillableItems.filter((i) => i.stage === "published" || i.stage === "approved");
+  // Filtered Deliverables list for Assigned-Work view (Invariant 5 & 6)
+  const filteredDeliverables = assignedWork.filter((item) => {
+    if (filterDesigner !== "all" && item.primaryOwnerId !== filterDesigner) return false;
+    if (filterStatus !== "all" && item.assignmentStatus !== filterStatus) return false;
+    if (filterScope !== "all" && item.scopeClassification !== filterScope) return false;
+    if (filterPlatform !== "all" && item.platform !== filterPlatform) return false;
+    return true;
+  });
 
   // Deliverable-Based Metrics
+  const targetReq = project.targetRequirements || { posts: 0, carousels: 0, reels: 0, trialReels: 0 };
   const totalContractedTarget =
-    project.targetRequirements.posts +
-    project.targetRequirements.carousels +
-    project.targetRequirements.reels +
-    project.targetRequirements.trialReels;
+    (targetReq.posts || 0) +
+    (targetReq.carousels || 0) +
+    (targetReq.reels || 0) +
+    (targetReq.trialReels || 0);
 
-  const deliverableCompletionPercentage =
+  const deliverableCompletionPercentage = metrics?.deliverableCompletionPercentage ?? (
     totalContractedTarget > 0
-      ? Math.min(100, Math.round((completedContracted.length / totalContractedTarget) * 100))
-      : 0;
+      ? Math.min(100, Math.round(((metrics?.completedContractedCount || 0) / totalContractedTarget) * 100))
+      : 0
+  );
 
   // Objective-Based Metrics
   const isObjectiveModel = project.engagementModel === "objective_based";
   const objective = project.objectiveConfig;
-  const objectivePercentage =
+  const objectivePercentage = metrics?.objectivePercentage ?? (
     objective && objective.targetValue > 0
-      ? Math.min(100, Math.round((objective.currentValue / objective.targetValue) * 100))
-      : 0;
-
-  // Overdue / Escalated Items
-  const now = new Date();
-  const overdueItems = projectItems.filter((i) => {
-    if (i.stage === "published" || i.stage === "approved") return false;
-    const deadline = i.deadlines.resubmissionDeadline || i.deadlines.submissionDeadline;
-    if (!deadline) return false;
-    return new Date(deadline).getTime() < now.getTime();
-  });
-
-  // Filtered Deliverables list for Assigned-Work view
-  const filteredDeliverables = projectItems.filter((item) => {
-    const asgn = state.contentAssignments.find(
-      (a) => a.contentItemId === item.id && a.status !== "reassigned"
-    );
-    const primaryOwner = asgn?.assigneeUserId || item.accountableOwnerId;
-    const status = asgn?.status || "assigned";
-    const scope = item.scopeClassification || "contracted";
-
-    if (filterDesigner !== "all" && primaryOwner !== filterDesigner) return false;
-    if (filterStatus !== "all" && status !== filterStatus) return false;
-    if (filterScope !== "all" && scope !== filterScope) return false;
-    if (filterPlatform !== "all" && item.platform !== filterPlatform) return false;
-
-    return true;
-  });
+      ? Math.min(100, Math.round((Number(objective.currentValue || 0) / Number(objective.targetValue)) * 100))
+      : 0
+  );
 
   const handleObjectiveUpdate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -271,7 +277,7 @@ export default function ProjectDashboardPage() {
               <span className="text-[13px] font-bold text-[#0071e3]">{deliverableCompletionPercentage}%</span>
             </div>
             <div className="text-[32px] font-bold text-[#1d1d1f] tracking-tight">
-              {completedContracted.length} <span className="text-[18px] text-[#86868b] font-normal">/ {totalContractedTarget}</span>
+              {metrics?.completedContractedCount || 0} <span className="text-[18px] text-[#86868b] font-normal">/ {totalContractedTarget}</span>
             </div>
             <div className="h-2 w-full rounded-full bg-[#f2f2f7] overflow-hidden">
               <div
@@ -280,7 +286,7 @@ export default function ProjectDashboardPage() {
               />
             </div>
             <div className="text-[11px] text-[#86868b]">
-              Agreed: {project.targetRequirements.posts}p, {project.targetRequirements.carousels}c, {project.targetRequirements.reels}r
+              Agreed: {project.targetRequirements?.posts || 0}p, {project.targetRequirements?.carousels || 0}c, {project.targetRequirements?.reels || 0}r
             </div>
           </div>
 
@@ -291,10 +297,10 @@ export default function ProjectDashboardPage() {
               <span className="text-[11px] font-bold status-approved px-2 py-0.5 rounded-full">Delivered</span>
             </div>
             <div className="text-[32px] font-bold text-[#1f6f32] tracking-tight">
-              {completedGoodwill.length} <span className="text-[14px] text-[#86868b] font-medium">Goodwill Items</span>
+              {metrics?.completedGoodwillCount || 0} <span className="text-[14px] text-[#86868b] font-medium">Goodwill Items</span>
             </div>
             <div className="text-[12px] text-[#6e6e73]">
-              + {completedAdditional.length} additional billables delivered
+              + {metrics?.completedAdditionalCount || 0} additional billables delivered
             </div>
           </div>
 
@@ -305,11 +311,11 @@ export default function ProjectDashboardPage() {
               <CheckCircle2 className="h-4 w-4 text-[#9a6700]" />
             </div>
             <div className="text-[32px] font-bold text-[#9a6700] tracking-tight">
-              {inReviewItems.length}
+              {metrics?.inReviewCount || 0}
             </div>
             <div className="text-[12px] text-[#86868b]">
-              {overdueItems.length > 0 ? (
-                <span className="text-[#d70015] font-semibold">{overdueItems.length} deliverable(s) overdue</span>
+              {(metrics?.overdueCount || 0) > 0 ? (
+                <span className="text-[#d70015] font-semibold">{metrics?.overdueCount} deliverable(s) overdue</span>
               ) : (
                 "All items on schedule"
               )}
@@ -323,10 +329,10 @@ export default function ProjectDashboardPage() {
               <Clock className="h-4 w-4 text-[#0071e3]" />
             </div>
             <div className="text-[32px] font-bold text-[#1d1d1f] tracking-tight">
-              {projectItems.length} <span className="text-[14px] text-[#86868b] font-normal">items</span>
+              {metrics?.totalPipeline || 0} <span className="text-[14px] text-[#86868b] font-normal">items</span>
             </div>
             <div className="text-[12px] text-[#86868b]">
-              {publishedItems.length} published • {scheduledItems.length} scheduled
+              {metrics?.publishedCount || 0} published • {metrics?.scheduledCount || 0} scheduled
             </div>
           </div>
         </div>
@@ -346,7 +352,7 @@ export default function ProjectDashboardPage() {
 
           <div className="flex items-center gap-2">
             <span className="text-[12px] font-semibold text-[#86868b] uppercase">
-              Showing: {filteredDeliverables.length} of {projectItems.length}
+              Showing: {filteredDeliverables.length} of {assignedWork.length}
             </span>
           </div>
         </div>
@@ -437,7 +443,7 @@ export default function ProjectDashboardPage() {
                 <th className="px-4 py-3">Primary Designer</th>
                 <th className="px-4 py-3">Assignment Status</th>
                 <th className="px-4 py-3">Due Date</th>
-                <th className="px-4 py-3">Tracked Effort</th>
+                <th className="px-4 py-3">Effort</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -450,18 +456,7 @@ export default function ProjectDashboardPage() {
                 </tr>
               ) : (
                 filteredDeliverables.map((item) => {
-                  const asgn = state.contentAssignments.find(
-                    (a) => a.contentItemId === item.id && a.status !== "reassigned"
-                  );
-                  const primaryUser = state.users.find(
-                    (u) => u.id === (asgn?.assigneeUserId || item.accountableOwnerId)
-                  );
-
-                  // Calculate total tracked effort across all work sessions for this item
-                  const itemSessions = state.workSessions.filter((ws) => ws.contentItemId === item.id);
-                  const totalSeconds = itemSessions.reduce((acc, ws) => acc + ws.accumulatedSeconds, 0);
-
-                  const isOwner = primaryUser?.id === activeUserId;
+                  const isOwner = item.isAssignedToCurrentUser;
 
                   return (
                     <tr key={item.id} className="hover:bg-[#f5f5f7]/50 transition">
@@ -526,14 +521,14 @@ export default function ProjectDashboardPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <UserAvatar
-                            avatar={primaryUser?.avatar}
-                            name={primaryUser?.name}
+                            avatar={item.primaryOwnerAvatar}
+                            name={item.primaryOwnerName}
                             className="h-6 w-6 text-[10px]"
                             fallbackClassName="bg-[#1d1d1f] text-white"
                           />
                           <div>
                             <div className="font-medium text-[#1d1d1f]">
-                              {primaryUser?.name || "Unassigned"}
+                              {item.primaryOwnerName || "Unassigned"}
                             </div>
                             {isOwner && (
                               <span className="text-[10px] text-[#0071e3] font-bold">
@@ -548,24 +543,24 @@ export default function ProjectDashboardPage() {
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold capitalize border ${
-                            asgn?.status === "completed"
+                            item.assignmentStatus === "completed"
                               ? "bg-[#eaf6ed] text-[#1f6f32] border-[#ceead6]"
-                              : asgn?.status === "submitted"
+                              : item.assignmentStatus === "submitted"
                               ? "bg-[#eaf4ff] text-[#0066cc] border-[#b8daff]"
-                              : asgn?.status === "in_progress"
+                              : item.assignmentStatus === "in_progress"
                               ? "bg-[#fff8e6] text-[#9a6700] border-[#ffe082]"
-                              : asgn?.status === "accepted"
+                              : item.assignmentStatus === "accepted"
                               ? "bg-[#f0f7ff] text-[#0071e3] border-[#d0e5ff]"
                               : "bg-[#f2f2f7] text-[#6e6e73] border-black/[0.06]"
                           }`}
                         >
-                          {asgn?.status?.replace(/_/g, " ") || "Assigned"}
+                          {item.assignmentStatus?.replace(/_/g, " ") || "Assigned"}
                         </span>
                       </td>
 
-                      {/* Due Date */}
+                      {/* Due Date (Authoritative Operational Deadline) */}
                       <td className="px-4 py-3 text-[#6e6e73]">
-                        <div>{formatDate(asgn?.currentDueAt || item.deadlines.submissionDeadline)}</div>
+                        <div>{formatDate(item.operationalDeadline)}</div>
                         {isUiDesign && item.clientDeliveryDate && (
                           <div className="text-[11px] text-[#7e22ce] font-medium">
                             Client: {formatDate(item.clientDeliveryDate)}
@@ -573,9 +568,16 @@ export default function ProjectDashboardPage() {
                         )}
                       </td>
 
-                      {/* Tracked Effort */}
-                      <td className="px-4 py-3 font-mono font-medium text-[#1d1d1f]">
-                        {formatDurationHuman(totalSeconds)}
+                      {/* Effort */}
+                      <td className="px-4 py-3 font-mono text-[12px]">
+                        <div className="font-semibold text-[#1d1d1f]">
+                          {item.plannedEffortSeconds
+                            ? `${(item.plannedEffortSeconds / 3600).toFixed(2).replace(/\.00$/, "")}h planned`
+                            : "Unset planned"}
+                        </div>
+                        <div className="text-[11px] text-[#86868b]">
+                          {formatDurationHuman(item.totalTrackedSeconds)} tracked
+                        </div>
                       </td>
 
                       {/* Action */}
@@ -678,13 +680,10 @@ export default function ProjectDashboardPage() {
             contentGroupId: itemToDelete.contentGroupId,
             stage: itemToDelete.stage,
           }}
-          hasSiblings={Boolean(
-            itemToDelete.contentGroupId &&
-            projectItems.filter((i) => i.contentGroupId === itemToDelete.contentGroupId && i.id !== itemToDelete.id && !i.deletedAt).length > 0
-          )}
+          hasSiblings={false}
           onDeleted={() => {
             setItemToDelete(null);
-            window.location.reload();
+            loadData();
           }}
         />
       )}

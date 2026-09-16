@@ -1057,6 +1057,154 @@ export async function updatePublishingScheduleAction(params: {
 
 /**
  * 7. Update Deadline / Reschedule Action (Supports multiple deadline layers)
+/**
+ * Authoritative Internal Operational Deadline Service (Atomic Transaction)
+ * Ensures:
+ * 1. content_items.final_internal_deadline is updated
+ * 2. content_items.calculated_internal_deadline is PRESERVED
+ * 3. active assignment current_due_at is synchronized
+ * 4. assignment_deadline_history is appended
+ * 5. Single atomic transaction prevents partial updates
+ */
+export async function updateAuthoritativeInternalDeadlineService(params: {
+  actorUserId: string;
+  contentItemId?: string;
+  assignmentId?: string;
+  newDueAt: string | Date;
+  reason?: string;
+}): Promise<{
+  success: boolean;
+  item?: any;
+  assignment?: any;
+  error?: string;
+}> {
+  const { actorUserId, newDueAt, reason } = params;
+  const actor = await getAuthoritativeUser(actorUserId);
+  if (!actor) return { success: false, error: "Unauthorized." };
+
+  if (actor.organizationRole === "designer" || actor.organizationRole === "client") {
+    return { success: false, error: "Unauthorized: Only management can modify internal deadlines." };
+  }
+
+  let canonicalItemId: string | null = null;
+  if (params.contentItemId) {
+    canonicalItemId = await resolveContentItemId(params.contentItemId);
+  } else if (params.assignmentId) {
+    const [asgn] = await db
+      .select({ contentItemId: contentAssignments.contentItemId })
+      .from(contentAssignments)
+      .where(eq(contentAssignments.id, params.assignmentId))
+      .limit(1);
+    if (asgn) {
+      canonicalItemId = asgn.contentItemId;
+    }
+  }
+
+  if (!canonicalItemId) {
+    return { success: false, error: "Deliverable item not found." };
+  }
+
+  const [item] = await db
+    .select()
+    .from(contentItems)
+    .where(eq(contentItems.id, canonicalItemId))
+    .limit(1);
+
+  if (!item) return { success: false, error: "Deliverable item not found." };
+
+  if (actor.organizationRole === "consultant") {
+    const access = await requireProjectAccess(actor.id, item.projectId);
+    if (!access.allowed) {
+      return { success: false, error: "Unauthorized: Consultant does not have access to this project." };
+    }
+  }
+
+  const targetDate = typeof newDueAt === "string" ? new Date(newDueAt) : newDueAt;
+  if (isNaN(targetDate.getTime())) {
+    return { success: false, error: "Invalid deadline date provided." };
+  }
+  const effectiveReason = reason?.trim() || "Operational deadline updated";
+  const now = new Date();
+
+  return runTransaction(async (tx) => {
+    // 1. Update content_items.final_internal_deadline (calculated_internal_deadline preserved)
+    const [updatedItem] = await tx
+      .update(contentItems)
+      .set({
+        finalInternalDeadline: targetDate,
+        deadlineOverrideReason: effectiveReason,
+        updatedAt: now,
+      })
+      .where(eq(contentItems.id, item.id))
+      .returning();
+
+    // 2. Look for active assignment (assigned, accepted, in_progress)
+    const [activeAssignment] = await tx
+      .select()
+      .from(contentAssignments)
+      .where(
+        and(
+          eq(contentAssignments.contentItemId, item.id),
+          sql`${contentAssignments.status} IN ('assigned', 'accepted', 'in_progress')`
+        )
+      )
+      .limit(1);
+
+    let updatedAssignment = activeAssignment;
+    if (activeAssignment) {
+      // Record in history table
+      await tx.insert(assignmentDeadlineHistory).values({
+        assignmentId: activeAssignment.id,
+        projectId: activeAssignment.projectId,
+        orgId: activeAssignment.orgId,
+        previousDueAt: activeAssignment.currentDueAt,
+        newDueAt: targetDate,
+        changedByUserId: actor.id,
+        reason: effectiveReason,
+        changedAt: now,
+      });
+
+      // Synchronize content_assignments.current_due_at
+      const [resAsgn] = await tx
+        .update(contentAssignments)
+        .set({
+          currentDueAt: targetDate,
+          updatedAt: now,
+        })
+        .where(eq(contentAssignments.id, activeAssignment.id))
+        .returning();
+      updatedAssignment = resAsgn;
+    }
+
+    await invalidateWorkspaceEntities({
+      projectId: item.projectId,
+      userId: actor.id,
+      orgId: item.orgId,
+      paths: ["/projects", `/projects/${item.projectId}`, "/calendar", "/performance"],
+    });
+
+    return {
+      success: true,
+      item: updatedItem,
+      assignment: updatedAssignment,
+    };
+  });
+}
+
+/**
+ * Public Server Action to update deliverable internal operational due date.
+ */
+export async function updateInternalDeadlineAction(params: {
+  actorUserId: string;
+  contentItemId: string;
+  newDueAt: string;
+  reason?: string;
+}) {
+  return updateAuthoritativeInternalDeadlineService(params);
+}
+
+/**
+ * 7. Update Deadline Action (Milestones & Actual Publication)
  */
 export async function updateDeadlineAction(params: {
   actorUserId: string;
@@ -1066,6 +1214,16 @@ export async function updateDeadlineAction(params: {
   reason?: string;
 }) {
   const { actorUserId, contentItemId, kind, newDueAt, reason } = params;
+
+  // Delegate operational submission/internal deadline to authoritative unified service
+  if (kind === "submission") {
+    return updateAuthoritativeInternalDeadlineService({
+      actorUserId,
+      contentItemId,
+      newDueAt,
+      reason,
+    });
+  }
 
   const resolvedItemId = await resolveContentItemId(contentItemId);
   if (!resolvedItemId) return { success: false, error: "Content item not found." };
@@ -1088,8 +1246,6 @@ export async function updateDeadlineAction(params: {
 
   if (kind === "scheduled_publication") {
     updates.scheduledPublicationDate = targetDate;
-  } else if (kind === "submission") {
-    updates.submissionDeadline = targetDate;
   } else if (kind === "resubmission") {
     updates.resubmissionDeadline = targetDate;
   } else if (kind === "approval_target") {
@@ -1109,6 +1265,7 @@ export async function updateDeadlineAction(params: {
     projectId: item.projectId,
     userId: actorUserId,
     orgId: item.orgId,
+    paths: ["/projects", `/projects/${item.projectId}`, "/calendar", "/performance"],
   });
 
   return { success: true, item: updatedItem };

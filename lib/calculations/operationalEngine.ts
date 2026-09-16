@@ -11,6 +11,7 @@ import {
   User,
   Project,
 } from "../types";
+import { getEffectiveOperationalDeadline } from "./operationalDeadline";
 
 export type PeriodFilter = "this_week" | "last_week" | "this_month" | "last_month" | "custom";
 
@@ -399,25 +400,22 @@ export function calculateEmployeeScorecard(
   const userItemIds = new Set(userAssignments.map((a) => a.contentItemId));
   const userItems = items.filter((i) => userItemIds.has(i.id) || i.accountableOwnerId === user.id);
 
-  // Filter tasks belonging to this period by operational date precedence:
-  // assignment.currentDueAt -> item.finalInternalDeadline -> item.deadlines?.submissionDeadline -> item.submissionDeadline
+  // Filter tasks belonging to this period by canonical operational deadline:
+  // COALESCE(finalInternalDeadline, calculatedInternalDeadline, submissionDeadline)
+  // Invariant: scheduledPublicationDate MUST NEVER enter employee workload calculations.
   const periodTasks = userItems.filter((item) => {
     const asgn = userAssignmentMap.get(item.id);
+    const opDeadline = getEffectiveOperationalDeadline(item);
+    const asgnDue = asgn?.currentDueAt ? new Date(asgn.currentDueAt) : null;
     const dates = [
-      asgn?.currentDueAt,
-      asgn?.initialDueAt,
-      item.finalInternalDeadline,
-      item.calculatedInternalDeadline,
-      item.deadlines?.submissionDeadline,
-      (item as any).submissionDeadline,
-      item.deadlines?.scheduledPublicationDate,
-      (item as any).scheduledPublicationDate,
-      item.completedAt,
-      (item as any).completedAt,
-    ].filter(Boolean);
+      opDeadline,
+      asgnDue,
+      item.completedAt ? new Date(item.completedAt) : null,
+      (item as any).completedAt ? new Date((item as any).completedAt) : null,
+    ].filter(Boolean) as Date[];
 
     return dates.some((d) => {
-      const dStr = typeof d === "string" ? d.split("T")[0] : getISTDateString(new Date(d!));
+      const dStr = getISTDateString(d);
       return dStr >= period.startDate && dStr <= period.endDate;
     });
   });
@@ -453,13 +451,12 @@ export function calculateEmployeeScorecard(
     return compDateStr >= period.startDate && compDateStr <= period.endDate;
   });
 
-  // On-Time Delivery calculation
+  // On-Time Delivery calculation based strictly on canonical operational deadline
   let onTimeCount = 0;
   completedTasks.forEach((item) => {
     const compTime = new Date(item.completedAt || item.publishedAt || period.startDate).getTime();
-    const deadlineTime = new Date(
-      item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || item.deadlines?.scheduledPublicationDate || compTime
-    ).getTime();
+    const opDeadline = getEffectiveOperationalDeadline(item);
+    const deadlineTime = opDeadline ? opDeadline.getTime() : compTime;
     if (compTime <= deadlineTime) {
       onTimeCount++;
     }
@@ -590,14 +587,14 @@ export function calculateTeamPerformanceOverview(
   const adHocHours = employeeScorecards.reduce((sum, e) => sum + e.adHocHours, 0);
   const goodwillHours = employeeScorecards.reduce((sum, e) => sum + e.goodwillHours, 0);
 
-  // Overdue open tasks
+  // Overdue open tasks (strictly using canonical operational deadline)
   const nowTime = Date.now();
   const overdueTasksCount = items.filter((item) => {
     const isDone = item.completedAt || item.stage === "published" || item.stage === "approved";
     if (isDone) return false;
-    const deadline = item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || item.deadlines?.scheduledPublicationDate;
-    if (!deadline) return false;
-    return new Date(deadline).getTime() < nowTime;
+    const opDeadline = getEffectiveOperationalDeadline(item);
+    if (!opDeadline) return false;
+    return opDeadline.getTime() < nowTime;
   }).length;
 
   const activeTimersCount = workSessions.filter((s) => s.status === "active").length;
@@ -668,8 +665,9 @@ export function calculateProjectPerformance(
 ): ProjectPerformanceScorecard {
   const projectItems = items.filter((i) => i.projectId === project.id);
   const periodItems = projectItems.filter((i) => {
-    const d = i.deadlines?.scheduledPublicationDate || i.finalInternalDeadline || i.deadlines?.submissionDeadline || i.completedAt;
-    const dStr = typeof d === "string" ? d.split("T")[0] : (d ? getISTDateString(new Date(d)) : "");
+    const opDeadline = getEffectiveOperationalDeadline(i);
+    const d = opDeadline || (i.completedAt ? new Date(i.completedAt) : null);
+    const dStr = d ? getISTDateString(d) : "";
     return dStr >= period.startDate && dStr <= period.endDate;
   });
 
@@ -687,7 +685,7 @@ export function calculateProjectPerformance(
   }).length;
 
   const plannedHours = calculateItemCollectionPlannedHours(periodItems);
-  
+
   // Indexed Map for actual hours per item to eliminate O(N*M) nested scans
   const projItemSessionSeconds = new Map<string, number>();
   for (let idx = 0; idx < workSessions.length; idx++) {

@@ -54,6 +54,7 @@ import {
   submitVersionAction,
   createNewVersionDraftAction,
   toggleClientVisibilityAction,
+  updateInternalDeadlineAction,
 } from "@/lib/actions/content";
 import {
   requestCreativeAssetUploadAction,
@@ -1062,9 +1063,9 @@ export default function ContentItemWorkspacePage() {
             {/* Deadlines Display */}
             <div className="space-y-1.5 pt-2 border-t border-black/[0.06] text-[12px]">
               <div className="flex items-center justify-between text-[#6e6e73]">
-                <span>Internal Deadline:</span>
+                <span>Internal Due Date:</span>
                 <span className="font-semibold text-[#1d1d1f]">
-                  {formatDate(activeAssignment?.currentDueAt || item.finalInternalDeadline || item.deadlines.submissionDeadline || "")}
+                  {formatDate(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || activeAssignment?.currentDueAt || "")}
                 </span>
               </div>
               {item.clientDeliveryDate && (
@@ -1084,7 +1085,7 @@ export default function ContentItemWorkspacePage() {
                   onClick={() => {
                     setReassignUserId(activeAssignment?.assigneeUserId || item.accountableOwnerId || "");
                     setReassignRole(activeAssignment?.assignmentRole || "designer");
-                    setReassignDueAt(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline || "");
+                    setReassignDueAt(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || activeAssignment?.currentDueAt || "");
                     setReassignReason("");
                     setIsReassignModalOpen(true);
                   }}
@@ -1094,13 +1095,13 @@ export default function ContentItemWorkspacePage() {
                 </button>
                 <button
                   onClick={() => {
-                    setNewDeadlineVal(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline || "");
+                    setNewDeadlineVal(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || activeAssignment?.currentDueAt || "");
                     setDeadlineReasonVal("");
                     setIsDeadlineModalOpen(true);
                   }}
                   className="flex-1 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] py-1.5 text-[12px] font-medium text-[#1d1d1f] border border-black/[0.06] transition text-center"
                 >
-                  Edit Due Date
+                  Change Internal Due Date
                 </button>
               </div>
             )}
@@ -1258,15 +1259,15 @@ export default function ContentItemWorkspacePage() {
             <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Operational Deadlines</h3>
             <div className="space-y-2 text-[13px]">
               <div className="flex justify-between">
-                <span className="text-[#86868b]">Initial Due</span>
-                <span className="font-medium text-[#1d1d1f]">
-                  {formatDate(activeAssignment?.initialDueAt || item.deadlines.submissionDeadline)}
+                <span className="text-[#86868b]">Operational Due Date</span>
+                <span className="font-semibold text-[#1d1d1f]">
+                  {formatDate(item.finalInternalDeadline || item.calculatedInternalDeadline || item.deadlines?.submissionDeadline || activeAssignment?.currentDueAt)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#86868b]">Current Due</span>
-                <span className="font-semibold text-[#1d1d1f]">
-                  {formatDate(activeAssignment?.currentDueAt || item.deadlines.submissionDeadline)}
+                <span className="text-[#86868b]">Assignment Due</span>
+                <span className="font-medium text-[#1d1d1f]">
+                  {formatDate(activeAssignment?.currentDueAt || activeAssignment?.initialDueAt || item.deadlines?.submissionDeadline)}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -2365,44 +2366,46 @@ export default function ContentItemWorkspacePage() {
         </div>
       )}
 
-      {/* Edit Deadline Modal (Phase 2) */}
+      {/* Change Internal Due Date Modal */}
       {isDeadlineModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
-              <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Adjust Submission Deadline</h3>
+              <div>
+                <h3 className="text-[17px] font-semibold text-[#1d1d1f]">Change Internal Due Date</h3>
+                <p className="text-[12px] text-[#6e6e73] mt-0.5">
+                  Updates authoritative internal operational deadline and active assignment.
+                </p>
+              </div>
               <button onClick={() => setIsDeadlineModalOpen(false)} className="text-[#86868b] hover:text-[#1d1d1f]">
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (!newDeadlineVal || !deadlineReasonVal.trim()) {
                   alert("Please provide both a new deadline date and a mandatory reason.");
                   return;
                 }
-                if (!activeAssignment) {
-                  alert("No active assignment found for this deliverable.");
-                  return;
-                }
-                const res = updateAssignmentDeadline({
-                  assignmentId: activeAssignment.id,
+                const res = await updateInternalDeadlineAction({
+                  contentItemId: item.id,
                   newDueAt: new Date(newDeadlineVal).toISOString(),
                   reason: deadlineReasonVal.trim(),
                   actorUserId: activeUserId,
                 });
                 if (res.success) {
                   setIsDeadlineModalOpen(false);
+                  await loadDetail();
                 } else {
-                  alert(res.error || "Failed to update deadline.");
+                  alert(res.error || "Failed to update internal due date.");
                 }
               }}
               className="space-y-3 text-[13px]"
             >
               <div>
-                <label className="block font-medium text-[#1d1d1f] mb-1">New Submission Due Date *</label>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Internal Due Date *</label>
                 <input
                   type="date"
                   value={newDeadlineVal ? newDeadlineVal.slice(0, 10) : ""}
@@ -2413,7 +2416,7 @@ export default function ContentItemWorkspacePage() {
               </div>
 
               <div>
-                <label className="block font-medium text-[#1d1d1f] mb-1">Reason for Deadline Adjustment *</label>
+                <label className="block font-medium text-[#1d1d1f] mb-1">Reason for Deadline Change *</label>
                 <textarea
                   rows={2}
                   placeholder="e.g. Scope expanded, additional client feedback round requested..."
@@ -2436,7 +2439,7 @@ export default function ContentItemWorkspacePage() {
                   type="submit"
                   className="rounded-full bg-[#0071e3] px-5 py-1.5 text-[13px] font-medium text-white shadow-sm"
                 >
-                  Save New Due Date
+                  Save Internal Due Date
                 </button>
               </div>
             </form>
